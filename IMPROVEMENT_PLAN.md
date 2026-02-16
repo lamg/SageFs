@@ -1635,34 +1635,140 @@ This is NOT a full IDE — it's a browser-accessible REPL for quick interactions
 24. AI-native features (4.4)
 25. Debugger integration (4.2)
 
-### Phase 6: REPL/TUI Architecture (Immediate-Mode Elm)
+### Phase 6: TUI Rendering Engine (Immediate-Mode Elm)
 
 Full research: [docs/repl-tui-research.md](docs/repl-tui-research.md)
 
-**Architecture decision:** Custom Elm loop in F# (~40 lines), immediate-mode rendering (`UI = render(state)`), five known frontends consuming `RenderRegion list`.
 
-**Core domain types:**
-- `RenderRegion` — uniform render output with `RegionFlags` (Fleury-style feature flags, not widget kinds)
-- `Affordance` — `{ Action; Label; KeyHint: KeyCombo option; Enabled }` — HATEOAS for all UIs
-- `EditorAction` / `EditorEffect` — Elm Architecture `Msg`/`Cmd` equivalents
-- `SageFsView` — bounded read model projection for render functions
-- `KeyMap` — `Map<KeyCombo, EditorAction>` shared config across all frontends
+#### Problem
 
-**Build order:**
-1. **Phase 0: Tree-Sitter Foundation** — `ionide/tree-sitter-fsharp` via `TreeSitter.DotNet`, syntax highlighting, incremental parsing
-2. **Phase 1: Core Domain Types** — `RenderPipeline.fs` (`RenderRegion`, `RegionFlags`, `Affordance`), `Editor.fs` (`EditorAction`, `EditorEffect`, `SageFsView`, `update` function), `ElmLoop.fs` (~40 lines)
-3. **Phase 2: Terminal Adapter** — replaces PrettyPrompt, consumes `RenderRegion list` → ANSI
-4. **Phase 3: Datastar Web Adapter** — SSE-morphed HTML, validates that `RenderRegion list` abstraction works for non-terminal UIs
-5. **Phase 4: Neovim/VSCode Adapters** — ext_linegrid-inspired protocol, progressive capability negotiation
-6. **Phase 5: Raylib/ImGui Adapter** — GPU-rendered IMGUI via Hexa.NET.ImGui
+Fixed 4-pane, brittle string-based rendering, no layout flexibility. The previous plan's answer — retained Widget DU trees with cell diffing — was wrong. Diffing adds complexity to compensate for slow rendering. The right answer: **make rendering fast enough that diffing is unnecessary**.
 
-**Key principles:**
-- Push-based reactive streaming everywhere (SageFsEvent bus → all frontends subscribe)
+#### Inspiration
+
+- **Casey Muratori — IMGUI (2005):** GUIs should work like immediate-mode graphics. No retained scene graph. `Button("OK")` returns whether clicked. UI is *code*, not *data*.
+- **Ryan Fleury — RAD Debugger (`ui_core.h`):** Universal `UI_Box` element with flags/sizes/colors. String-hashed identity for cross-frame state persistence. `UI_Signal` returned from box building. Multi-pass layout with `strictness` constraint relaxation.
+- **Clay:** Pure layout engine producing flat `RenderCommand` array. Layout is data in, commands out.
+
+#### Architecture: Elm + Immediate Render
+
+The Elm model IS the "retained" state. No second retained layer (Widget DU). Fast **immediate renderer** writes directly to a cell buffer, blasts entire buffer to terminal.
+
+```
+ElmLoop.model
+  → SageFsRender.render → RenderRegion list
+    → ImmediateRenderer.draw(regions, grid)  ← writes directly to cells
+      → AnsiEmitter.emitFull(grid)            ← full frame, no diff
+        → Console.Write                       ← one write per frame
+```
+
+**Why no diff?** 200×120 = 24,000 cells × ~10 bytes = ~240KB/frame. At 144fps = 34MB/s — trivial for modern terminals. Diffing adds two buffers, O(n²) comparison, off-by-one bugs, stale state. Full redraw: one buffer, one write, zero stale-diff bugs.
+
+#### Core Types
+
+```fsharp
+[<Struct>] type CellAttrs = None = 0uy | Bold = 1uy | Dim = 2uy | Inverse = 4uy
+[<Struct>] type Cell = { Char: char; Fg: byte; Bg: byte; Attrs: CellAttrs }
+type Rect = { Row: int; Col: int; Width: int; Height: int }  // smart ctor clamps ≥0
+type DrawTarget = { Grid: Cell[,]; Rect: Rect }               // bundles "where to draw"
+```
+
+#### Frame Loop (raylib-style: update then draw, never both)
+
+```
+1. Process input → update TerminalState (pure)
+2. CellGrid.clear grid
+3. Screen.draw grid state regions  ← no state changes, only cell writes
+4. AnsiEmitter.emitWithCursor grid cursorPos → Console.Write
+```
+
+#### Modules
+
+| Module | Purpose |
+|--------|---------|
+| `CellGrid` | Module functions over `Cell[,]`: `create`, `set` (bounds-checked), `writeString`, `clear`, `toText` |
+| `Theme` | Named color constants: `panelBg`, `focusBorder`, `errorLine`, etc. |
+| `Layout` | Pure arithmetic: `splitH`, `splitV`, `splitHProp`, `splitVProp`, `inset`, `fullScreen` |
+| `Draw` | Immediate primitives: `text`, `box` (returns inner `DrawTarget`), `hline`, `fill`, `scrolledLines`, `statusBar` |
+| `PaneRenderer` | Per-pane draw: `drawOutput`, `drawEditor`, `drawSessions`, `drawDiagnostics` |
+| `Screen` | Top-level composer: layout → draw panes → status bar (with frame time) |
+| `AnsiEmitter` | Grid → ANSI string. Pre-alloc StringBuilder. Color tracking to minimize escape codes. |
+
+#### Build Order
+
+| Phase | Scope | Tests |
+|-------|-------|-------|
+| **6.1** | `Cell`, `CellAttrs`, `Rect`, `CellGrid`, `Theme`, `Layout`, `DrawTarget`, `Draw` | Property: `splitH` preserves width. Snapshot: `Draw.box` → `toText()`. |
+| **6.2** | `AnsiEmitter.emitFull`, `emitWithCursor` | Uniform color → one code. Alternating → codes at transitions. |
+| **6.3** | `PaneRenderer.*`, `Screen.draw` | Snapshot: each renderer at 30×10. Full 80×24 screen render. |
+| **6.4** | Wire into `TerminalMode.run` + `TuiClient.run`. Delete old code. | Integration: alt-screen, no scroll, crash-safe restore. |
+| **6.5** | `LayoutConfig`, `PaneState`, pane toggle/resize/reorder | Snapshot: alternate layouts. Property: toggle removes pane, redistributes. |
+| **6.6** | Affordances, polish, perf baseline | Frame time <6.9ms (144fps) for 200×60. Real affordance values. |
+| **6.7** | Raylib GUI backend (`SageFs.Gui/`) — `Raylib-cs` 7.0.2, `RaylibEmitter`, `RaylibMode.run`, font metrics, mouse input → same `EditorAction` DU | Snapshot parity: same `RenderRegion list` → same `CellGrid.toText`. Frame time <6.9ms. |
+| **6.8** | Dual-renderer parity — keybindings, theming, layout config, menus, status bars identical across TUI and Raylib. `SageFs --tui`, `--gui`, `--both` flags. | Side-by-side visual parity. Perf comparison in status bar. |
+
+#### Design Principles
+
+1. **No retained UI tree** — Elm model is only source of truth. (Casey)
+2. **Update then draw — never both** — like raylib's `BeginDrawing/EndDrawing`. (Ramon)
+3. **Full redraw every frame** — no diffing. Add diff *on top* later if profiling demands. (Casey)
+4. **Layout is arithmetic, not a framework** — `splitH`, `splitV`, `Rect`. (Fleury)
+5. **`CellGrid` is the IO boundary** — all draw decisions pure, only cell writes are effects. (Mark)
+6. **Named colors, not magic numbers** — `Theme.errorLine` not `203uy`. (Ramon)
+7. **`DrawTarget` reduces parameter counts** — ≤3 meaningful params per function. (Mark)
+8. **Per-pane persistent state** — `Map<PaneId, PaneState>` for scroll/visibility. (Fleury)
+9. **Measure and display** — frame time in status bar. Know, don't guess. (Casey)
+10. **TDD on the framebuffer** — `toText()` snapshots + property-based layout tests. (Ramon)
+
+#### Files
+
+- **Keep**: `AnsiCodes`, `PaneId`, `TerminalInput`
+- **Add**: `Cell`, `Rect`, `CellGrid`, `Draw`, `Layout`, `AnsiEmitter`, `PaneRenderer`, `Screen`
+- **Remove**: `TerminalPane`, `TerminalLayout`, `TerminalRender`, `FrameDiff`, `OutputColorizer`, `DiagnosticsColorizer`
+
+#### Dual-Renderer Architecture (TUI + Raylib GUI)
+
+SageFs has **two UI frontends** built simultaneously, sharing one abstract rendering layer. Both consume the same `RenderRegion list` from the Elm model and write to the same `Cell[,]` grid. The only difference is how the grid reaches the screen.
+
+**Performance target: 144fps (6.9ms frame budget) on both backends. No excuses.**
+
+```
+ElmLoop.model
+  → SageFsRender.render → RenderRegion list
+    → Screen.draw(grid, state, regions)       ← shared: writes to Cell[,]
+      ├→ AnsiEmitter.emit(grid)  → Console.Write     (TUI backend)
+      └→ RaylibEmitter.emit(grid) → DrawRectangle/DrawText  (Raylib backend)
+```
+
+**Why dual-renderer?** Competitive benchmarking feedback loop. "TUI renders in 0.8ms, Raylib in 0.3ms — what's the TUI overhead?" Both UIs must have identical functionality: keybindings, theming, click semantics, menus, status bars, layout config, inline images (Kitty protocol for TUI, native texture for Raylib). When you open the TUI window, the exact same thing happens on the Raylib GUI window.
+
+**Project structure:**
+
+| Project | Purpose | Dependencies |
+|---------|---------|-------------|
+| `SageFs.Core/` | Shared: `Cell`, `CellGrid`, `Rect`, `Layout`, `Draw`, `Theme`, `Screen`, `PaneRenderer`, `Editor`, `RenderPipeline` | None (pure) |
+| `SageFs/` | CLI tool: TUI client, daemon, MCP server, `AnsiEmitter`, `TerminalMode` | `SageFs.Core` |
+| `SageFs.Gui/` | Raylib GUI client: `RaylibEmitter`, `RaylibMode`, font loading, mouse input | `SageFs.Core`, `Raylib-cs` 7.0.2 |
+| `SageFs.Tests/` | Shared tests at `CellGrid.toText()` level — parity guaranteed | `SageFs.Core` |
+
+**Shared abstractions (never import terminal or Raylib APIs):**
+- `Theme` — abstract color IDs (bytes). TUI maps to 256-color ANSI. Raylib maps to RGB.
+- `KeyMap` — rebindable keybindings, serializable, same DU values drive both backends.
+- `EditorAction` — mouse clicks normalize to same DU in both backends.
+- `LayoutConfig` — pane order, proportions, visibility — identical behavior.
+
+**Launch modes:**
+- `SageFs --tui` — TUI client (default, current behavior)
+- `SageFs --gui` — Raylib GUI client
+- `SageFs --both` — both simultaneously, same daemon SSE subscription
+
+#### Key Principles (carried forward)
+
+- Push-based reactive streaming (SageFsEvent bus → all frontends subscribe)
 - Affordance-driven: domain decides what's *possible*, adapters decide how to *render*
 - CQRS: `EditorAction` commands in, `SageFsEvent` events out
-- Animation state managed by rendering engine (not in `RenderRegion`)
-- No diffing — full `render(state)` each frame (for <50 widgets, sub-millisecond)
 - `FsToolkit.ErrorHandling` for `asyncResult { }` at effect handler edges
+- **144fps target** — 6.9ms frame budget. Full redraw every frame. If you can't hit it, profile and fix. No diffing as a crutch.
 
 ---
 
