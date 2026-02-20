@@ -5,6 +5,15 @@ All notable changes to SageFs will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.19] - 2026-02-20
+
+### Added
+- MCP push notifications via McpServerTracker + EventAccumulator + CallToolFilter — agents no longer need to poll
+
+### Performance
+- Benchmarked hot paths in FSI: CellGrid, cleanStdout, TUI emit, JSON serialize, sprintf cache keys
+- Identified 8× total frame speedup opportunity; implementation starting this release
+
 ## [0.5.17] - 2026-02-19
 
 ### Fixed
