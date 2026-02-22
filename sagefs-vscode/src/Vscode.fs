@@ -297,6 +297,10 @@ let newPosition (l: int) (c: int) = _newPosition vscodeAll l c
 let private _newThemeColor (v: obj) (id: string) : obj = jsNative
 let newThemeColor (id: string) = _newThemeColor vscodeAll id
 
+[<Emit("new $0.ThemeIcon($1)")>]
+let private _newThemeIcon (v: obj) (id: string) : obj = jsNative
+let newThemeIcon (id: string) = _newThemeIcon vscodeAll id
+
 [<Emit("$0.Uri.parse($1)")>]
 let private _uriParse (v: obj) (s: string) : Uri = jsNative
 let uriParse (s: string) = _uriParse vscodeAll s

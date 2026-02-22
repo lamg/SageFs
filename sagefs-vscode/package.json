@@ -91,6 +91,11 @@
         "command": "sagefs.hotReloadRefresh",
         "title": "SageFs: Refresh Hot Reload",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "sagefs.sessionContextRefresh",
+        "title": "SageFs: Refresh Session Context",
+        "icon": "$(refresh)"
       }
     ],
     "keybindings": [
@@ -145,6 +150,11 @@
           "id": "sagefs-hotReload",
           "name": "Hot Reload Files",
           "contextualTitle": "SageFs Hot Reload"
+        },
+        {
+          "id": "sagefs-sessionContext",
+          "name": "Session Context",
+          "contextualTitle": "SageFs Session Context"
         }
       ]
     },
@@ -163,6 +173,11 @@
         {
           "command": "sagefs.hotReloadRefresh",
           "when": "view == sagefs-hotReload",
+          "group": "navigation"
+        },
+        {
+          "command": "sagefs.sessionContextRefresh",
+          "when": "view == sagefs-sessionContext",
           "group": "navigation"
         }
       ]

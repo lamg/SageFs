@@ -32,6 +32,24 @@ type SessionInfo =
     workingDirectory: string
     status: string }
 
+type LoadedAssemblyInfo =
+  { Name: string
+    Path: string
+    NamespaceCount: int
+    ModuleCount: int }
+
+type OpenedBindingInfo =
+  { Name: string
+    IsModule: bool
+    Source: string }
+
+type WarmupContextInfo =
+  { SourceFilesScanned: int
+    AssembliesLoaded: LoadedAssemblyInfo array
+    NamespacesOpened: OpenedBindingInfo array
+    FailedOpens: string array array
+    WarmupDurationMs: int }
+
 [<Emit("new Promise((resolve, reject) => { const http = require('http'); const req = http.get($0, { timeout: $1 }, (res) => { let data = ''; res.on('data', (chunk) => data += chunk); res.on('end', () => resolve({ statusCode: res.statusCode || 0, body: data })); }); req.on('error', reject); req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); }); })")>]
 let private httpGetRaw (url: string) (timeout: int) : JS.Promise<{| statusCode: int; body: string |}> = jsNative
 
@@ -237,4 +255,42 @@ let unwatchAllHotReload (sessionId: string) (c: Client) =
       return true
     with _ ->
       return false
+  }
+
+let getWarmupContext (sessionId: string) (c: Client) =
+  promise {
+    try
+      let! resp = dashHttpGet c (sprintf "/api/sessions/%s/warmup-context" sessionId) 5000
+      if resp.statusCode = 200 then
+        let parsed = jsonParse resp.body
+        let assemblies =
+          parsed?AssembliesLoaded
+          |> unbox<obj array>
+          |> Array.map (fun a ->
+            { Name = a?Name |> unbox<string>
+              Path = a?Path |> unbox<string>
+              NamespaceCount = a?NamespaceCount |> unbox<int>
+              ModuleCount = a?ModuleCount |> unbox<int> })
+        let opened =
+          parsed?NamespacesOpened
+          |> unbox<obj array>
+          |> Array.map (fun b ->
+            { Name = b?Name |> unbox<string>
+              IsModule = b?IsModule |> unbox<bool>
+              Source = b?Source |> unbox<string> })
+        let failed =
+          parsed?FailedOpens
+          |> unbox<obj array>
+          |> Array.map (fun f -> f |> unbox<string array>)
+        return
+          Some
+            { SourceFilesScanned = parsed?SourceFilesScanned |> unbox<int>
+              AssembliesLoaded = assemblies
+              NamespacesOpened = opened
+              FailedOpens = failed
+              WarmupDurationMs = parsed?WarmupDurationMs |> unbox<int> }
+      else
+        return None
+    with _ ->
+      return None
   }
