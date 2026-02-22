@@ -1,4 +1,4 @@
-namespace SageFs.Core
+namespace SageFs
 
 /// Represents an assembly that was loaded during warmup.
 type LoadedAssembly = {
@@ -120,3 +120,53 @@ module SessionContext =
       (FileReadiness.icon f.Readiness)
       f.Path
       (if f.IsWatched then " 👁" else "")
+
+/// TUI-specific formatting for session context — plain text lines.
+module SessionContextTui =
+  let summaryLine (ctx: SessionContext) =
+    let loaded =
+      ctx.FileStatuses
+      |> List.filter (fun f -> f.Readiness = Loaded)
+      |> List.length
+    let total = ctx.FileStatuses |> List.length
+    let nsCount = WarmupContext.totalOpenedCount ctx.Warmup
+    let failCount = WarmupContext.totalFailedCount ctx.Warmup
+    sprintf "[%s] %d/%d files | %d ns (%d fail) | %dms"
+      ctx.Status loaded total nsCount failCount ctx.Warmup.WarmupDurationMs
+
+  let detailLines (ctx: SessionContext) =
+    let lines = System.Collections.Generic.List<string>()
+    lines.Add(sprintf "Session: %s" ctx.SessionId)
+    if ctx.WorkingDir.Length > 0 then
+      lines.Add(sprintf "Dir: %s" ctx.WorkingDir)
+
+    let asms = ctx.Warmup.AssembliesLoaded
+    if asms.Length > 0 then
+      lines.Add(sprintf "── Assemblies (%d) ──" asms.Length)
+      for a in asms do
+        lines.Add(SessionContext.assemblyLine a)
+
+    let opened = ctx.Warmup.NamespacesOpened
+    if opened.Length > 0 then
+      lines.Add(sprintf "── Opened (%d) ──" opened.Length)
+      for b in opened do
+        lines.Add(SessionContext.openLine b)
+
+    let failed = ctx.Warmup.FailedOpens
+    if failed.Length > 0 then
+      lines.Add(sprintf "── Failed (%d) ──" failed.Length)
+      for (name, err) in failed do
+        lines.Add(sprintf "✖ %s: %s" name err)
+
+    let files = ctx.FileStatuses
+    if files.Length > 0 then
+      lines.Add(sprintf "── Files (%d) ──" files.Length)
+      for f in files do
+        lines.Add(SessionContext.fileLine f)
+
+    lines |> Seq.toList
+
+  let renderContent (ctx: SessionContext) =
+    let summary = summaryLine ctx
+    let details = detailLines ctx
+    summary :: details |> String.concat "\n"

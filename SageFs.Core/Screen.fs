@@ -60,7 +60,7 @@ module StatusHints =
           editorHint EditorAction.TriggerCompletion "complete"
           editorHint EditorAction.Cancel "cancel" ]
         |> List.choose id
-      | PaneId.Output | PaneId.Diagnostics ->
+      | PaneId.Output | PaneId.Diagnostics | PaneId.Context ->
         [ hint UiAction.ScrollDown "scroll↓" ]
         |> List.choose id
       | PaneId.Sessions ->
@@ -134,7 +134,7 @@ module Screen =
     let hasLeft =
       cfg.VisiblePanes.Contains PaneId.Output || cfg.VisiblePanes.Contains PaneId.Editor
     let hasRight =
-      cfg.VisiblePanes.Contains PaneId.Sessions || cfg.VisiblePanes.Contains PaneId.Diagnostics
+      cfg.VisiblePanes.Contains PaneId.Sessions || cfg.VisiblePanes.Contains PaneId.Diagnostics || cfg.VisiblePanes.Contains PaneId.Context
     let panes = ResizeArray<PaneId * Rect>()
     if hasLeft && hasRight then
       let left, right = Rect.splitVProp cfg.LeftRightSplit contentArea
@@ -147,15 +147,24 @@ module Screen =
         panes.Add(PaneId.Output, left)
       elif cfg.VisiblePanes.Contains PaneId.Editor then
         panes.Add(PaneId.Editor, left)
-      // Right column
-      if cfg.VisiblePanes.Contains PaneId.Sessions && cfg.VisiblePanes.Contains PaneId.Diagnostics then
-        let sessRect, diagRect = Rect.splitHProp cfg.SessionsDiagSplit right
-        panes.Add(PaneId.Sessions, sessRect)
-        panes.Add(PaneId.Diagnostics, diagRect)
-      elif cfg.VisiblePanes.Contains PaneId.Sessions then
-        panes.Add(PaneId.Sessions, right)
-      elif cfg.VisiblePanes.Contains PaneId.Diagnostics then
-        panes.Add(PaneId.Diagnostics, right)
+      // Right column — split evenly among visible right-column panes
+      let rightPanes =
+        [PaneId.Sessions; PaneId.Context; PaneId.Diagnostics]
+        |> List.filter cfg.VisiblePanes.Contains
+      match rightPanes with
+      | [single] -> panes.Add(single, right)
+      | [top; bottom] ->
+        let topRect, bottomRect = Rect.splitHProp cfg.SessionsDiagSplit right
+        panes.Add(top, topRect)
+        panes.Add(bottom, bottomRect)
+      | many ->
+        let count = many.Length
+        let h = right.Height / count
+        many |> List.iteri (fun i pid ->
+          let isLast = i = count - 1
+          let rowOff = right.Row + i * h
+          let height = if isLast then right.Height - i * h else h
+          panes.Add(pid, Rect.create rowOff right.Col right.Width height))
     elif hasLeft then
       if cfg.VisiblePanes.Contains PaneId.Output && cfg.VisiblePanes.Contains PaneId.Editor then
         let outputRect, editorRect = Rect.splitH (contentArea.Height - cfg.OutputEditorSplit) contentArea
@@ -166,14 +175,23 @@ module Screen =
       elif cfg.VisiblePanes.Contains PaneId.Editor then
         panes.Add(PaneId.Editor, contentArea)
     elif hasRight then
-      if cfg.VisiblePanes.Contains PaneId.Sessions && cfg.VisiblePanes.Contains PaneId.Diagnostics then
-        let sessRect, diagRect = Rect.splitHProp cfg.SessionsDiagSplit contentArea
-        panes.Add(PaneId.Sessions, sessRect)
-        panes.Add(PaneId.Diagnostics, diagRect)
-      elif cfg.VisiblePanes.Contains PaneId.Sessions then
-        panes.Add(PaneId.Sessions, contentArea)
-      elif cfg.VisiblePanes.Contains PaneId.Diagnostics then
-        panes.Add(PaneId.Diagnostics, contentArea)
+      let rightPanes =
+        [PaneId.Sessions; PaneId.Context; PaneId.Diagnostics]
+        |> List.filter cfg.VisiblePanes.Contains
+      match rightPanes with
+      | [single] -> panes.Add(single, contentArea)
+      | [top; bottom] ->
+        let topRect, bottomRect = Rect.splitHProp cfg.SessionsDiagSplit contentArea
+        panes.Add(top, topRect)
+        panes.Add(bottom, bottomRect)
+      | many ->
+        let count = many.Length
+        let h = contentArea.Height / count
+        many |> List.iteri (fun i pid ->
+          let isLast = i = count - 1
+          let rowOff = contentArea.Row + i * h
+          let height = if isLast then contentArea.Height - i * h else h
+          panes.Add(pid, Rect.create rowOff contentArea.Col contentArea.Width height))
     panes |> Seq.toList, statusRect
 
   /// Compute the standard 4-pane layout for the given grid dimensions.

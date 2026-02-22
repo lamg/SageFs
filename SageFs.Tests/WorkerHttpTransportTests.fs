@@ -8,7 +8,6 @@ open System.Threading.Tasks
 open Expecto
 open Expecto.Flip
 open SageFs
-open SageFs.Core
 open SageFs.WorkerProtocol
 
 // ─── Route mapping tests ───────────────────────────────────────────

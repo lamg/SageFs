@@ -2,7 +2,7 @@ module SageFs.Tests.WarmupContextTests
 
 open Expecto
 open Expecto.Flip
-open SageFs.Core
+open SageFs
 
 let sampleAssembly: LoadedAssembly = {
   Name = "MyApp"
@@ -133,4 +133,98 @@ let sessionContextTests = testList "SessionContext" [
     |> Expect.equal "loaded watched" "● Domain.fs 👁"
     SessionContext.fileLine { Path = "Tests.fs"; Readiness = NotLoaded; LastLoadedAt = None; IsWatched = false }
     |> Expect.equal "not loaded unwatched" "○ Tests.fs"
+]
+
+let sampleTuiSession: SessionContext = {
+  SessionId = "abc123"
+  ProjectNames = ["MyApp.fsproj"]
+  WorkingDir = @"C:\Code\MyProject"
+  Status = "Ready"
+  Warmup = {
+    SourceFilesScanned = 5
+    AssembliesLoaded = [
+      { Name = "MyApp"; Path = "/bin/MyApp.dll"; NamespaceCount = 3; ModuleCount = 2 }
+      { Name = "MyLib"; Path = "/bin/MyLib.dll"; NamespaceCount = 1; ModuleCount = 0 }
+    ]
+    NamespacesOpened = [
+      { Name = "System"; IsModule = false; Source = "MyApp" }
+      { Name = "System.IO"; IsModule = false; Source = "MyApp" }
+      { Name = "MyApp.Domain"; IsModule = true; Source = "MyApp" }
+      { Name = "MyLib.Utils"; IsModule = true; Source = "MyLib" }
+    ]
+    FailedOpens = [ ("Bogus.Ns", "Type not found") ]
+    WarmupDurationMs = 450L
+    StartedAt = System.DateTimeOffset.UtcNow
+  }
+  FileStatuses = [
+    { Path = "src/Domain.fs"; Readiness = Loaded; LastLoadedAt = Some System.DateTimeOffset.UtcNow; IsWatched = true }
+    { Path = "src/App.fs"; Readiness = Loaded; LastLoadedAt = Some System.DateTimeOffset.UtcNow; IsWatched = false }
+    { Path = "src/Startup.fs"; Readiness = NotLoaded; LastLoadedAt = None; IsWatched = false }
+    { Path = "src/Old.fs"; Readiness = Stale; LastLoadedAt = Some (System.DateTimeOffset.UtcNow.AddHours(-1)); IsWatched = true }
+    { Path = "src/Broken.fs"; Readiness = LoadFailed; LastLoadedAt = None; IsWatched = false }
+  ]
+}
+
+[<Tests>]
+let sessionContextTuiTests = testList "SessionContextTui" [
+  testCase "summaryLine contains status, file counts, ns counts, duration" <| fun _ ->
+    let line = SessionContextTui.summaryLine sampleTuiSession
+    line |> Expect.stringContains "has status" "[Ready]"
+    line |> Expect.stringContains "file ratio" "2/5"
+    line |> Expect.stringContains "ns count" "4 ns"
+    line |> Expect.stringContains "fail count" "1 fail"
+    line |> Expect.stringContains "duration" "450ms"
+
+  testCase "summaryLine empty session shows zeros" <| fun _ ->
+    let empty = {
+      SessionId = "x"; ProjectNames = []; WorkingDir = "."
+      Status = "Starting"; Warmup = WarmupContext.empty; FileStatuses = []
+    }
+    let line = SessionContextTui.summaryLine empty
+    line |> Expect.stringContains "zero files" "0/0"
+    line |> Expect.stringContains "zero ns" "0 ns"
+
+  testCase "detailLines has all section headers" <| fun _ ->
+    let lines = SessionContextTui.detailLines sampleTuiSession
+    lines |> List.exists (fun l -> l.Contains("Assemblies")) |> Expect.isTrue "assemblies header"
+    lines |> List.exists (fun l -> l.Contains("Opened")) |> Expect.isTrue "opened header"
+    lines |> List.exists (fun l -> l.Contains("Failed")) |> Expect.isTrue "failed header"
+    lines |> List.exists (fun l -> l.Contains("Files")) |> Expect.isTrue "files header"
+
+  testCase "detailLines includes assembly info" <| fun _ ->
+    let lines = SessionContextTui.detailLines sampleTuiSession
+    lines |> List.exists (fun l -> l.Contains("MyApp") && l.Contains("3 ns")) |> Expect.isTrue "MyApp assembly"
+    lines |> List.exists (fun l -> l.Contains("MyLib")) |> Expect.isTrue "MyLib assembly"
+
+  testCase "detailLines includes open statements" <| fun _ ->
+    let lines = SessionContextTui.detailLines sampleTuiSession
+    lines |> List.exists (fun l -> l.Contains("open System") && l.Contains("namespace")) |> Expect.isTrue "System ns"
+    lines |> List.exists (fun l -> l.Contains("open MyApp.Domain") && l.Contains("module")) |> Expect.isTrue "Domain module"
+
+  testCase "detailLines shows file readiness icons" <| fun _ ->
+    let lines = SessionContextTui.detailLines sampleTuiSession
+    lines |> List.exists (fun l -> l.Contains("●") && l.Contains("Domain.fs")) |> Expect.isTrue "loaded+watched"
+    lines |> List.exists (fun l -> l.Contains("○") && l.Contains("Startup.fs")) |> Expect.isTrue "not loaded"
+    lines |> List.exists (fun l -> l.Contains("~") && l.Contains("Old.fs")) |> Expect.isTrue "stale"
+    lines |> List.exists (fun l -> l.Contains("✖") && l.Contains("Broken.fs")) |> Expect.isTrue "failed"
+
+  testCase "detailLines shows failed opens" <| fun _ ->
+    let lines = SessionContextTui.detailLines sampleTuiSession
+    lines |> List.exists (fun l -> l.Contains("Bogus.Ns") && l.Contains("Type not found")) |> Expect.isTrue "failed open"
+
+  testCase "renderContent joins summary + details with many lines" <| fun _ ->
+    let content = SessionContextTui.renderContent sampleTuiSession
+    let lines = content.Split('\n')
+    lines.[0] |> Expect.stringContains "first line is summary" "[Ready]"
+    (lines.Length, 10) |> Expect.isGreaterThan "has many lines"
+
+  testCase "detailLines omits empty sections" <| fun _ ->
+    let minimal = {
+      SessionId = "m"; ProjectNames = []; WorkingDir = "."
+      Status = "Ready"; Warmup = WarmupContext.empty; FileStatuses = []
+    }
+    let lines = SessionContextTui.detailLines minimal
+    lines |> List.exists (fun l -> l.Contains("Assemblies")) |> Expect.isFalse "no assemblies section"
+    lines |> List.exists (fun l -> l.Contains("Failed")) |> Expect.isFalse "no failed section"
+    lines |> List.exists (fun l -> l.Contains("Files")) |> Expect.isFalse "no files section"
 ]

@@ -3,7 +3,6 @@ module SageFs.Server.DaemonMode
 open System
 open System.Threading
 open SageFs
-open SageFs.Core
 open SageFs.Server
 open Falco
 open Falco.Routing

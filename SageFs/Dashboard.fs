@@ -10,7 +10,6 @@ open StarFederation.Datastar.FSharp
 open Microsoft.AspNetCore.Http
 open System.Text.RegularExpressions
 open SageFs
-open SageFs.Core
 open SageFs.Affordances
 
 module FalcoResponse = Falco.Response

@@ -12,7 +12,6 @@ open Microsoft.AspNetCore.Hosting.Server.Features
 open Microsoft.Extensions.DependencyInjection
 open Microsoft.Extensions.Logging
 open SageFs.WorkerProtocol
-open SageFs.Core
 
 module WorkerHttpTransport =
 

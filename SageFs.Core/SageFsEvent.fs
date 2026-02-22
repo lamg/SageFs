@@ -51,6 +51,7 @@ type SageFsEvent =
   // ── Warmup ──
   | WarmupProgress of step: int * total: int * assemblyName: string
   | WarmupCompleted of duration: TimeSpan * failures: string list
+  | WarmupContextUpdated of SessionContext
 
 /// The complete view state for any SageFs frontend.
 /// Pure data — renderers read this to produce UI.

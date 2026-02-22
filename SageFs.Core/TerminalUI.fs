@@ -201,21 +201,24 @@ type PaneId =
   | Sessions
   | Diagnostics
   | Editor
+  | Context
 
 module PaneId =
-  let all = [| PaneId.Output; PaneId.Sessions; PaneId.Diagnostics; PaneId.Editor |]
+  let all = [| PaneId.Output; PaneId.Sessions; PaneId.Context; PaneId.Diagnostics; PaneId.Editor |]
 
   let toRegionId = function
     | PaneId.Output -> "output"
     | PaneId.Sessions -> "sessions"
     | PaneId.Diagnostics -> "diagnostics"
     | PaneId.Editor -> "editor"
+    | PaneId.Context -> "context"
 
   let fromRegionId = function
     | "output" -> Some PaneId.Output
     | "sessions" -> Some PaneId.Sessions
     | "diagnostics" -> Some PaneId.Diagnostics
     | "editor" -> Some PaneId.Editor
+    | "context" -> Some PaneId.Context
     | _ -> None
 
   let next (current: PaneId) : PaneId =
@@ -278,12 +281,14 @@ module PaneId =
     | PaneId.Sessions -> "Sessions"
     | PaneId.Diagnostics -> "Diagnostics"
     | PaneId.Editor -> "Editor"
+    | PaneId.Context -> "Context"
 
   let tryParse = function
     | "Output" | "output" -> Some PaneId.Output
     | "Sessions" | "sessions" -> Some PaneId.Sessions
     | "Diagnostics" | "diagnostics" -> Some PaneId.Diagnostics
     | "Editor" | "editor" -> Some PaneId.Editor
+    | "Context" | "context" -> Some PaneId.Context
     | _ -> None
 
 

@@ -611,9 +611,9 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
 
 [<Tests>]
 let sageFsRenderTests = testList "SageFsRender" [
-  testCase "renders 4 regions from initial model" <| fun _ ->
+  testCase "renders 5 regions from initial model" <| fun _ ->
     let regions = SageFsRender.render SageFsModel.initial
-    regions |> Expect.hasLength "should have 4 regions" 4
+    regions |> Expect.hasLength "should have 5 regions" 5
 
   testCase "editor region is focusable" <| fun _ ->
     let regions = SageFsRender.render SageFsModel.initial
@@ -722,7 +722,7 @@ let sageFsRenderTests = testList "SageFsRender" [
   testCase "region ids are correct" <| fun _ ->
     SageFsRender.render SageFsModel.initial
     |> List.map (fun r -> r.Id)
-    |> Expect.equal "region ids in order" ["editor"; "output"; "diagnostics"; "sessions"]
+    |> Expect.equal "region ids in order" ["editor"; "output"; "diagnostics"; "sessions"; "context"]
 
   testProperty "sessions render contains id and status for every session"
     <| fun (sessionCount: byte) ->

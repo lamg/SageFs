@@ -27,6 +27,7 @@ type SageFsModel = {
   CreatingSession: bool
   Theme: ThemeConfig
   ThemeName: string
+  SessionContext: SessionContext option
 }
 
 module SageFsModel =
@@ -47,6 +48,7 @@ module SageFsModel =
       | Some t -> t
       | None -> Theme.defaults
     ThemeName = "Kanagawa"
+    SessionContext = None
   }
 
 /// Pure update function: routes SageFsMsg through the right handler.
@@ -336,6 +338,9 @@ module SageFsUpdate =
                 SessionId = activeId })
           { model with RecentOutput = lines @ model.RecentOutput }, []
 
+      | SageFsEvent.WarmupContextUpdated ctx ->
+        { model with SessionContext = Some ctx }, []
+
     | SageFsMsg.CycleTheme ->
       let name, theme = ThemePresets.cycleNext model.Theme
       { model with Theme = theme; ThemeName = name }, []
@@ -460,7 +465,19 @@ module SageFsRender =
       Completions = None
     }
 
-    [ editorRegion; outputRegion; diagnosticsRegion; sessionsRegion ]
+    let contextRegion = {
+      Id = "context"
+      Flags = RegionFlags.LiveUpdate
+      Content =
+        match model.SessionContext with
+        | Some ctx -> SessionContextTui.renderContent ctx
+        | None -> ""
+      Affordances = []
+      Cursor = None
+      Completions = None
+    }
+
+    [ editorRegion; outputRegion; diagnosticsRegion; sessionsRegion; contextRegion ]
 
 /// Dependencies the effect handler needs — injected, not hard-coded.
 /// This is the seam between pure Elm and impure infrastructure.

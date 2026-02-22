@@ -1,6 +1,6 @@
 module SageFs.ActorCreation
 
-open SageFs.Core
+
 open SageFs.Middleware
 open SageFs.ProjectLoading
 open SageFs.AppState

@@ -11,7 +11,6 @@ open SageFs.Features
 open SageFs.ProjectLoading
 open SageFs.Utils
 open SageFs.WarmUp
-open SageFs.Core
 
 type FilePath = string
 

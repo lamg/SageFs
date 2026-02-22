@@ -5,7 +5,6 @@ open System.Text
 open System.Text.Json
 open Expecto
 open SageFs
-open SageFs.Core
 open SageFs.Server
 
 let private startTestServer () = task {
