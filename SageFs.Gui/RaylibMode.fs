@@ -60,6 +60,8 @@ module RaylibMode =
     | ResizeR of int
     | CycleTheme
     | CopySelection
+    | HotReloadWatchAll
+    | HotReloadUnwatchAll
 
   /// Convert Raylib KeyboardKey to System.ConsoleKey for KeyMap lookup
   let raylibToConsoleKey (key: KeyboardKey) : System.ConsoleKey option =
@@ -117,6 +119,8 @@ module RaylibMode =
         | Some (UiAction.ResizeV d) -> Some (ResizeV d)
         | Some (UiAction.ResizeR d) -> Some (ResizeR d)
         | Some (UiAction.CycleTheme) -> Some CycleTheme
+        | Some (UiAction.HotReloadWatchAll) -> Some HotReloadWatchAll
+        | Some (UiAction.HotReloadUnwatchAll) -> Some HotReloadUnwatchAll
         | Some (UiAction.Editor action) -> Some (Action action)
         | None ->
           // Ctrl+C not in keymap → copy selection
@@ -343,6 +347,16 @@ module RaylibMode =
             selEnd <- None
             selecting <- false
           | _ -> ()
+        | HotReloadWatchAll ->
+          if lastSessionId.Length > 0 then
+            try
+              client.PostAsync(sprintf "%s/api/sessions/%s/hotreload/watch-all" baseUrl lastSessionId, new System.Net.Http.StringContent("{}", System.Text.Encoding.UTF8, "application/json")).Wait()
+            with _ -> ()
+        | HotReloadUnwatchAll ->
+          if lastSessionId.Length > 0 then
+            try
+              client.PostAsync(sprintf "%s/api/sessions/%s/hotreload/unwatch-all" baseUrl lastSessionId, new System.Net.Http.StringContent("{}", System.Text.Encoding.UTF8, "application/json")).Wait()
+            with _ -> ()
         | Action action ->
           // When Sessions pane is focused, remap movement keys to session navigation
           let remappedAction =

@@ -94,6 +94,7 @@ type AppState = {
   Custom: Map<string, obj>
   Diagnostics: Features.DiagnosticsStore.T
   WarmupFailures: WarmupFailure list
+  HotReloadState: HotReloadState.T
 }
 
 type EvalResponse = {
@@ -908,6 +909,7 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
             Custom = initCustomData
             Diagnostics = Features.DiagnosticsStore.empty
             WarmupFailures = warmupFailures
+            HotReloadState = HotReloadState.empty
             StartupConfig = Some {
               CommandLineArgs = args
               LoadedProjects = sln.Projects |> List.map (fun p -> p.ProjectFileName)
@@ -944,6 +946,7 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
             Diagnostics = Features.DiagnosticsStore.empty
             WarmupFailures = []
             StartupConfig = None
+            HotReloadState = HotReloadState.empty
           }
           publishSnapshot faultedSt SessionState.Faulted Affordances.EvalStats.empty
           // Actor stays alive to accept hard_reset_fsi_session commands

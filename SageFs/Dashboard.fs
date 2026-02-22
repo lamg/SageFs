@@ -470,6 +470,13 @@ let renderShell (version: string) =
                 [ Elem.span [ Ds.show "$createLoading" ] [ Text.raw "⏳ Creating... " ]
                   Elem.span [ Ds.show "!$createLoading" ] [ Text.raw "➕ Create" ] ]
             ]
+            // Hot Reload
+            Elem.div [ Attr.id "hot-reload-panel"; Attr.class' "panel" ] [
+              Elem.h2 [] [ Text.raw "Hot Reload" ]
+              Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.8rem;" ] [
+                Text.raw "No active session"
+              ]
+            ]
             // Theme
             Elem.div [ Attr.class' "panel" ] [
               Elem.h2 [] [ Text.raw "Theme" ]
@@ -1099,6 +1106,69 @@ let resolveThemePush
   else
     None
 
+/// Render the hot-reload panel with a file list grouped by directory.
+let renderHotReloadPanel (sessionId: string) (files: {| path: string; watched: bool |} list) (watchedCount: int) =
+  let total = List.length files
+  let grouped =
+    files
+    |> List.groupBy (fun f ->
+      let normalized = f.path.Replace('\\', '/')
+      match normalized.LastIndexOf('/') with
+      | -1 -> ""
+      | idx -> normalized.[..idx])
+    |> List.sortBy fst
+  Elem.div [ Attr.id "hot-reload-panel"; Attr.class' "panel" ] [
+    Elem.h2 [] [ Text.raw "Hot Reload" ]
+    Elem.div [ Attr.class' "meta"; Attr.style "margin-bottom: 0.5rem; font-size: 0.8rem;" ] [
+      Text.raw (sprintf "%d of %d files watched" watchedCount total)
+    ]
+    Elem.div [ Attr.style "display: flex; gap: 4px; margin-bottom: 0.5rem;" ] [
+      Elem.button
+        [ Attr.class' "eval-btn"
+          Attr.style "flex: 1; height: 1.5rem; padding: 0 0.5rem; font-size: 0.7rem;"
+          Attr.create "onclick" (sprintf "fetch('/api/sessions/%s/hotreload/watch-all',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})" sessionId) ]
+        [ Text.raw "Watch All" ]
+      Elem.button
+        [ Attr.class' "eval-btn"
+          Attr.style "flex: 1; height: 1.5rem; padding: 0 0.5rem; font-size: 0.7rem;"
+          Attr.create "onclick" (sprintf "fetch('/api/sessions/%s/hotreload/unwatch-all',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})" sessionId) ]
+        [ Text.raw "Unwatch All" ]
+    ]
+    Elem.div [ Attr.style "max-height: 200px; overflow-y: auto; font-size: 0.75rem;" ] [
+      yield! grouped |> List.collect (fun (dir, dirFiles) ->
+        let dirLabel =
+          if dir.Length > 40 then "..." + dir.[dir.Length - 37..] else dir
+        [
+          Elem.div [ Attr.style "font-weight: 600; margin-top: 4px; opacity: 0.7; font-size: 0.7rem;" ] [
+            Text.raw (sprintf "📁 %s" dirLabel)
+          ]
+          yield! dirFiles |> List.map (fun f ->
+            let fileName =
+              let n = f.path.Replace('\\', '/')
+              match n.LastIndexOf('/') with
+              | -1 -> n
+              | idx -> n.[idx + 1..]
+            let icon = if f.watched then "●" else "○"
+            let color = if f.watched then "var(--accent, #7aa2f7)" else "var(--fg-dim, #565f89)"
+            Elem.div
+              [ Attr.style "cursor: pointer; padding: 1px 4px; display: flex; align-items: center; gap: 4px;"
+                Attr.create "onclick" (sprintf "fetch('/api/sessions/%s/hotreload/toggle',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:'%s'})})" sessionId (f.path.Replace("\\", "\\\\"))) ]
+              [ Elem.span [ Attr.style (sprintf "color: %s; font-size: 0.8rem;" color) ] [ Text.raw icon ]
+                Elem.span [ Attr.style (if f.watched then "opacity: 1" else "opacity: 0.6") ] [ Text.raw fileName ] ]
+          )
+        ])
+    ]
+  ]
+
+/// Render empty hot-reload panel when no session is active.
+let renderHotReloadEmpty =
+  Elem.div [ Attr.id "hot-reload-panel"; Attr.class' "panel" ] [
+    Elem.h2 [] [ Text.raw "Hot Reload" ]
+    Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.8rem;" ] [
+      Text.raw "No active session"
+    ]
+  ]
+
 /// Create the SSE stream handler that pushes Elm state to the browser.
 let createStreamHandler
   (getSessionState: string -> SessionState)
@@ -1113,6 +1183,7 @@ let createStreamHandler
   (getAllSessions: unit -> Threading.Tasks.Task<WorkerProtocol.SessionInfo list>)
   (sessionThemes: Collections.Concurrent.ConcurrentDictionary<string, string>)
   (getStandbyInfo: unit -> Threading.Tasks.Task<StandbyInfo>)
+  (getHotReloadState: string -> Threading.Tasks.Task<{| files: {| path: string; watched: bool |} list; watchedCount: int |} option>)
   : HttpHandler =
   fun ctx -> task {
     Response.sseStartResponse ctx |> ignore
@@ -1176,6 +1247,19 @@ let createStreamHandler
             Text.raw label
           ])
       | None -> ()
+      // Push hot-reload file panel
+      if currentSessionId.Length > 0 then
+        try
+          let! hrState = getHotReloadState currentSessionId
+          match hrState with
+          | Some hr ->
+            do! ssePatchNode ctx (renderHotReloadPanel currentSessionId hr.files hr.watchedCount)
+          | None ->
+            do! ssePatchNode ctx renderHotReloadEmpty
+        with _ ->
+          do! ssePatchNode ctx renderHotReloadEmpty
+      else
+        do! ssePatchNode ctx renderHotReloadEmpty
       match getElmRegions () with
       | Some regions ->
         // Dedup output region to avoid overwriting reset/clear (Bug #5)
@@ -1722,10 +1806,11 @@ let createEndpoints
   (getAllSessions: unit -> Threading.Tasks.Task<WorkerProtocol.SessionInfo list>)
   (sessionThemes: Collections.Concurrent.ConcurrentDictionary<string, string>)
   (getStandbyInfo: unit -> Threading.Tasks.Task<StandbyInfo>)
+  (getHotReloadState: string -> Threading.Tasks.Task<{| files: {| path: string; watched: bool |} list; watchedCount: int |} option>)
   : HttpEndpoint list =
   [
     yield get "/dashboard" (FalcoResponse.ofHtml (renderShell version))
-    yield get "/dashboard/stream" (createStreamHandler getSessionState getStatusMsg getEvalStats getSessionWorkingDir getActiveSessionId getElmRegions stateChanged connectionTracker getPreviousSessions getAllSessions sessionThemes getStandbyInfo)
+    yield get "/dashboard/stream" (createStreamHandler getSessionState getStatusMsg getEvalStats getSessionWorkingDir getActiveSessionId getElmRegions stateChanged connectionTracker getPreviousSessions getAllSessions sessionThemes getStandbyInfo getHotReloadState)
     yield post "/dashboard/eval" (createEvalHandler evalCode)
     yield post "/dashboard/reset" (createResetHandler resetSession)
     yield post "/dashboard/hard-reset" (createResetHandler hardResetSession)

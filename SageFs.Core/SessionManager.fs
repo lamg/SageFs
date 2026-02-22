@@ -13,6 +13,8 @@ module SessionManager =
     Info: SessionInfo
     Process: Process
     Proxy: SessionProxy
+    /// Worker HTTP base URL for direct endpoint access.
+    WorkerBaseUrl: string
     /// Original spawn config — needed for restart.
     Projects: string list
     WorkingDir: string
@@ -40,7 +42,7 @@ module SessionManager =
         AsyncReplyChannel<SessionInfo list>
     | TouchSession of SessionId
     | WorkerExited of SessionId * workerPid: int * exitCode: int
-    | WorkerReady of SessionId * workerPid: int * SessionProxy
+    | WorkerReady of SessionId * workerPid: int * baseUrl: string * SessionProxy
     | WorkerSpawnFailed of SessionId * workerPid: int * string
     | ScheduleRestart of SessionId
     | StopAll of AsyncReplyChannel<unit>
@@ -142,7 +144,7 @@ module SessionManager =
             found <- Some (line.Substring("WORKER_PORT=".Length))
         let baseUrl = found.Value
         let proxy = HttpWorkerClient.httpProxy baseUrl
-        inbox.Post(SessionCommand.WorkerReady(sessionId, proc.Id, proxy))
+        inbox.Post(SessionCommand.WorkerReady(sessionId, proc.Id, baseUrl, proxy))
       with ex ->
         try proc.Kill() with _ -> ()
         inbox.Post(
@@ -281,6 +283,7 @@ module SessionManager =
               Info = info
               Process = proc
               Proxy = pendingProxy
+              WorkerBaseUrl = ""
               Projects = projects
               WorkingDir = workingDir
               RestartState = RestartPolicy.emptyState
@@ -330,6 +333,7 @@ module SessionManager =
                 Info = info
                 Process = readyStandby.Process
                 Proxy = readyStandby.Proxy.Value
+                WorkerBaseUrl = ""
                 Projects = session.Projects
                 WorkingDir = session.WorkingDir
                 RestartState = session.RestartState
@@ -381,6 +385,7 @@ module SessionManager =
                   Info = info
                   Process = proc
                   Proxy = pendingProxy
+                  WorkerBaseUrl = ""
                   Projects = session.Projects
                   WorkingDir = session.WorkingDir
                   RestartState = session.RestartState
@@ -438,11 +443,11 @@ module SessionManager =
           | None ->
             return! loop state
 
-        | SessionCommand.WorkerReady(id, _workerPid, proxy) ->
+        | SessionCommand.WorkerReady(id, _workerPid, baseUrl, proxy) ->
           match ManagerState.tryGetSession id state with
           | Some session ->
             let updated =
-              { session with Proxy = proxy }
+              { session with Proxy = proxy; WorkerBaseUrl = baseUrl }
             let newState = ManagerState.addSession id updated state
             // Trigger standby warmup for this session's config
             let key = StandbyKey.fromSession session.Projects session.WorkingDir

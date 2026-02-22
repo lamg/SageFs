@@ -18,6 +18,14 @@ type SystemStatus =
     restartCount: int
     version: string }
 
+type HotReloadFile =
+  { path: string
+    watched: bool }
+
+type HotReloadState =
+  { files: HotReloadFile array
+    watchedCount: int }
+
 type SessionInfo =
   { id: string
     name: string option
@@ -55,6 +63,12 @@ let private httpGet (c: Client) (path: string) (timeout: int) =
 
 let private httpPost (c: Client) (path: string) (body: string) (timeout: int) =
   httpPostRaw (sprintf "%s%s" (baseUrl c) path) body timeout
+
+let private dashHttpGet (c: Client) (path: string) (timeout: int) =
+  httpGetRaw (sprintf "http://localhost:%d%s" c.dashboardPort path) timeout
+
+let private dashHttpPost (c: Client) (path: string) (body: string) (timeout: int) =
+  httpPostRaw (sprintf "http://localhost:%d%s" c.dashboardPort path) body timeout
 
 let isRunning (c: Client) =
   promise {
@@ -177,4 +191,50 @@ let getSystemStatus (c: Client) =
         return None
     with _ ->
       return None
+  }
+
+let getHotReloadState (sessionId: string) (c: Client) =
+  promise {
+    try
+      let! resp = dashHttpGet c (sprintf "/api/sessions/%s/hotreload" sessionId) 5000
+      if resp.statusCode = 200 then
+        let parsed = jsonParse resp.body
+        let files =
+          parsed?files
+          |> unbox<obj array>
+          |> Array.map (fun f ->
+            { path = f?path |> unbox<string>
+              watched = f?watched |> unbox<bool> })
+        return Some { files = files; watchedCount = parsed?watchedCount |> unbox<int> }
+      else
+        return None
+    with _ ->
+      return None
+  }
+
+let toggleHotReload (sessionId: string) (path: string) (c: Client) =
+  promise {
+    try
+      let! _ = dashHttpPost c (sprintf "/api/sessions/%s/hotreload/toggle" sessionId) (jsonStringify {| path = path |}) 5000
+      return true
+    with _ ->
+      return false
+  }
+
+let watchAllHotReload (sessionId: string) (c: Client) =
+  promise {
+    try
+      let! _ = dashHttpPost c (sprintf "/api/sessions/%s/hotreload/watch-all" sessionId) "{}" 5000
+      return true
+    with _ ->
+      return false
+  }
+
+let unwatchAllHotReload (sessionId: string) (c: Client) =
+  promise {
+    try
+      let! _ = dashHttpPost c (sprintf "/api/sessions/%s/hotreload/unwatch-all" sessionId) "{}" 5000
+      return true
+    with _ ->
+      return false
   }

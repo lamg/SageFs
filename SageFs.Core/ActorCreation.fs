@@ -47,6 +47,8 @@ type ActorResult = {
   GetStartupConfig: unit -> StartupConfig option
   GetStatusMessage: unit -> string option
   ProjectDirectories: string list
+  /// Shared hot-reload state — file watcher reads, API writes.
+  HotReloadStateRef: HotReloadState.T ref
 }
 
 /// Phase 1: Create the actor and return callbacks immediately.
@@ -82,7 +84,8 @@ let createActorImmediate a =
   let appActor, diagnosticsChanged, cancelEval, getSessionState, getEvalStats, getWarmupFailures, getStartupConfig, getStatusMessage =
     mkAppStateActor a.Logger customData a.OutStream a.UseAsp originalSln shadowDir a.OnEvent sln
   let projDirs = projectDirectories originalSln
-  { Actor = appActor; DiagnosticsChanged = diagnosticsChanged; CancelEval = cancelEval; GetSessionState = getSessionState; GetEvalStats = getEvalStats; GetWarmupFailures = getWarmupFailures; GetStartupConfig = getStartupConfig; GetStatusMessage = getStatusMessage; ProjectDirectories = projDirs }
+  let hotReloadStateRef = ref HotReloadState.empty
+  { Actor = appActor; DiagnosticsChanged = diagnosticsChanged; CancelEval = cancelEval; GetSessionState = getSessionState; GetEvalStats = getEvalStats; GetWarmupFailures = getWarmupFailures; GetStartupConfig = getStartupConfig; GetStatusMessage = getStatusMessage; ProjectDirectories = projDirs; HotReloadStateRef = hotReloadStateRef }
 
 /// Phase 2: Add middleware — blocks until init() completes and the
 /// eval actor is ready to process messages in its main loop.

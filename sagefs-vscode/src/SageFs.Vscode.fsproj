@@ -8,6 +8,7 @@
     <Compile Include="SageFsClient.fs" />
     <Compile Include="DiagnosticsListener.fs" />
     <Compile Include="CodeLensProvider.fs" />
+    <Compile Include="HotReloadTreeProvider.fs" />
     <Compile Include="Extension.fs" />
   </ItemGroup>
   <ItemGroup>

@@ -147,6 +147,9 @@ let run (sessionId: string) (port: int) (args: Args.Arguments list) = async {
         Async.Start(async {
           match FileWatcher.fileChangeAction change with
           | FileWatcher.FileChangeAction.Reload filePath ->
+            if not (HotReloadState.isWatched filePath !result.HotReloadStateRef) then
+              () // File not opted-in for hot-reload
+            else
             let code = sprintf "#load @\"%s\"" filePath
             let request = { Code = code; Args = Map.ofList ["hotReload", box true] }
             use localCts = new CancellationTokenSource()
@@ -200,8 +203,20 @@ let run (sessionId: string) (port: int) (args: Args.Arguments list) = async {
 
   try
     // Start HTTP server on requested port (0 = OS-assigned)
+    // Collect all .fs/.fsx files from project directories for hot-reload UI
+    let projectFiles =
+      result.ProjectDirectories
+      |> List.collect (fun dir ->
+        if IO.Directory.Exists(dir) then
+          IO.Directory.GetFiles(dir, "*.fs", IO.SearchOption.AllDirectories)
+          |> Array.append (IO.Directory.GetFiles(dir, "*.fsx", IO.SearchOption.AllDirectories))
+          |> Array.toList
+          |> List.filter (fun f ->
+            let n = f.Replace('\\', '/')
+            not (n.Contains("/obj/") || n.Contains("/bin/")))
+        else [])
     let! server =
-      WorkerHttpTransport.startServer handler port
+      WorkerHttpTransport.startServer handler result.HotReloadStateRef projectFiles port
       |> Async.AwaitTask
     // Print actual port to stdout so daemon can discover it
     printfn "WORKER_PORT=%s" server.BaseUrl

@@ -7,6 +7,7 @@ open Vscode
 module Client = SageFs.Vscode.SageFsClient
 module Diag = SageFs.Vscode.DiagnosticsListener
 module Lens = SageFs.Vscode.CodeLensProvider
+module HotReload = SageFs.Vscode.HotReloadTreeProvider
 
 // ── Mutable state ──────────────────────────────────────────────
 
@@ -174,6 +175,7 @@ let private refreshStatus () =
         sb.text <- "$(circle-slash) SageFs: offline"
         sb.backgroundColor <- None
         sb.show ()
+        HotReload.setSession c None
       else
         let! status = Client.getStatus c
         let! sys = Client.getSystemStatus c
@@ -187,6 +189,13 @@ let private refreshStatus () =
         else
           sb.text <- "$(loading~spin) SageFs: starting..."
         sb.show ()
+        // Detect active session for hot-reload tree
+        let! sessions = Client.listSessions c
+        let activeSession =
+          sessions
+          |> Array.tryHead
+          |> Option.map (fun s -> s.id)
+        HotReload.setSession c activeSession
     with _ ->
       sb.text <- "$(circle-slash) SageFs: offline"
       sb.show ()
@@ -474,6 +483,10 @@ let activate (context: ExtensionContext) =
   let dc = Languages.createDiagnosticCollection "sagefs"
   diagnosticCollection <- Some dc
   context.subscriptions.Add (dc :> obj :?> Disposable)
+
+  // Hot Reload TreeView
+  HotReload.register context
+  HotReload.setSession c None
 
   let reg cmd handler =
     context.subscriptions.Add (Commands.registerCommand cmd handler)

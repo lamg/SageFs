@@ -141,10 +141,12 @@ and [<RequireQualifiedAccess>] UiAction =
   | FontSizeDown
   | TogglePane of string
   | LayoutPreset of string
-  | ResizeH of int   // delta for LeftRightSplit (-1 = narrower left, +1 = wider left)
-  | ResizeV of int   // delta for OutputEditorSplit (-1 = less editor, +1 = more editor)
-  | ResizeR of int   // delta for SessionsDiagSplit (-1 = less sessions, +1 = more sessions)
+  | ResizeH of int
+  | ResizeV of int
+  | ResizeR of int
   | CycleTheme
+  | HotReloadWatchAll
+  | HotReloadUnwatchAll
 
 /// Maps physical keys to semantic actions
 type KeyMap = Map<KeyCombo, UiAction>
@@ -285,6 +287,8 @@ module UiAction =
     | "ResizeRGrow" -> Some (UiAction.ResizeR 1)
     | "ResizeRShrink" -> Some (UiAction.ResizeR -1)
     | "CycleTheme" -> Some UiAction.CycleTheme
+    | "HotReloadWatchAll" -> Some UiAction.HotReloadWatchAll
+    | "HotReloadUnwatchAll" -> Some UiAction.HotReloadUnwatchAll
     | _ -> None
 
 module KeyMap =
@@ -365,6 +369,9 @@ module KeyMap =
       KeyCombo.ctrlShift ConsoleKey.L, e EditorAction.ClearOutput
       // Theme
       KeyCombo.ctrl ConsoleKey.T, UiAction.CycleTheme
+      // Hot Reload
+      KeyCombo.ctrlAlt ConsoleKey.W, UiAction.HotReloadWatchAll
+      KeyCombo.ctrlAlt ConsoleKey.U, UiAction.HotReloadUnwatchAll
     ] |> Map.ofList
 
   /// Merge user overrides onto defaults (overrides win)

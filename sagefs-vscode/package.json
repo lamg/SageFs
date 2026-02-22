@@ -72,6 +72,25 @@
       {
         "command": "sagefs.clearResults",
         "title": "SageFs: Clear Inline Results"
+      },
+      {
+        "command": "sagefs.hotReloadToggle",
+        "title": "SageFs: Toggle Hot Reload for File"
+      },
+      {
+        "command": "sagefs.hotReloadWatchAll",
+        "title": "SageFs: Watch All Files",
+        "icon": "$(check-all)"
+      },
+      {
+        "command": "sagefs.hotReloadUnwatchAll",
+        "title": "SageFs: Unwatch All Files",
+        "icon": "$(close-all)"
+      },
+      {
+        "command": "sagefs.hotReloadRefresh",
+        "title": "SageFs: Refresh Hot Reload",
+        "icon": "$(refresh)"
       }
     ],
     "keybindings": [
@@ -110,6 +129,43 @@
           "description": "Path to .fsproj file. If empty, SageFs auto-detects."
         }
       }
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "sagefs",
+          "title": "SageFs",
+          "icon": "$(flame)"
+        }
+      ]
+    },
+    "views": {
+      "sagefs": [
+        {
+          "id": "sagefs-hotReload",
+          "name": "Hot Reload Files",
+          "contextualTitle": "SageFs Hot Reload"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "sagefs.hotReloadWatchAll",
+          "when": "view == sagefs-hotReload",
+          "group": "navigation"
+        },
+        {
+          "command": "sagefs.hotReloadUnwatchAll",
+          "when": "view == sagefs-hotReload",
+          "group": "navigation"
+        },
+        {
+          "command": "sagefs.hotReloadRefresh",
+          "when": "view == sagefs-hotReload",
+          "group": "navigation"
+        }
+      ]
     }
   },
   "scripts": {

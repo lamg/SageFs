@@ -107,6 +107,17 @@ type [<AllowNullLiteral>] ConfigurationChangeEvent =
 type [<AllowNullLiteral>] QuickPickOptions =
   abstract placeHolder: string option with get, set
 
+type [<AllowNullLiteral>] TreeItem =
+  interface end
+
+type [<AllowNullLiteral>] EventEmitter<'T> =
+  abstract event: obj
+  abstract fire: data: 'T -> unit
+  abstract dispose: unit -> unit
+
+type [<AllowNullLiteral>] TreeView<'T> =
+  abstract dispose: unit -> unit
+
 type [<AllowNullLiteral>] ExtensionContext =
   abstract subscriptions: ResizeArray<Disposable>
 
@@ -191,6 +202,10 @@ module Window =
   [<Emit("$0.createTextEditorDecorationType($1)")>]
   let private _createDecoType (w: obj) (opts: obj) : TextEditorDecorationType = jsNative
   let createTextEditorDecorationType (opts: obj) = _createDecoType windowExports opts
+
+  [<Emit("$0.createTreeView($1, $2)")>]
+  let private _createTreeView (w: obj) (viewId: string) (opts: obj) : TreeView<obj> = jsNative
+  let createTreeView (viewId: string) (opts: obj) = _createTreeView windowExports viewId opts
 
 // ── Commands API ────────────────────────────────────────────────
 
@@ -297,3 +312,21 @@ let newDiagnostic (range: Range) (message: string) (severity: int) = _newDiagnos
 [<Emit("new $0.CodeLens($1, $2)")>]
 let private _newCodeLens (v: obj) (range: Range) (cmd: obj) : CodeLens = jsNative
 let newCodeLens (range: Range) (cmd: obj) = _newCodeLens vscodeAll range cmd
+
+[<Emit("new $0.EventEmitter()")>]
+let private _newEventEmitter (v: obj) : EventEmitter<'T> = jsNative
+let newEventEmitter<'T> () : EventEmitter<'T> = _newEventEmitter vscodeAll
+
+// TreeItemCollapsibleState
+[<RequireQualifiedAccess>]
+module TreeItemCollapsibleState =
+  [<Emit("0")>]
+  let None: int = jsNative
+  [<Emit("1")>]
+  let Collapsed: int = jsNative
+  [<Emit("2")>]
+  let Expanded: int = jsNative
+
+[<Emit("new $0.TreeItem($1, $2)")>]
+let private _newTreeItem (v: obj) (label: string) (collapsibleState: int) : TreeItem = jsNative
+let newTreeItem (label: string) (collapsibleState: int) = _newTreeItem vscodeAll label collapsibleState

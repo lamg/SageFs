@@ -5,6 +5,8 @@ open System.Threading
 open SageFs
 open SageFs.Server
 open Falco
+open Falco.Routing
+open Microsoft.AspNetCore.Http
 open Microsoft.Extensions.Logging
 
 /// Run SageFs as a headless daemon.
@@ -330,6 +332,17 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
     | Some snap -> snap.StatusMessage
     | None -> None
 
+  let getWorkerBaseUrl (sid: string) =
+    try
+      let managed =
+        sessionManager.PostAndAsyncReply(fun reply ->
+          SessionManager.SessionCommand.GetSession(sid, reply))
+        |> Async.RunSynchronously
+      match managed with
+      | Some s when s.WorkerBaseUrl.Length > 0 -> Some s.WorkerBaseUrl
+      | _ -> None
+    with _ -> None
+
   let sessionThemes = Dashboard.loadThemes DaemonState.SageFsDir
 
   let dashboardEndpoints =
@@ -476,6 +489,85 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
       getAllSessions
       sessionThemes
       sessionOps.GetStandbyInfo
+      (fun sessionId -> task {
+        match getWorkerBaseUrl sessionId with
+        | Some baseUrl ->
+          try
+            let client = new Net.Http.HttpClient()
+            let! resp = client.GetStringAsync(sprintf "%s/hotreload" baseUrl)
+            use doc = Text.Json.JsonDocument.Parse(resp)
+            let root = doc.RootElement
+            let files =
+              root.GetProperty("files").EnumerateArray()
+              |> Seq.map (fun el ->
+                {| path = el.GetProperty("path").GetString()
+                   watched = el.GetProperty("watched").GetBoolean() |})
+              |> Seq.toList
+            let watchedCount = root.GetProperty("watchedCount").GetInt32()
+            return Some {| files = files; watchedCount = watchedCount |}
+          with _ -> return None
+        | None -> return None
+      })
+
+  // Hot-reload proxy endpoints — forward to worker HTTP servers
+  let hotReloadHttpClient = new Net.Http.HttpClient()
+  let hotReloadProxyEndpoints : HttpEndpoint list =
+    let proxyGet (sid: string) (workerPath: string) (ctx: Microsoft.AspNetCore.Http.HttpContext) = task {
+      match getWorkerBaseUrl sid with
+      | Some baseUrl ->
+        try
+          let url = sprintf "%s%s" baseUrl workerPath
+          let! resp = hotReloadHttpClient.GetStringAsync(url)
+          ctx.Response.ContentType <- "application/json"
+          do! ctx.Response.WriteAsync(resp)
+        with ex ->
+          ctx.Response.StatusCode <- 502
+          do! ctx.Response.WriteAsJsonAsync({| error = ex.Message |})
+      | None ->
+        ctx.Response.StatusCode <- 404
+        do! ctx.Response.WriteAsJsonAsync({| error = "Session not found or not ready" |})
+    }
+    let proxyPost (sid: string) (workerPath: string) (ctx: Microsoft.AspNetCore.Http.HttpContext) = task {
+      match getWorkerBaseUrl sid with
+      | Some baseUrl ->
+        try
+          let url = sprintf "%s%s" baseUrl workerPath
+          use reader = new IO.StreamReader(ctx.Request.Body)
+          let! body = reader.ReadToEndAsync()
+          use content = new Net.Http.StringContent(body, Text.Encoding.UTF8, "application/json")
+          let! resp = hotReloadHttpClient.PostAsync(url, content)
+          let! respBody = resp.Content.ReadAsStringAsync()
+          ctx.Response.ContentType <- "application/json"
+          ctx.Response.StatusCode <- int resp.StatusCode
+          do! ctx.Response.WriteAsync(respBody)
+          // Trigger SSE push so Dashboard updates hot-reload panel
+          if resp.IsSuccessStatusCode then
+            stateChangedEvent.Trigger """{"hotReloadChanged":true}"""
+        with ex ->
+          ctx.Response.StatusCode <- 502
+          do! ctx.Response.WriteAsJsonAsync({| error = ex.Message |})
+      | None ->
+        ctx.Response.StatusCode <- 404
+        do! ctx.Response.WriteAsJsonAsync({| error = "Session not found or not ready" |})
+    }
+    [
+      mapGet "/api/sessions/{sid}/hotreload"
+        (fun (r: RequestData) -> r.GetString("sid", ""))
+        (fun sid -> fun ctx -> proxyGet sid "/hotreload" ctx)
+      mapPost "/api/sessions/{sid}/hotreload/toggle"
+        (fun (r: RequestData) -> r.GetString("sid", ""))
+        (fun sid -> fun ctx -> proxyPost sid "/hotreload/toggle" ctx)
+      mapPost "/api/sessions/{sid}/hotreload/watch-all"
+        (fun (r: RequestData) -> r.GetString("sid", ""))
+        (fun sid -> fun ctx -> proxyPost sid "/hotreload/watch-all" ctx)
+      mapPost "/api/sessions/{sid}/hotreload/unwatch-all"
+        (fun (r: RequestData) -> r.GetString("sid", ""))
+        (fun sid -> fun ctx -> proxyPost sid "/hotreload/unwatch-all" ctx)
+      mapPost "/api/sessions/{sid}/hotreload/watch-project"
+        (fun (r: RequestData) -> r.GetString("sid", ""))
+        (fun sid -> fun ctx -> proxyPost sid "/hotreload/watch-project" ctx)
+    ]
+
   let dashboardTask = task {
     try
       let builder = Microsoft.AspNetCore.Builder.WebApplication.CreateBuilder()
@@ -486,7 +578,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
       |> ignore
       let app = builder.Build()
       app.Urls.Add(sprintf "http://localhost:%d" dashboardPort)
-      app.UseRouting().UseFalco(dashboardEndpoints) |> ignore
+      app.UseRouting().UseFalco(dashboardEndpoints @ hotReloadProxyEndpoints) |> ignore
       eprintfn "Dashboard available at http://localhost:%d/dashboard" dashboardPort
       do! app.RunAsync()
     with ex ->

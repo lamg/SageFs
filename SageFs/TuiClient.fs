@@ -255,6 +255,18 @@ let run (daemonInfo: DaemonInfo) = task {
             if lastWorkingDir.Length > 0 then
               sessionThemes.[lastWorkingDir] <- name
             render ()
+          | Some TerminalCommand.HotReloadWatchAll ->
+            if lastSessionId.Length > 0 then
+              try
+                let! _ = client.PostAsync(sprintf "%s/api/sessions/%s/hotreload/watch-all" baseUrl lastSessionId, new StringContent("{}", System.Text.Encoding.UTF8, "application/json"))
+                ()
+              with _ -> ()
+          | Some TerminalCommand.HotReloadUnwatchAll ->
+            if lastSessionId.Length > 0 then
+              try
+                let! _ = client.PostAsync(sprintf "%s/api/sessions/%s/hotreload/unwatch-all" baseUrl lastSessionId, new StringContent("{}", System.Text.Encoding.UTF8, "application/json"))
+                ()
+              with _ -> ()
           | Some (TerminalCommand.Action action) ->
             // When Sessions pane is focused, remap movement keys
             let remappedAction =

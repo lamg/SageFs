@@ -50,6 +50,8 @@ module WorkerHttpTransport =
   /// Pass port=0 for OS-assigned dynamic port.
   let startServer
     (handler: WorkerMessage -> Async<WorkerResponse>)
+    (hotReloadStateRef: HotReloadState.T ref)
+    (projectFiles: string list)
     (port: int)
     : Task<HttpWorkerServer> =
     task {
@@ -118,6 +120,54 @@ module WorkerHttpTransport =
 
       app.MapPost("/shutdown", Func<HttpContext, Task>(fun ctx ->
         respond' ctx WorkerMessage.Shutdown)) |> ignore
+
+      // Hot-reload state endpoints
+      app.MapGet("/hotreload", Func<HttpContext, Task>(fun ctx -> task {
+        let state = !hotReloadStateRef
+        let files =
+          projectFiles
+          |> List.map (fun f -> {| path = f; watched = HotReloadState.isWatched f state |})
+        ctx.Response.ContentType <- "application/json"
+        do! ctx.Response.WriteAsync(Serialization.serialize {| files = files; watchedCount = HotReloadState.watchedCount state |})
+      })) |> ignore
+
+      app.MapPost("/hotreload/toggle", Func<HttpContext, Task>(fun ctx -> task {
+        let! body = readBody ctx
+        use doc = JsonDocument.Parse(body)
+        let path = (jsonProp doc "path").GetString()
+        hotReloadStateRef.Value <- HotReloadState.toggle path !hotReloadStateRef
+        let isNowWatched = HotReloadState.isWatched path !hotReloadStateRef
+        ctx.Response.ContentType <- "application/json"
+        do! ctx.Response.WriteAsync(Serialization.serialize {| path = path; watched = isNowWatched |})
+      })) |> ignore
+
+      app.MapPost("/hotreload/watch-all", Func<HttpContext, Task>(fun ctx -> task {
+        hotReloadStateRef.Value <- HotReloadState.watchAll projectFiles !hotReloadStateRef
+        ctx.Response.ContentType <- "application/json"
+        do! ctx.Response.WriteAsync(Serialization.serialize {| watchedCount = HotReloadState.watchedCount !hotReloadStateRef |})
+      })) |> ignore
+
+      app.MapPost("/hotreload/unwatch-all", Func<HttpContext, Task>(fun ctx -> task {
+        hotReloadStateRef.Value <- HotReloadState.unwatchAll !hotReloadStateRef
+        ctx.Response.ContentType <- "application/json"
+        do! ctx.Response.WriteAsync(Serialization.serialize {| watchedCount = 0 |})
+      })) |> ignore
+
+      app.MapPost("/hotreload/watch-project", Func<HttpContext, Task>(fun ctx -> task {
+        let! body = readBody ctx
+        use doc = JsonDocument.Parse(body)
+        let project = (jsonProp doc "project").GetString()
+        let normalizedDir =
+          let d = project.Replace('\\', '/').ToLowerInvariant()
+          if d.EndsWith("/") then d else d + "/"
+        let matching =
+          projectFiles
+          |> List.filter (fun f ->
+            f.Replace('\\', '/').ToLowerInvariant().StartsWith(normalizedDir))
+        hotReloadStateRef.Value <- HotReloadState.watchMany matching !hotReloadStateRef
+        ctx.Response.ContentType <- "application/json"
+        do! ctx.Response.WriteAsync(Serialization.serialize {| project = project; watchedCount = List.length matching |})
+      })) |> ignore
 
       do! app.StartAsync()
 
