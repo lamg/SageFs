@@ -13,6 +13,7 @@
         <Compile Include="WarmUp.fs" />
         <Compile Include="AspireSetup.fs" />
         <Compile Include="ErrorMessages.fs" />
+        <Compile Include="Features\LiveTestingTypes.fs" />
         <Compile Include="Features\AutoCompletion.fs" />
         <Compile Include="Features\Diagnostics.fs" />
         <Compile Include="Features\DiagnosticsStore.fs" />
