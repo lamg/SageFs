@@ -517,6 +517,39 @@ let private switchSessionCmd () =
         | None -> ()
   }
 
+let private stopSessionCmd () =
+  promise {
+    let! ok = ensureRunning ()
+    if ok then
+      let c = getClient ()
+      let! sessions = Client.listSessions c
+      if sessions.Length = 0 then
+        Window.showInformationMessage "No sessions available." [||] |> ignore
+      else
+        let items =
+          sessions |> Array.map (fun s ->
+            let proj =
+              if s.projects.Length > 0 then s.projects |> String.concat ", "
+              else "no project"
+            sprintf "%s (%s) [%s]" s.id proj s.status)
+        let! picked = Window.showQuickPick items "Select a session to stop"
+        match picked with
+        | Some label ->
+          let idx = items |> Array.tryFindIndex (fun i -> i = label)
+          match idx with
+          | Some i ->
+            let sess = sessions.[i]
+            let! ok = Client.stopSession sess.id c
+            if ok then
+              if activeSessionId = Some sess.id then activeSessionId <- None
+              Window.showInformationMessage (sprintf "Stopped session %s" sess.id) [||] |> ignore
+            else
+              Window.showErrorMessage "Failed to stop session." [||] |> ignore
+            refreshStatus ()
+          | None -> ()
+        | None -> ()
+  }
+
 let private stopDaemon () =
   daemonProcess |> Option.iter killProc
   daemonProcess <- None
@@ -600,6 +633,7 @@ let activate (context: ExtensionContext) =
   reg "sagefs.hardReset" (fun _ -> hardResetCmd () |> ignore)
   reg "sagefs.createSession" (fun _ -> createSessionCmd () |> ignore)
   reg "sagefs.switchSession" (fun _ -> switchSessionCmd () |> ignore)
+  reg "sagefs.stopSession" (fun _ -> stopSessionCmd () |> ignore)
   reg "sagefs.clearResults" (fun _ -> clearAllDecorations ())
 
   // CodeLens

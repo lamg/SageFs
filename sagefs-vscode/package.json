@@ -79,6 +79,10 @@
         "title": "SageFs: Switch Session"
       },
       {
+        "command": "sagefs.stopSession",
+        "title": "SageFs: Stop Session"
+      },
+      {
         "command": "sagefs.clearResults",
         "title": "SageFs: Clear Inline Results"
       },

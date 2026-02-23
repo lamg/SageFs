@@ -320,6 +320,21 @@ type SageFsClient() =
       return false
   }
 
+  /// Stop a session by ID.
+  member this.StopSessionAsync(sessionId: string, ct: CancellationToken) = task {
+    try
+      use content =
+        new StringContent(
+          sprintf """{"sessionId":"%s"}""" sessionId,
+          Encoding.UTF8, "application/json")
+      let! _ =
+        http.PostAsync(
+          sprintf "%s/api/sessions/stop" this.BaseUrl, content, ct)
+      return true
+    with _ ->
+      return false
+  }
+
   /// Reset the active session.
   member this.ResetSessionAsync(hard: bool, ct: CancellationToken) = task {
     let endpoint =

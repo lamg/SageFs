@@ -6,6 +6,7 @@
   "SageFs.OpenDashboard.DisplayName": "SageFs: Open Dashboard",
   "SageFs.CreateSession.DisplayName": "SageFs: Create Session",
   "SageFs.SwitchSession.DisplayName": "SageFs: Switch Session",
+  "SageFs.StopSession.DisplayName": "SageFs: Stop Session",
   "SageFs.ResetSession.DisplayName": "SageFs: Reset Session",
   "SageFs.HardReset.DisplayName": "SageFs: Hard Reset",
   "SageFs.ClearResults.DisplayName": "SageFs: Clear Inline Results",

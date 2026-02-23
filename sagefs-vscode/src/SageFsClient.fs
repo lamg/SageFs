@@ -222,6 +222,17 @@ let switchSession (sessionId: string) (c: Client) =
       return false
   }
 
+let stopSession (sessionId: string) (c: Client) =
+  promise {
+    try
+      let payload = {| sessionId = sessionId |}
+      let! resp = httpPost c "/api/sessions/stop" (jsonStringify payload) 10000
+      let parsed = jsonParse resp.body
+      return parsed?success |> unbox<bool>
+    with _ ->
+      return false
+  }
+
 let getSystemStatus (c: Client) =
   promise {
     try

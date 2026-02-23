@@ -122,6 +122,66 @@ internal class ResetSessionCommand : Command
 }
 
 [VisualStudioContribution]
+internal class StopSessionCommand : Command
+{
+  private readonly Core.SageFsClient client;
+  private OutputChannel? output;
+
+  public StopSessionCommand(Core.SageFsClient client) => this.client = client;
+
+  public override CommandConfiguration CommandConfiguration => new("%SageFs.StopSession.DisplayName%")
+  {
+    Placements = [CommandPlacement.KnownPlacements.ExtensionsMenu],
+    Icon = new(ImageMoniker.KnownValues.Stop, IconSettings.IconAndText),
+  };
+
+  public override async Task InitializeAsync(CancellationToken ct)
+  {
+    output = await Extensibility.Views().Output.CreateOutputChannelAsync("SageFs", ct);
+    await base.InitializeAsync(ct);
+  }
+
+  public override async Task ExecuteCommandAsync(IClientContext context, CancellationToken ct)
+  {
+    var choices = await client.GetSessionChoicesAsync(ct);
+    var choicesList = choices.ToList();
+    if (choicesList.Count == 0)
+    {
+      await Extensibility.Shell().ShowPromptAsync(
+        "No sessions available.", PromptOptions.OK, ct);
+      return;
+    }
+
+    if (output is not null)
+    {
+      await output.WriteLineAsync("Sessions:");
+      for (int i = 0; i < choicesList.Count; i++)
+        await output.WriteLineAsync($"  [{i + 1}] {choicesList[i].Item1}");
+    }
+
+    // Prompt to stop the first (or only) session
+    var target = choicesList[0];
+    var confirmed = await Extensibility.Shell().ShowPromptAsync(
+      $"Stop session: {target.Item1}?",
+      PromptOptions.OKCancel.WithCancelAsDefault(), ct);
+
+    if (confirmed)
+    {
+      var ok = await client.StopSessionAsync(target.Item2, ct);
+      if (!ok)
+      {
+        await Extensibility.Shell().ShowPromptAsync(
+          "Failed to stop session.", PromptOptions.OK, ct);
+      }
+      else if (output is not null)
+      {
+        await output.WriteLineAsync($"✗ Stopped {target.Item1}");
+      }
+    }
+  }
+}
+
+[VisualStudioContribution]
 internal class HardResetCommand : Command
 {
   private readonly Core.SageFsClient client;
