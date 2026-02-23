@@ -295,10 +295,10 @@ Already running at `http://localhost:37750/dashboard`. Submit code, view session
 | Session context | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Hot reload toggle | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Watch / unwatch all | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Code completion | ✅ | ✅ | ✅ | ✅ | — | — |
+| Code completion | ✅ | ✅ | ✅ | ✅ | — | ✅ |
 | SSE live updates | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Themes | ✅ | ✅ | ✅ | — | — | ✅ |
-| CodeLens | — | — | — | ✅ | ✅ | — |
+| CodeLens | — | — | — | ✅ | ✅ | ✅ |
 | Project discovery | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Session resume | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 

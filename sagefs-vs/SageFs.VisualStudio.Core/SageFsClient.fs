@@ -350,5 +350,31 @@ type SageFsClient() =
       return ()
   }
 
+  member this.GetCompletionsAsync(code: string, cursorPosition: int, ct: CancellationToken) = task {
+    try
+      let json =
+        sprintf """{"code":%s,"cursor_position":%d,"working_directory":""}"""
+          (JsonSerializer.Serialize code) cursorPosition
+      let content = new StringContent(json, Encoding.UTF8, "application/json")
+      let! resp =
+        http.PostAsync(
+          sprintf "%s/dashboard/completions" this.DashUrl,
+          content, ct)
+      let! body = resp.Content.ReadAsStringAsync(ct)
+      let doc = JsonDocument.Parse(body)
+      let root = doc.RootElement
+      let items = tryArr root "completions"
+      return
+        match items with
+        | Some arr ->
+          [| for el in arr.EnumerateArray() ->
+               {| Label = tryStr el "label" ""
+                  Kind = tryStr el "kind" "Variable"
+                  InsertText = tryStr el "insertText" "" |} |]
+        | None -> [||]
+    with _ ->
+      return [||]
+  }
+
   interface IDisposable with
     member _.Dispose() = http.Dispose()
