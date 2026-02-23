@@ -349,3 +349,101 @@ let httpApiTests =
         client.Dispose()
         killDaemon proc
   ]
+
+[<Tests>]
+let sessionLifecycleTests =
+  testList "[Integration] Session lifecycle" [
+
+    testCase "POST /api/sessions/create creates a new session" <| fun _ ->
+      let port = 39200 + (Random().Next(100))
+      let proc, client = startDaemon port |> Async.AwaitTask |> Async.RunSynchronously
+      try
+        let payload =
+          {| projects = [| "SageFs.Tests.fsproj" |]
+             workingDirectory = testProjectDir |}
+        let status, body = postJson client "/api/sessions/create" payload |> Async.AwaitTask |> Async.RunSynchronously
+        status |> Expect.equal "200 OK" 200
+
+        use doc = JsonDocument.Parse(body)
+        doc.RootElement.GetProperty("success").GetBoolean()
+        |> Expect.isTrue "session created"
+      finally
+        client.Dispose()
+        killDaemon proc
+
+    testCase "POST /api/sessions/stop stops a session" <| fun _ ->
+      let port = 39300 + (Random().Next(100))
+      let proc, client = startDaemon port |> Async.AwaitTask |> Async.RunSynchronously
+      try
+        let p = {| code = "let stopTest = 1;;" ; working_directory = testProjectDir |}
+        let _, _ = postJson client "/exec" p |> Async.AwaitTask |> Async.RunSynchronously
+
+        let _, sessBody = getJson client "/api/sessions" |> Async.AwaitTask |> Async.RunSynchronously
+        use sessDoc = JsonDocument.Parse(sessBody)
+        let sessions = sessDoc.RootElement.GetProperty("sessions")
+        let sessionId =
+          if sessions.GetArrayLength() > 0 then
+            sessions.[0].GetProperty("id").GetString()
+          else failwith "no session found"
+
+        let stopStatus, stopBody = postJson client "/api/sessions/stop" {| sessionId = sessionId |} |> Async.AwaitTask |> Async.RunSynchronously
+        stopStatus |> Expect.equal "200" 200
+
+        use stopDoc = JsonDocument.Parse(stopBody)
+        stopDoc.RootElement.GetProperty("success").GetBoolean()
+        |> Expect.isTrue "session stopped"
+      finally
+        client.Dispose()
+        killDaemon proc
+
+    testCase "POST /api/sessions/switch returns 404 for unknown session" <| fun _ ->
+      let port = 39400 + (Random().Next(100))
+      let proc, client = startDaemon port |> Async.AwaitTask |> Async.RunSynchronously
+      try
+        let status, body = postJson client "/api/sessions/switch" {| sessionId = "nonexistent-session" |} |> Async.AwaitTask |> Async.RunSynchronously
+        status |> Expect.equal "404 not found" 404
+
+        use doc = JsonDocument.Parse(body)
+        doc.RootElement.GetProperty("success").GetBoolean()
+        |> Expect.isFalse "switch should fail for unknown session"
+      finally
+        client.Dispose()
+        killDaemon proc
+
+    testCase "GET /diagnostics SSE responds with text/event-stream" <| fun _ ->
+      let port = 39500 + (Random().Next(100))
+      let proc, client = startDaemon port |> Async.AwaitTask |> Async.RunSynchronously
+      try
+        use cts = new CancellationTokenSource(TimeSpan.FromSeconds(5.0))
+        let req = new HttpRequestMessage(HttpMethod.Get, "/diagnostics")
+        let resp =
+          client.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, cts.Token)
+          |> Async.AwaitTask |> Async.RunSynchronously
+        int resp.StatusCode |> Expect.equal "200 OK" 200
+        let ct = resp.Content.Headers.ContentType
+        ct.MediaType |> Expect.equal "SSE content type" "text/event-stream"
+        cts.Cancel()
+      finally
+        client.Dispose()
+        killDaemon proc
+
+    testCase "POST /reset after eval allows re-eval" <| fun _ ->
+      let port = 39600 + (Random().Next(100))
+      let proc, client = startDaemon port |> Async.AwaitTask |> Async.RunSynchronously
+      try
+        let p1 = {| code = "let resetReeval = 99;;" ; working_directory = testProjectDir |}
+        let _, _ = postJson client "/exec" p1 |> Async.AwaitTask |> Async.RunSynchronously
+
+        let _, _ = postJson client "/reset" {||} |> Async.AwaitTask |> Async.RunSynchronously
+
+        let p2 = {| code = "let resetReeval = 42;;" ; working_directory = testProjectDir |}
+        let s2, body2 = postJson client "/exec" p2 |> Async.AwaitTask |> Async.RunSynchronously
+        s2 |> Expect.equal "200" 200
+
+        use doc = JsonDocument.Parse(body2)
+        doc.RootElement.GetProperty("success").GetBoolean()
+        |> Expect.isTrue "re-eval after reset succeeded"
+      finally
+        client.Dispose()
+        killDaemon proc
+  ]
