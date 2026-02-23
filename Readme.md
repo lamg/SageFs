@@ -286,7 +286,7 @@ Already running at `http://localhost:37750/dashboard`. Submit code, view session
 |---------|:---:|:----------:|:------------:|:-------:|:------------:|:------:|
 | Eval code | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Eval file | — | — | — | ✅ | ✅ | — |
-| Eval block (`;;`) | ✅ | ✅ | — | ✅ | ✅ | ✅ |
+| Eval block (`;;`) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Inline results | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Diagnostics | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Create / switch session | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |

@@ -519,6 +519,30 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
           with _ -> return None
         | None -> return None
       })
+      // Completions handler — routes to worker
+      (Some (fun (sessionId: string) (code: string) (cursorPos: int) -> task {
+        if String.IsNullOrEmpty(sessionId) then return []
+        else
+        try
+          let! proxy = sessionOps.GetProxy sessionId
+          match proxy with
+          | Some send ->
+            let replyId = sprintf "dash-comp-%d" (System.Random.Shared.Next())
+            let! resp =
+              send (WorkerProtocol.WorkerMessage.GetCompletions(code, cursorPos, replyId))
+              |> Async.StartAsTask
+            return
+              match resp with
+              | WorkerProtocol.WorkerResponse.CompletionResult(_, items) ->
+                items |> List.map (fun label ->
+                  { SageFs.Features.AutoCompletion.DisplayText = label
+                    SageFs.Features.AutoCompletion.ReplacementText = label
+                    SageFs.Features.AutoCompletion.Kind = SageFs.Features.AutoCompletion.CompletionKind.Variable
+                    SageFs.Features.AutoCompletion.GetDescription = None })
+              | _ -> []
+          | None -> return []
+        with _ -> return []
+      }))
 
   // Hot-reload proxy endpoints — forward to worker HTTP servers
   let hotReloadHttpClient = new Net.Http.HttpClient()

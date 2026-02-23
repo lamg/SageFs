@@ -384,13 +384,21 @@ let renderShell (version: string) =
                 renderKeyboardHelp ()
               ]
               Elem.input [ Attr.type' "hidden"; Ds.bind "sessionId" ]
-              Elem.textarea
-                [ Attr.class' "eval-input"
-                  Ds.bind "code"
-                  Attr.create "placeholder" "Enter F# code... (Ctrl+Enter to eval, ;; auto-appended)"
-                  Ds.onEvent ("keydown", "if(event.ctrlKey && event.key === 'Enter') { event.preventDefault(); @post('/dashboard/eval') } if(event.ctrlKey && event.key === 'l') { event.preventDefault(); @post('/dashboard/clear-output') } if(event.key === 'Tab') { event.preventDefault(); var s=this.selectionStart; var e=this.selectionEnd; this.value=this.value.substring(0,s)+'  '+this.value.substring(e); this.selectionStart=this.selectionEnd=s+2; this.dispatchEvent(new Event('input')) }")
-                  Attr.create "spellcheck" "false" ]
-                []
+              Elem.div [ Attr.style "position: relative;" ] [
+                Elem.textarea
+                  [ Attr.class' "eval-input"
+                    Attr.id "eval-textarea"
+                    Ds.bind "code"
+                    Attr.create "placeholder" "Enter F# code... (Ctrl+Enter to eval, ;; auto-appended)"
+                    Ds.onEvent ("keydown", "if(event.ctrlKey && event.key === 'Enter') { event.preventDefault(); @post('/dashboard/eval') } if(event.ctrlKey && event.key === 'l') { event.preventDefault(); @post('/dashboard/clear-output') } if(event.key === 'Tab') { event.preventDefault(); var s=this.selectionStart; var e=this.selectionEnd; this.value=this.value.substring(0,s)+'  '+this.value.substring(e); this.selectionStart=this.selectionEnd=s+2; this.dispatchEvent(new Event('input')) } if(event.key === 'Escape') { document.getElementById('completion-dropdown').style.display='none' }")
+                    Ds.onEvent ("input", "clearTimeout(window._compTimer); var ta=this; window._compTimer=setTimeout(function(){ var code=ta.value; var pos=ta.selectionStart; if(pos>0 && (code[pos-1]==='.' || (code[pos-1]>='a' && code[pos-1]<='z') || (code[pos-1]>='A' && code[pos-1]<='Z'))) { var sid=document.querySelector('[data-signal-sessionId]'); var sidVal=sid?sid.value:''; fetch('/dashboard/completions',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code:code,cursorPos:pos,sessionId:sidVal})}).then(r=>r.json()).then(d=>{ var dd=document.getElementById('completion-dropdown'); if(d.completions && d.completions.length>0){ dd.innerHTML=d.completions.map(function(c,i){return '<div class=\"comp-item\" data-insert=\"'+c.insertText+'\" style=\"padding:2px 6px;cursor:pointer;\"'+(i===0?' style=\"background:var(--selection)\"':'')+'>'+c.label+' <span style=\"opacity:0.5;font-size:0.8em\">('+c.kind+')</span></div>'}).join(''); dd.style.display='block'; dd.querySelectorAll('.comp-item').forEach(function(el){ el.onclick=function(){ var ins=el.dataset.insert; var before=ta.value.substring(0,pos); var wordStart=before.search(/[a-zA-Z0-9_]*$/); ta.value=ta.value.substring(0,wordStart)+ins+ta.value.substring(pos); ta.selectionStart=ta.selectionEnd=wordStart+ins.length; ta.dispatchEvent(new Event('input')); dd.style.display='none'; ta.focus(); }}) } else { dd.style.display='none' } }).catch(function(){}) } }, 300)")
+                    Attr.create "spellcheck" "false" ]
+                  []
+                Elem.div
+                  [ Attr.id "completion-dropdown"
+                    Attr.style "display:none; position:absolute; bottom:100%; left:0; max-height:200px; overflow-y:auto; background:var(--bg); border:1px solid var(--selection); border-radius:4px; z-index:100; min-width:200px; font-size:0.85em; box-shadow:0 -2px 8px rgba(0,0,0,0.3);" ]
+                  []
+              ]
               Elem.div [ Attr.style "display: flex; gap: 0.5rem; margin-top: 0.5rem; align-items: center;" ] [
                 Elem.button
                   [ Attr.class' "eval-btn"
@@ -1493,6 +1501,40 @@ let createEvalHandler
     | :? System.ObjectDisposedException -> ()
   }
 
+/// Create the completions POST handler (returns JSON, not SSE).
+let createCompletionsHandler
+  (getCompletions: string -> string -> int -> Threading.Tasks.Task<Features.AutoCompletion.CompletionItem list>)
+  : HttpHandler =
+  fun ctx -> task {
+    try
+      use reader = new StreamReader(ctx.Request.Body)
+      let! body = reader.ReadToEndAsync()
+      use doc = System.Text.Json.JsonDocument.Parse(body)
+      let code =
+        match doc.RootElement.TryGetProperty("code") with
+        | true, prop -> prop.GetString()
+        | _ -> ""
+      let cursorPos =
+        match doc.RootElement.TryGetProperty("cursorPos") with
+        | true, prop -> prop.GetInt32()
+        | _ -> -1
+      let sessionId =
+        match doc.RootElement.TryGetProperty("sessionId") with
+        | true, prop -> prop.GetString()
+        | _ -> ""
+      if String.IsNullOrWhiteSpace code || cursorPos < 0 then
+        ctx.Response.ContentType <- "application/json"
+        do! ctx.Response.WriteAsJsonAsync({| completions = [||]; count = 0 |})
+      else
+        let! items = getCompletions sessionId code cursorPos
+        let json = McpAdapter.formatCompletionsJson items
+        ctx.Response.ContentType <- "application/json"
+        do! ctx.Response.WriteAsync(json)
+    with ex ->
+      ctx.Response.StatusCode <- 500
+      do! ctx.Response.WriteAsJsonAsync({| error = ex.Message |})
+  }
+
 /// Create the reset POST handler.
 let createResetHandler
   (resetSession: string -> Threading.Tasks.Task<string>)
@@ -1940,11 +1982,15 @@ let createEndpoints
   (getStandbyInfo: unit -> Threading.Tasks.Task<StandbyInfo>)
   (getHotReloadState: string -> Threading.Tasks.Task<{| files: {| path: string; watched: bool |} list; watchedCount: int |} option>)
   (getWarmupContext: string -> Threading.Tasks.Task<WarmupContext option>)
+  (getCompletions: (string -> string -> int -> Threading.Tasks.Task<Features.AutoCompletion.CompletionItem list>) option)
   : HttpEndpoint list =
   [
     yield get "/dashboard" (FalcoResponse.ofHtml (renderShell version))
     yield get "/dashboard/stream" (createStreamHandler getSessionState getStatusMsg getEvalStats getSessionWorkingDir getActiveSessionId getElmRegions stateChanged connectionTracker getPreviousSessions getAllSessions sessionThemes getStandbyInfo getHotReloadState getWarmupContext)
     yield post "/dashboard/eval" (createEvalHandler evalCode)
+    match getCompletions with
+    | Some gc -> yield post "/dashboard/completions" (createCompletionsHandler gc)
+    | None -> ()
     yield post "/dashboard/reset" (createResetHandler resetSession)
     yield post "/dashboard/hard-reset" (createResetHandler hardResetSession)
     yield post "/dashboard/clear-output" createClearOutputHandler
