@@ -297,7 +297,7 @@ Already running at `http://localhost:37750/dashboard`. Submit code, view session
 | Watch / unwatch all | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Code completion | ✅ | ✅ | ✅ | ✅ | — | ✅ |
 | SSE live updates | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Themes | ✅ | ✅ | ✅ | — | — | ✅ |
+| Themes | ✅ | ✅ | ✅ | ✅ | — | ✅ |
 | CodeLens | — | — | — | ✅ | ✅ | ✅ |
 | Project discovery | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Session resume | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
