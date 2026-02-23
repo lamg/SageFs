@@ -21,6 +21,8 @@ internal class EvalFileCommand : Command
   {
     Placements = [CommandPlacement.KnownPlacements.ExtensionsMenu],
     Icon = new(ImageMoniker.KnownValues.FSFileNode, IconSettings.IconAndText),
+    Shortcuts = [new CommandShortcutConfiguration(ModifierKey.ShiftLeftAlt, Key.Enter)],
+    VisibleWhen = ActivationConstraint.ClientContext(ClientContextKey.Shell.ActiveEditorContentType, ".+"),
   };
 
   public override async Task InitializeAsync(CancellationToken ct)

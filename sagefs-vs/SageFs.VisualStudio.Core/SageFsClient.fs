@@ -205,6 +205,39 @@ type SageFsClient() =
     with _ -> return ()
   }
 
+  /// Watch all F# files for hot reload.
+  member this.WatchAllAsync(sessionId: string, ct: CancellationToken) = task {
+    try
+      let! _ =
+        http.PostAsync(
+          sprintf "%s/api/sessions/%s/hotreload/watch-all" this.BaseUrl sessionId,
+          new StringContent("", Encoding.UTF8), ct)
+      return ()
+    with _ -> return ()
+  }
+
+  /// Unwatch all F# files for hot reload.
+  member this.UnwatchAllAsync(sessionId: string, ct: CancellationToken) = task {
+    try
+      let! _ =
+        http.PostAsync(
+          sprintf "%s/api/sessions/%s/hotreload/unwatch-all" this.BaseUrl sessionId,
+          new StringContent("", Encoding.UTF8), ct)
+      return ()
+    with _ -> return ()
+  }
+
+  /// Refresh hot reload (re-evaluate watched files).
+  member this.RefreshHotReloadAsync(sessionId: string, ct: CancellationToken) = task {
+    try
+      let! _ =
+        http.PostAsync(
+          sprintf "%s/api/sessions/%s/hotreload/refresh" this.BaseUrl sessionId,
+          new StringContent("", Encoding.UTF8), ct)
+      return ()
+    with _ -> return ()
+  }
+
   /// Start the daemon process.
   member _.StartDaemonAsync(_ct: CancellationToken) = task {
     return ()

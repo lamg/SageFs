@@ -21,7 +21,7 @@ internal class EvalSelectionCommand : Command
   {
     Placements = [CommandPlacement.KnownPlacements.ExtensionsMenu],
     Icon = new(ImageMoniker.KnownValues.PlayStepGroup, IconSettings.IconAndText),
-    Shortcuts = [new CommandShortcutConfiguration(ModifierKey.ControlShift, Key.Enter)],
+    Shortcuts = [new CommandShortcutConfiguration(ModifierKey.LeftAlt, Key.Enter)],
     VisibleWhen = ActivationConstraint.ClientContext(ClientContextKey.Shell.ActiveEditorContentType, ".+"),
   };
 
