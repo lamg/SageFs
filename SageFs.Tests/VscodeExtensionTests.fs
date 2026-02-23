@@ -19,14 +19,43 @@ module VscodeFixture =
   let private userDataDir = @"C:\temp\sagefs-vscode-test"
 
   let private codeExe =
-    let paths = [
+    // 1. Env var override (VSCODE_PATH=C:\wherever\Code.exe)
+    let fromEnv =
+      Environment.GetEnvironmentVariable("VSCODE_PATH")
+      |> Option.ofObj
+      |> Option.filter IO.File.Exists
+    // 2. `code` on PATH → resolve to Code.exe via parent dir
+    let fromPath =
+      lazy
+        try
+          let psi =
+            ProcessStartInfo(
+              "where", "code",
+              RedirectStandardOutput = true,
+              UseShellExecute = false,
+              CreateNoWindow = true)
+          use p = Process.Start(psi)
+          let line = p.StandardOutput.ReadLine()
+          p.WaitForExit(3000) |> ignore
+          if not (String.IsNullOrEmpty line) then
+            // `where code` returns the shim (e.g. …\bin\code or …\bin\code.cmd)
+            // Code.exe lives in the parent directory
+            let dir = IO.Path.GetDirectoryName(line)
+            let candidate = IO.Path.Combine(IO.Path.GetDirectoryName(dir), "Code.exe")
+            if IO.File.Exists candidate then Some candidate else None
+          else None
+        with _ -> None
+    // 3. Common install locations
+    let wellKnown = [
       @"C:\Program Files\Microsoft VS Code\Code.exe"
       @"C:\Program Files (x86)\Microsoft VS Code\Code.exe"
     ]
-    paths
-    |> List.tryFind IO.File.Exists
+    fromEnv
+    |> Option.orElseWith (fun () -> fromPath.Value)
+    |> Option.orElseWith (fun () -> wellKnown |> List.tryFind IO.File.Exists)
     |> Option.defaultWith (fun () ->
-      failwith "VS Code not found in standard install locations")
+      failwith
+        "VS Code not found. Set VSCODE_PATH env var or ensure 'code' is on PATH")
 
   /// Pre-configure the test profile so dialogs don't block tests.
   let private ensureTestSettings () =
