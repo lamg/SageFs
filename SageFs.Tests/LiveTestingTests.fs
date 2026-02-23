@@ -935,3 +935,95 @@ let instrumentationTests = testList "LiveTestingInstrumentation" [
     |> Expect.isNotNull "should not be null"
   }
 ]
+
+[<Tests>]
+let transitiveClosureTests = testList "TransitiveCoverage" [
+  test "single symbol with direct test stays in result" {
+    let t1 = TestId.create "test1" "x"
+    let direct = Map.ofList [ "A", [| t1 |] ]
+    let callGraph = Map.empty<string, string array>
+    let result = TestDependencyGraph.computeTransitiveCoverage callGraph direct
+    Map.find "A" result
+    |> Expect.equal "A should have t1" [| t1 |]
+  }
+
+  test "callee of tested symbol is transitively covered" {
+    let t1 = TestId.create "test1" "x"
+    let direct = Map.ofList [ "A", [| t1 |] ]
+    let callGraph = Map.ofList [ "A", [| "B" |] ]
+    let result = TestDependencyGraph.computeTransitiveCoverage callGraph direct
+    Map.find "B" result
+    |> Expect.equal "B transitively covered by T1" [| t1 |]
+  }
+
+  test "two-hop transitive coverage" {
+    let t1 = TestId.create "test1" "x"
+    let direct = Map.ofList [ "A", [| t1 |] ]
+    let callGraph = Map.ofList [ "A", [| "B" |]; "B", [| "C" |] ]
+    let result = TestDependencyGraph.computeTransitiveCoverage callGraph direct
+    Map.find "C" result
+    |> Expect.equal "C transitively covered by T1" [| t1 |]
+  }
+
+  test "multiple tests merge at shared callee" {
+    let t1 = TestId.create "test1" "x"
+    let t2 = TestId.create "test2" "x"
+    let direct = Map.ofList [ "A", [| t1 |]; "B", [| t2 |] ]
+    let callGraph = Map.ofList [ "A", [| "C" |]; "B", [| "C" |] ]
+    let result = TestDependencyGraph.computeTransitiveCoverage callGraph direct
+    let coveringC = Map.find "C" result |> Array.sort
+    let expected = [| t1; t2 |] |> Array.sort
+    coveringC |> Expect.equal "C covered by both" expected
+  }
+
+  test "cycle in call graph terminates" {
+    let t1 = TestId.create "test1" "x"
+    let direct = Map.ofList [ "A", [| t1 |] ]
+    let callGraph = Map.ofList [ "A", [| "B" |]; "B", [| "A" |] ]
+    let result = TestDependencyGraph.computeTransitiveCoverage callGraph direct
+    Map.find "B" result
+    |> Expect.equal "B covered despite cycle" [| t1 |]
+  }
+
+  test "empty call graph returns direct mapping" {
+    let t1 = TestId.create "test1" "x"
+    let direct = Map.ofList [ "A", [| t1 |] ]
+    let result = TestDependencyGraph.computeTransitiveCoverage Map.empty direct
+    result |> Expect.equal "same as direct" direct
+  }
+
+  test "callee symbol with no direct tests gets attributed" {
+    let t1 = TestId.create "test1" "x"
+    let direct = Map.ofList [ "A", [| t1 |] ]
+    let callGraph = Map.ofList [ "A", [| "B" |] ]
+    let result = TestDependencyGraph.computeTransitiveCoverage callGraph direct
+    Map.containsKey "B" result
+    |> Expect.isTrue "B should appear in result"
+  }
+
+  test "diamond call graph merges correctly" {
+    // A calls B and C, both B and C call D
+    let t1 = TestId.create "test1" "x"
+    let direct = Map.ofList [ "A", [| t1 |] ]
+    let callGraph = Map.ofList [ "A", [| "B"; "C" |]; "B", [| "D" |]; "C", [| "D" |] ]
+    let result = TestDependencyGraph.computeTransitiveCoverage callGraph direct
+    Map.find "D" result
+    |> Expect.equal "D covered by T1 (once, not duplicated)" [| t1 |]
+  }
+
+  test "symbols only in call graph but not tested are included" {
+    let t1 = TestId.create "test1" "x"
+    let direct = Map.ofList [ "A", [| t1 |] ]
+    let callGraph = Map.ofList [ "A", [| "B" |]; "B", [| "C" |]; "C", [| "D" |] ]
+    let result = TestDependencyGraph.computeTransitiveCoverage callGraph direct
+    [ "A"; "B"; "C"; "D" ]
+    |> List.forall (fun s -> Map.containsKey s result)
+    |> Expect.isTrue "all reachable symbols should be in result"
+  }
+
+  test "empty direct map produces empty result" {
+    let callGraph = Map.ofList [ "A", [| "B" |] ]
+    let result = TestDependencyGraph.computeTransitiveCoverage callGraph Map.empty
+    result |> Expect.equal "empty result" Map.empty
+  }
+]

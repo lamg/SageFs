@@ -4,6 +4,7 @@ open System
 open System.Collections.Concurrent
 open System.Collections.Generic
 open System.Text.Json
+open System.Threading
 open System.Threading.Tasks
 open Microsoft.AspNetCore.Builder
 open Microsoft.AspNetCore.Hosting
@@ -143,7 +144,7 @@ type McpServerTracker() =
         let jsonElement =
           let json = JsonSerializer.Serialize(data)
           let doc = JsonDocument.Parse(json)
-          Nullable(doc.RootElement.Clone())
+          doc.RootElement.Clone()
         let dead = ResizeArray()
         for kvp in servers do
           try
@@ -275,9 +276,10 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
             // Configure standard logging (file and console)
             builder.WebHost.ConfigureLogging(fun logging -> 
                 logging.AddConsole() |> ignore
-                logging.AddFile(logPath, minimumLevel = LogLevel.Debug) |> ignore
-                // Silence ASP.NET plumbing on console; file log stays at Debug
+                logging.AddFile(logPath, minimumLevel = LogLevel.Information) |> ignore
+                // Silence ASP.NET plumbing on both console and file
                 logging.AddFilter("Microsoft.AspNetCore", LogLevel.Warning) |> ignore
+                logging.AddFilter("Microsoft.AspNetCore.Server.Kestrel", LogLevel.Warning) |> ignore
                 logging.AddFilter("Microsoft.Hosting", LogLevel.Warning) |> ignore
                 logging.AddFilter("ModelContextProtocol.Server.McpServer", fun level -> level > LogLevel.Information) |> ignore
             ) |> ignore
@@ -316,13 +318,20 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                     "Use cancel_eval to stop a running evaluation. Use reset_fsi_session only if warm-up failed."
                   ]
                 )
-                .WithHttpTransport()
+                .WithHttpTransport(fun opts ->
+                    // Prune phantom SSE connections from reconnect storms within 30 seconds
+                    opts.IdleTimeout <- System.TimeSpan.FromSeconds(30.0)
+                    // Allow reasonable concurrent idle sessions for multiple editors
+                    opts.MaxIdleSessionCount <- 100
+                )
                 .WithTools<SageFs.Server.McpTools.SageFsTools>()
-                .AddCallToolFilter(createServerCaptureFilter serverTracker)
+                .WithRequestFilters(fun filters ->
+                    filters.AddCallToolFilter(createServerCaptureFilter serverTracker) |> ignore
+                )
             |> ignore
             
             let app = builder.Build()
-            
+
             // Map MCP endpoints
             app.MapMcp() |> ignore
 
@@ -693,6 +702,7 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
             printfn "MCP message endpoint: http://localhost:%d/message" port
             printfn "Direct exec endpoint: http://localhost:%d/exec (no session ID required)" port
             printfn "State events SSE: http://localhost:%d/events" port
+            printfn "Kestrel max connections: 200"
             printfn "Logs: %s" logPath
             
             // Print OTEL configuration

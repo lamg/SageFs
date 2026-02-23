@@ -269,6 +269,45 @@ module TestDependencyGraph =
     |> Array.concat
     |> Array.distinct
 
+  /// BFS from a symbol through the call graph, returning all reachable symbols.
+  let private reachableFrom (callGraph: Map<string, string array>) (start: string) : string list =
+    let visited = System.Collections.Generic.HashSet<string>()
+    let queue = System.Collections.Generic.Queue<string>()
+    queue.Enqueue(start)
+    visited.Add(start) |> ignore
+    while queue.Count > 0 do
+      let current = queue.Dequeue()
+      match Map.tryFind current callGraph with
+      | Some callees ->
+        for callee in callees do
+          if visited.Add(callee) then
+            queue.Enqueue(callee)
+      | None -> ()
+    visited |> Seq.toList
+
+  /// Compute transitive coverage: for every symbol reachable from a directly-tested
+  /// symbol via the call graph, attribute those tests to the callee.
+  let computeTransitiveCoverage
+    (callGraph: Map<string, string array>)
+    (directSymbolToTests: Map<string, TestId array>)
+    : Map<string, TestId array> =
+    let mutable result = System.Collections.Generic.Dictionary<string, System.Collections.Generic.HashSet<TestId>>()
+    for kvp in directSymbolToTests do
+      let symbol = kvp.Key
+      let testIds = kvp.Value
+      let reachable = reachableFrom callGraph symbol
+      for reached in reachable do
+        match result.TryGetValue(reached) with
+        | true, existing ->
+          for tid in testIds do existing.Add(tid) |> ignore
+        | false, _ ->
+          let hs = System.Collections.Generic.HashSet<TestId>()
+          for tid in testIds do hs.Add(tid) |> ignore
+          result.[reached] <- hs
+    result
+    |> Seq.map (fun kvp -> kvp.Key, kvp.Value |> Seq.toArray)
+    |> Map.ofSeq
+
 module LiveTesting =
   let filterByPolicy
     (policies: Map<TestCategory, RunPolicy>)
