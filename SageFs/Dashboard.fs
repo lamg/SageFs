@@ -418,6 +418,15 @@ let renderShell (version: string) =
                     Attr.style "background: var(--red);"
                     Ds.onClick (Ds.post "/dashboard/hard-reset") ]
                   [ Text.raw "⟳ Hard Reset" ]
+                Elem.label
+                  [ Attr.class' "eval-btn"
+                    Attr.style "background: var(--accent); cursor: pointer; display: inline-flex; align-items: center;" ]
+                  [ Elem.input
+                      [ Attr.type' "file"
+                        Attr.accept ".fs,.fsx,.fsi"
+                        Attr.style "display: none;"
+                        Attr.create "onchange" "if(this.files[0]){var f=this.files[0];var r=new FileReader();r.onload=function(){var ta=document.getElementById('eval-textarea');ta.value=r.result;ta.dispatchEvent(new Event('input'))};r.readAsText(f);this.value=''}" ]
+                    Text.raw "📂 Load File" ]
               ]
               Elem.div [ Attr.id "eval-result" ] []
             ]
@@ -1501,7 +1510,38 @@ let createEvalHandler
     | :? System.ObjectDisposedException -> ()
   }
 
-/// Create the completions POST handler (returns JSON, not SSE).
+/// Create the eval-file POST handler (reads file, evals its content).
+let createEvalFileHandler
+  (evalCode: string -> string -> Threading.Tasks.Task<string>)
+  : HttpHandler =
+  fun ctx -> task {
+    try
+      use reader = new StreamReader(ctx.Request.Body)
+      let! body = reader.ReadToEndAsync()
+      use doc = System.Text.Json.JsonDocument.Parse(body)
+      let filePath =
+        match doc.RootElement.TryGetProperty("path") with
+        | true, prop -> prop.GetString()
+        | _ -> ""
+      let sessionId =
+        match doc.RootElement.TryGetProperty("sessionId") with
+        | true, prop -> prop.GetString()
+        | _ -> ""
+      if String.IsNullOrWhiteSpace filePath || not (File.Exists filePath) then
+        ctx.Response.StatusCode <- 400
+        do! ctx.Response.WriteAsJsonAsync({| error = "File not found or path missing" |})
+      else
+        let code = File.ReadAllText(filePath)
+        let codeWithTerminator =
+          let trimmed = code.TrimEnd()
+          if trimmed.EndsWith(";;") then code
+          else sprintf "%s;;" trimmed
+        let! result = evalCode sessionId codeWithTerminator
+        do! ctx.Response.WriteAsJsonAsync({| success = true; result = result |})
+    with ex ->
+      ctx.Response.StatusCode <- 500
+      do! ctx.Response.WriteAsJsonAsync({| error = ex.Message |})
+  }
 let createCompletionsHandler
   (getCompletions: string -> string -> int -> Threading.Tasks.Task<Features.AutoCompletion.CompletionItem list>)
   : HttpHandler =
@@ -1988,6 +2028,7 @@ let createEndpoints
     yield get "/dashboard" (FalcoResponse.ofHtml (renderShell version))
     yield get "/dashboard/stream" (createStreamHandler getSessionState getStatusMsg getEvalStats getSessionWorkingDir getActiveSessionId getElmRegions stateChanged connectionTracker getPreviousSessions getAllSessions sessionThemes getStandbyInfo getHotReloadState getWarmupContext)
     yield post "/dashboard/eval" (createEvalHandler evalCode)
+    yield post "/dashboard/eval-file" (createEvalFileHandler evalCode)
     match getCompletions with
     | Some gc -> yield post "/dashboard/completions" (createCompletionsHandler gc)
     | None -> ()

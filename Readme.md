@@ -285,7 +285,7 @@ Already running at `http://localhost:37750/dashboard`. Submit code, view session
 | Feature | TUI | Raylib GUI | Web Dashboard | VS Code | Visual Studio | Neovim |
 |---------|:---:|:----------:|:------------:|:-------:|:------------:|:------:|
 | Eval code | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Eval file | — | — | — | ✅ | ✅ | ✅ |
+| Eval file | — | — | ✅ | ✅ | ✅ | ✅ |
 | Eval block (`;;`) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Inline results | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Diagnostics | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
