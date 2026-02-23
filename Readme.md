@@ -288,19 +288,19 @@ Already running at `http://localhost:37750/dashboard`. Submit code, view session
 | Eval file | — | — | — | ✅ | ✅ | — |
 | Eval block (`;;`) | ✅ | ✅ | — | ✅ | ✅ | ✅ |
 | Inline results | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Diagnostics | ✅ | ✅ | ✅ | ✅ | ✅ | — |
+| Diagnostics | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Create / switch session | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Stop session | ✅ | ✅ | ✅ | — | — | ✅ |
-| Reset / hard reset | ✅ | ✅ | ✅ | ✅ | ✅ | — |
-| Session context | ✅ | ✅ | ✅ | ✅ | ✅ | — |
+| Stop session | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Reset / hard reset | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Session context | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Hot reload toggle | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Watch / unwatch all | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Code completion | ✅ | ✅ | — | — | — | — |
-| SSE live updates | ✅ | ✅ | ✅ | — | ✅ | ✅ |
+| SSE live updates | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Themes | ✅ | ✅ | ✅ | — | — | ✅ |
 | CodeLens | — | — | — | ✅ | ✅ | — |
-| Project discovery | ✅ | ✅ | ✅ | — | — | ✅ |
-| Session resume | ✅ | ✅ | ✅ | — | — | — |
+| Project discovery | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Session resume | ✅ | ✅ | ✅ | ✅ | ✅ | — |
 
 ---
 
