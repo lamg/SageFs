@@ -181,16 +181,17 @@ let focusNavigationTests = testList "focus navigation" [
       Expect.notEqual result PaneId.Sessions "hidden pane should not be navigable"
   }
 
-  test "PaneId.next skips nothing - cycles all 4" {
+  test "PaneId.next skips nothing - cycles all 5" {
     let sequence = [
       PaneId.next PaneId.Output      // Sessions
-      PaneId.next PaneId.Sessions    // Diagnostics
+      PaneId.next PaneId.Sessions    // Context
+      PaneId.next PaneId.Context     // Diagnostics
       PaneId.next PaneId.Diagnostics // Editor
       PaneId.next PaneId.Editor      // Output
     ]
     Expect.equal sequence
-      [ PaneId.Sessions; PaneId.Diagnostics; PaneId.Editor; PaneId.Output ]
-      "next should cycle Output->Sessions->Diag->Editor->Output"
+      [ PaneId.Sessions; PaneId.Context; PaneId.Diagnostics; PaneId.Editor; PaneId.Output ]
+      "next should cycle Output->Sessions->Context->Diag->Editor->Output"
   }
 ]
 

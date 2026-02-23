@@ -773,7 +773,7 @@ let elmIntegrationTests = testList "ElmLoop integration" [
         lastRegions <- regions
     }
     let dispatch = (ElmLoop.start program SageFsModel.initial).Dispatch
-    lastRegions |> Expect.hasLength "initial render should have 4 regions" 4
+    lastRegions |> Expect.hasLength "initial render should have 5 regions" 5
 
     dispatch (SageFsMsg.Editor (EditorAction.InsertChar 'h'))
     lastModel.Value.Editor.Buffer
