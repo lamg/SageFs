@@ -224,6 +224,18 @@ module McpAdapter =
     |> List.map (fun (timestamp, source, text) -> $"[{timestamp:O}] %s{source}: %s{text}")
     |> String.concat "\n"
 
+  let private escapeJson (s: string) =
+    s.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\n", "\\n").Replace("\r", "\\r").Replace("\t", "\\t")
+
+  let formatEventsJson (events: list<DateTime * string * string>) : string =
+    let items =
+      events
+      |> List.map (fun (timestamp, source, text) ->
+        sprintf """{"timestamp":"%s","source":"%s","text":"%s"}"""
+          (timestamp.ToString("O")) (escapeJson source) (escapeJson text))
+      |> String.concat ","
+    sprintf """{"events":[%s],"count":%d}""" items (List.length events)
+
   let parseScriptFile (filePath: string) : Result<list<string>, exn> =
     try
       let content = File.ReadAllText(filePath)
@@ -243,6 +255,19 @@ module McpAdapter =
       | _ -> ""
     sprintf "%s%s\nAvailable: %s" base' statsLine tools
 
+  let formatStatusJson (sessionId: string) (eventCount: int) (state: SessionState) (evalStats: Affordances.EvalStats option) : string =
+    let tools = Affordances.availableTools state
+    let toolsJson = tools |> List.map (sprintf "\"%s\"") |> String.concat ","
+    let statsJson =
+      match evalStats with
+      | Some s when s.EvalCount > 0 ->
+        let avg = Affordances.EvalStats.averageDuration s
+        sprintf ""","evalStats":{"count":%d,"avgMs":%d,"minMs":%d,"maxMs":%d}"""
+          s.EvalCount (int avg.TotalMilliseconds) (int s.MinDuration.TotalMilliseconds) (int s.MaxDuration.TotalMilliseconds)
+      | _ -> ""
+    sprintf """{"sessionId":"%s","eventCount":%d,"state":"%s","tools":[%s]%s}"""
+      (escapeJson sessionId) eventCount (SessionState.label state) toolsJson statsJson
+
   let formatCompletions (items: Features.AutoCompletion.CompletionItem list) : string =
     match items with
     | [] -> "No completions found."
@@ -250,9 +275,6 @@ module McpAdapter =
       items
       |> List.map (fun item -> sprintf "%s (%s)" item.DisplayText (Features.AutoCompletion.CompletionKind.label item.Kind))
       |> String.concat "\n"
-
-  let private escapeJson (s: string) =
-    s.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\n", "\\n").Replace("\r", "\\r").Replace("\t", "\\t")
 
   let formatCompletionsJson (items: Features.AutoCompletion.CompletionItem list) : string =
     let jsonItems =
@@ -428,6 +450,39 @@ Started: %s{timestamp} UTC"""
     let tools = Affordances.availableTools state |> String.concat ", "
     sprintf """Session: %s | Events: %d | State: %s | Projects: %s
 Available: %s%s%s""" sessionId eventCount (SessionState.label state) projectsStr tools statsSection startupSection
+
+  let formatEnhancedStatusJson
+    (sessionId: string)
+    (eventCount: int)
+    (state: SessionState)
+    (evalStats: Affordances.EvalStats option)
+    (startupConfig: AppState.StartupConfig option)
+    : string =
+    let tools = Affordances.availableTools state
+    let toolsJson = tools |> List.map (sprintf "\"%s\"") |> String.concat ","
+    let statsJson =
+      match evalStats with
+      | Some s when s.EvalCount > 0 ->
+        let avg = Affordances.EvalStats.averageDuration s
+        sprintf ""","evalStats":{"count":%d,"avgMs":%d,"minMs":%d,"maxMs":%d}"""
+          s.EvalCount (int avg.TotalMilliseconds) (int s.MinDuration.TotalMilliseconds) (int s.MaxDuration.TotalMilliseconds)
+      | _ -> ""
+    let projectsJson =
+      match startupConfig with
+      | None -> "[]"
+      | Some config ->
+        config.LoadedProjects
+        |> List.map (fun p -> sprintf "\"%s\"" (escapeJson (Path.GetFileName p)))
+        |> String.concat ","
+        |> sprintf "[%s]"
+    let startupJson =
+      match startupConfig with
+      | None -> ""
+      | Some config ->
+        sprintf ""","startup":{"workingDirectory":"%s","mcpPort":%d,"hotReloadEnabled":%b,"aspireDetected":%b}"""
+          (escapeJson config.WorkingDirectory) config.McpPort config.HotReloadEnabled config.AspireDetected
+    sprintf """{"sessionId":"%s","eventCount":%d,"state":"%s","projects":%s,"tools":[%s]%s%s}"""
+      (escapeJson sessionId) eventCount (SessionState.label state) projectsJson toolsJson statsJson startupJson
 
   /// Format status from a worker proxy's StatusSnapshot + SessionInfo.
   let formatProxyStatus
