@@ -21,6 +21,13 @@ let mutable private currentSessionId: string option = None
 let mutable private cachedFiles: Client.HotReloadFile array = [||]
 let mutable private refreshEmitter: EventEmitter<obj> option = None
 let mutable private treeView: TreeView<obj> option = None
+let mutable private autoRefreshTimer: obj option = None
+
+[<Emit("setInterval($0, $1)")>]
+let private jsSetInterval (fn: unit -> unit) (ms: int) : obj = jsNative
+
+[<Emit("clearInterval($0)")>]
+let private jsClearInterval (handle: obj) : unit = jsNative
 
 // ── Path helpers ─────────────────────────────────────────────────
 
@@ -147,6 +154,13 @@ let refresh () =
 let setSession (c: Client.Client) (sessionId: string option) =
   currentClient <- Some c
   currentSessionId <- sessionId
+  match autoRefreshTimer with
+  | Some t -> jsClearInterval t; autoRefreshTimer <- None
+  | None -> ()
+  match sessionId with
+  | Some _ ->
+    autoRefreshTimer <- Some (jsSetInterval (fun () -> refresh ()) 5000)
+  | None -> ()
   refresh ()
 
 let register (ctx: ExtensionContext) =

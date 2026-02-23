@@ -8,8 +8,11 @@ open Vscode
   const http = require('http');
   let req;
   let buffer = '';
+  let retryDelay = 1000;
+  const maxDelay = 30000;
   const startListening = () => {
     req = http.get($0, { timeout: 0 }, (res) => {
+      retryDelay = 1000;
       res.on('data', (chunk) => {
         buffer += chunk.toString();
         let lines = buffer.split('\\n');
@@ -23,10 +26,19 @@ open Vscode
           }
         }
       });
-      res.on('end', () => { setTimeout(startListening, 3000); });
-      res.on('error', () => { setTimeout(startListening, 3000); });
+      res.on('end', () => {
+        retryDelay = Math.min(retryDelay * 2, maxDelay);
+        setTimeout(startListening, retryDelay);
+      });
+      res.on('error', () => {
+        retryDelay = Math.min(retryDelay * 2, maxDelay);
+        setTimeout(startListening, retryDelay);
+      });
     });
-    req.on('error', () => { setTimeout(startListening, 3000); });
+    req.on('error', () => {
+      retryDelay = Math.min(retryDelay * 2, maxDelay);
+      setTimeout(startListening, retryDelay);
+    });
   };
   startListening();
   return { dispose: () => { if (req) req.destroy(); } };
