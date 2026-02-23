@@ -168,4 +168,54 @@ internal class HotReloadRefreshCommand : Command
   }
 }
 
+[VisualStudioContribution]
+internal class HotReloadToggleDirectoryCommand : Command
+{
+  private readonly Core.SageFsClient client;
+  private OutputChannel? output;
+
+  public HotReloadToggleDirectoryCommand(Core.SageFsClient client) => this.client = client;
+
+  public override CommandConfiguration CommandConfiguration => new("%SageFs.HotReloadToggleDirectory.DisplayName%")
+  {
+    Placements = [CommandPlacement.KnownPlacements.ExtensionsMenu],
+    Icon = new(ImageMoniker.KnownValues.FolderOpened, IconSettings.IconAndText),
+    VisibleWhen = ActivationConstraint.ClientContext(ClientContextKey.Shell.ActiveEditorContentType, ".+"),
+  };
+
+  public override async Task InitializeAsync(CancellationToken ct)
+  {
+    output = await Extensibility.Views().Output.CreateOutputChannelAsync("SageFs", ct);
+    await base.InitializeAsync(ct);
+  }
+
+  public override async Task ExecuteCommandAsync(IClientContext context, CancellationToken ct)
+  {
+    using var textView = await context.GetActiveTextViewAsync(ct);
+    if (textView is null) return;
+
+    var filePath = textView.Document.Uri.LocalPath;
+    var directory = Path.GetDirectoryName(filePath);
+    if (string.IsNullOrEmpty(directory))
+    {
+      if (output is not null)
+        await output.WriteLineAsync("⚠ Could not determine directory");
+      return;
+    }
+
+    var sessions = (await client.GetSessionsAsync(ct)).ToList();
+    if (sessions.Count == 0)
+    {
+      if (output is not null)
+        await output.WriteLineAsync("⚠ No active session");
+      return;
+    }
+
+    // Toggle: watch the directory (the daemon will toggle based on current state)
+    await client.WatchDirectoryAsync(sessions[0].Id, directory, ct);
+    if (output is not null)
+      await output.WriteLineAsync($"📂 Toggled hot reload for directory: {directory}");
+  }
+}
+
 #pragma warning restore VSEXTPREVIEW_OUTPUTWINDOW

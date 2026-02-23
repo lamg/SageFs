@@ -238,6 +238,28 @@ type SageFsClient() =
     with _ -> return ()
   }
 
+  member this.WatchDirectoryAsync(sessionId: string, directory: string, ct: CancellationToken) = task {
+    try
+      let json = sprintf """{"directory":%s}""" (JsonSerializer.Serialize(directory))
+      let! _ =
+        http.PostAsync(
+          sprintf "%s/api/sessions/%s/hotreload/watch-directory" this.BaseUrl sessionId,
+          new StringContent(json, Encoding.UTF8, "application/json"), ct)
+      return ()
+    with _ -> return ()
+  }
+
+  member this.UnwatchDirectoryAsync(sessionId: string, directory: string, ct: CancellationToken) = task {
+    try
+      let json = sprintf """{"directory":%s}""" (JsonSerializer.Serialize(directory))
+      let! _ =
+        http.PostAsync(
+          sprintf "%s/api/sessions/%s/hotreload/unwatch-directory" this.BaseUrl sessionId,
+          new StringContent(json, Encoding.UTF8, "application/json"), ct)
+      return ()
+    with _ -> return ()
+  }
+
   /// Start the daemon process.
   member _.StartDaemonAsync(_ct: CancellationToken) = task {
     return ()
