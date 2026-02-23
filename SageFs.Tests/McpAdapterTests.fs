@@ -640,3 +640,78 @@ let jsonFormatVariantTests =
         |> Expect.equal "should be 0" 0
     ]
   ]
+
+[<Tests>]
+let workerEvalJsonTests =
+  testList "formatWorkerEvalResultJson" [
+    testCase "success result has success=true"
+    <| fun _ ->
+      let resp = WorkerProtocol.WorkerResponse.EvalResult("r1", Ok "val x: int = 42", [])
+      let json = McpAdapter.formatWorkerEvalResultJson resp
+      let doc = JsonDocument.Parse(json)
+      doc.RootElement.GetProperty("success").GetBoolean()
+      |> Expect.isTrue "should be success"
+
+    testCase "success result includes result text"
+    <| fun _ ->
+      let resp = WorkerProtocol.WorkerResponse.EvalResult("r1", Ok "val x: int = 42", [])
+      let json = McpAdapter.formatWorkerEvalResultJson resp
+      let doc = JsonDocument.Parse(json)
+      doc.RootElement.GetProperty("result").GetString()
+      |> Expect.equal "result text" "val x: int = 42"
+
+    testCase "error result has success=false"
+    <| fun _ ->
+      let resp = WorkerProtocol.WorkerResponse.EvalResult("r1", Error (SageFsError.EvalFailed "type mismatch"), [])
+      let json = McpAdapter.formatWorkerEvalResultJson resp
+      let doc = JsonDocument.Parse(json)
+      doc.RootElement.GetProperty("success").GetBoolean()
+      |> Expect.isFalse "should not be success"
+
+    testCase "error result includes error message"
+    <| fun _ ->
+      let resp = WorkerProtocol.WorkerResponse.EvalResult("r1", Error (SageFsError.EvalFailed "type mismatch"), [])
+      let json = McpAdapter.formatWorkerEvalResultJson resp
+      let doc = JsonDocument.Parse(json)
+      doc.RootElement.GetProperty("error").GetString()
+      |> Expect.stringContains "should contain error message" "type mismatch"
+
+    testCase "diagnostics are included as array"
+    <| fun _ ->
+      let diag : WorkerProtocol.WorkerDiagnostic =
+        { Severity = Features.Diagnostics.DiagnosticSeverity.Error
+          Message = "bad code"; StartLine = 1; StartColumn = 0; EndLine = 1; EndColumn = 8 }
+      let resp = WorkerProtocol.WorkerResponse.EvalResult("r1", Ok "done", [diag])
+      let json = McpAdapter.formatWorkerEvalResultJson resp
+      let doc = JsonDocument.Parse(json)
+      doc.RootElement.GetProperty("diagnostics").GetArrayLength()
+      |> Expect.equal "one diagnostic" 1
+
+    testCase "diagnostic has severity, message, and location"
+    <| fun _ ->
+      let diag : WorkerProtocol.WorkerDiagnostic =
+        { Severity = Features.Diagnostics.DiagnosticSeverity.Warning
+          Message = "unused binding"; StartLine = 3; StartColumn = 4; EndLine = 3; EndColumn = 10 }
+      let resp = WorkerProtocol.WorkerResponse.EvalResult("r1", Ok "done", [diag])
+      let json = McpAdapter.formatWorkerEvalResultJson resp
+      let doc = JsonDocument.Parse(json)
+      let d0 = doc.RootElement.GetProperty("diagnostics").[0]
+      d0.GetProperty("severity").GetString() |> Expect.equal "severity" "warning"
+      d0.GetProperty("message").GetString() |> Expect.equal "message" "unused binding"
+      d0.GetProperty("startLine").GetInt32() |> Expect.equal "startLine" 3
+
+    testCase "WorkerError response has success=false"
+    <| fun _ ->
+      let resp = WorkerProtocol.WorkerResponse.WorkerError (SageFsError.PipeClosed)
+      let json = McpAdapter.formatWorkerEvalResultJson resp
+      let doc = JsonDocument.Parse(json)
+      doc.RootElement.GetProperty("success").GetBoolean()
+      |> Expect.isFalse "should not be success"
+
+    testCase "quotes in result are escaped"
+    <| fun _ ->
+      let resp = WorkerProtocol.WorkerResponse.EvalResult("r1", Ok """val s: string = "hello" """, [])
+      let json = McpAdapter.formatWorkerEvalResultJson resp
+      JsonDocument.Parse(json) |> ignore
+      json |> Expect.stringContains "contains escaped quote" "\\\""
+  ]

@@ -509,6 +509,30 @@ Available: %s%s
 - Working Directory: %s
 - MCP Port: %d""" sessionId eventCount (SessionState.label state) projectsStr tools statsSection info.WorkingDirectory mcpPort
 
+  let formatWorkerEvalResultJson (response: WorkerProtocol.WorkerResponse) : string =
+    match response with
+    | WorkerProtocol.WorkerResponse.EvalResult(_, result, diags) ->
+      let diagsJson =
+        diags
+        |> List.map (fun (d: WorkerProtocol.WorkerDiagnostic) ->
+          sprintf """{"severity":"%s","message":"%s","startLine":%d,"startColumn":%d,"endLine":%d,"endColumn":%d}"""
+            (Features.Diagnostics.DiagnosticSeverity.label d.Severity)
+            (escapeJson d.Message) d.StartLine d.StartColumn d.EndLine d.EndColumn)
+        |> String.concat ","
+      match result with
+      | Ok output ->
+        sprintf """{"success":true,"result":"%s","diagnostics":[%s]}"""
+          (escapeJson output) diagsJson
+      | Error err ->
+        sprintf """{"success":false,"error":"%s","diagnostics":[%s]}"""
+          (escapeJson (SageFsError.describe err)) diagsJson
+    | WorkerProtocol.WorkerResponse.WorkerError err ->
+      sprintf """{"success":false,"error":"%s","diagnostics":[]}"""
+        (escapeJson (SageFsError.describe err))
+    | other ->
+      sprintf """{"success":false,"error":"%s","diagnostics":[]}"""
+        (escapeJson (sprintf "Unexpected response: %A" other))
+
 /// Event tracking for collaborative MCP mode — backed by Marten event store
 module EventTracking =
 
