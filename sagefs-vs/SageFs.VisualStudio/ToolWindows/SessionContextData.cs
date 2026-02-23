@@ -9,11 +9,13 @@ using Microsoft.VisualStudio.Extensibility;
 using Microsoft.VisualStudio.Extensibility.UI;
 
 [DataContract]
-internal class SessionContextData : NotifyPropertyChangedObject
+internal class SessionContextData : NotifyPropertyChangedObject, IDisposable
 {
   private readonly VisualStudioExtensibility extensibility;
   private readonly Core.SageFsClient client;
+  private Timer? autoRefreshTimer;
 
+  private string connectionStatus = "⟳ Checking...";
   private string sessionInfo = "Loading...";
   private string assembliesInfo = "";
   private string namespacesInfo = "";
@@ -28,9 +30,18 @@ internal class SessionContextData : NotifyPropertyChangedObject
     this.RefreshCommand = new AsyncCommand(this.RefreshAsync);
 
     _ = RefreshAsync(null, CancellationToken.None);
+    autoRefreshTimer = new Timer(_ => _ = RefreshAsync(null, CancellationToken.None),
+      null, TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(10));
   }
 
   [DataMember] public IAsyncCommand RefreshCommand { get; }
+
+  [DataMember]
+  public string ConnectionStatus
+  {
+    get => connectionStatus;
+    set => SetProperty(ref connectionStatus, value);
+  }
 
   [DataMember]
   public string SessionInfo
@@ -79,10 +90,23 @@ internal class SessionContextData : NotifyPropertyChangedObject
     IsLoading = true;
     try
     {
+      var alive = await client.PingAsync(ct);
+      ConnectionStatus = alive ? "● Connected" : "○ Offline";
+
+      if (!alive)
+      {
+        SessionInfo = "Daemon not running. Use 'SageFs: Start Daemon' to begin.";
+        AssembliesInfo = "";
+        NamespacesInfo = "";
+        FailedOpensInfo = "";
+        HotReloadInfo = "";
+        return;
+      }
+
       var sessions = (await client.GetSessionsAsync(ct)).ToList();
       if (sessions.Count == 0)
       {
-        SessionInfo = "No sessions active. Start SageFs to begin.";
+        SessionInfo = "No sessions active. Create a session to begin.";
         AssembliesInfo = "";
         NamespacesInfo = "";
         FailedOpensInfo = "";
@@ -150,11 +174,18 @@ internal class SessionContextData : NotifyPropertyChangedObject
     }
     catch (Exception ex)
     {
+      ConnectionStatus = "✗ Error";
       SessionInfo = $"Error: {ex.Message}";
     }
     finally
     {
       IsLoading = false;
     }
+  }
+
+  public void Dispose()
+  {
+    autoRefreshTimer?.Dispose();
+    autoRefreshTimer = null;
   }
 }

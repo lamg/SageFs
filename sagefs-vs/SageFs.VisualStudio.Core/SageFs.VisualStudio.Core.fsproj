@@ -9,6 +9,7 @@
     <Compile Include="Types.fs" />
     <Compile Include="DaemonManager.fs" />
     <Compile Include="SageFsClient.fs" />
+    <Compile Include="DiagnosticsSubscriber.fs" />
   </ItemGroup>
 
   <ItemGroup>

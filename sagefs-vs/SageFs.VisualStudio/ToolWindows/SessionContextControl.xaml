@@ -8,13 +8,21 @@
           Padding="8">
     <ScrollViewer VerticalScrollBarVisibility="Auto">
       <StackPanel>
-        <!-- Refresh button -->
-        <Button Content="↻ Refresh"
-                Command="{Binding RefreshCommand}"
-                HorizontalAlignment="Left"
-                Margin="0,0,0,8"
-                MinHeight="24" MinWidth="80"
-                Style="{StaticResource {x:Static styles:VsResourceKeys.ButtonStyleKey}}" />
+        <!-- Refresh button + connection status -->
+        <DockPanel Margin="0,0,0,8">
+          <Button Content="↻ Refresh"
+                  Command="{Binding RefreshCommand}"
+                  DockPanel.Dock="Left"
+                  MinHeight="24" MinWidth="80"
+                  Style="{StaticResource {x:Static styles:VsResourceKeys.ButtonStyleKey}}" />
+          <TextBlock Text="{Binding ConnectionStatus}"
+                     DockPanel.Dock="Right"
+                     VerticalAlignment="Center"
+                     FontFamily="Cascadia Code,Consolas,Courier New"
+                     FontSize="12" FontWeight="Bold"
+                     HorizontalAlignment="Right"
+                     Margin="8,0,0,0" />
+        </DockPanel>
 
         <!-- Session info -->
         <TextBlock Text="{Binding SessionInfo}"
