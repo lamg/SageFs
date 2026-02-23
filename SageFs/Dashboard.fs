@@ -387,7 +387,7 @@ let renderShell (version: string) =
               Elem.textarea
                 [ Attr.class' "eval-input"
                   Ds.bind "code"
-                  Attr.create "placeholder" "Enter F# code... (Ctrl+Enter to eval)"
+                  Attr.create "placeholder" "Enter F# code... (Ctrl+Enter to eval, ;; auto-appended)"
                   Ds.onEvent ("keydown", "if(event.ctrlKey && event.key === 'Enter') { event.preventDefault(); @post('/dashboard/eval') } if(event.ctrlKey && event.key === 'l') { event.preventDefault(); @post('/dashboard/clear-output') } if(event.key === 'Tab') { event.preventDefault(); var s=this.selectionStart; var e=this.selectionEnd; this.value=this.value.substring(0,s)+'  '+this.value.substring(e); this.selectionStart=this.selectionEnd=s+2; this.dispatchEvent(new Event('input')) }")
                   Attr.create "spellcheck" "false" ]
                 []
@@ -1461,7 +1461,12 @@ let createEvalHandler
         Response.sseStartResponse ctx |> ignore
         do! Response.ssePatchSignal ctx (SignalPath.sp "code") ""
       else
-        let! result = evalCode sessionId code
+        // Auto-append ;; if not present (FSI block terminator)
+        let codeWithTerminator =
+          let trimmed = code.TrimEnd()
+          if trimmed.EndsWith(";;") then code
+          else sprintf "%s;;" trimmed
+        let! result = evalCode sessionId codeWithTerminator
         Response.sseStartResponse ctx |> ignore
         do! Response.ssePatchSignal ctx (SignalPath.sp "code") ""
         let isError =
