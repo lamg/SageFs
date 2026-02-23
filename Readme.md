@@ -27,6 +27,48 @@ SageFs is a [.NET global tool](https://learn.microsoft.com/en-us/dotnet/core/too
 
 ---
 
+## 🧪 Coming Soon: Live Unit Testing
+
+> *Visual Studio Enterprise charges ~$250/month for Live Unit Testing. SageFs will do it better — across every editor, every major .NET test framework — for free.*
+
+SageFs already has hot reload, file watching, Harmony method patching, and real-time SSE push to every connected UI. **Live Unit Testing** wires those together into a single pipeline: edit code → tests run automatically → results appear inline, in under 500ms.
+
+**What this looks like in practice:**
+
+```
+✓ let ``should add two numbers`` () =       ← passed (12ms)
+✗ let ``should reject negative`` () =       ← failed: Expected Ok but got Error
+● let ``should handle empty`` () =          ← detected, not yet run
+▸ let validate x =                          ← covered by 3 tests, all passing
+○ let unusedHelper () = ()                  ← not reached by any test
+```
+
+Gutter markers appear in your editor (VS Code, Neovim, TUI, GUI, Visual Studio — all of them) showing test status on test code and test reachability on production code. No configuration, no IL instrumentation, no separate test runner window.
+
+**How it's different from VS Enterprise:**
+
+| | VS Enterprise Live Testing | SageFs Live Testing |
+|---|---|---|
+| **Speed** | 5-30 seconds (full build) | 200-500ms (hot reload, no build) |
+| **Trigger** | File save only | As-you-type (configurable per category) |
+| **Frameworks** | MSTest, xUnit, NUnit only | + Expecto, TUnit, extensible provider model |
+| **Coverage method** | IL instrumentation (heavy) | FCS typed AST symbol graph (lightweight) |
+| **Editors** | Visual Studio only | VS Code, Neovim, TUI, GUI, Visual Studio, web dashboard |
+| **Cost** | ~$250/month | Free, MIT licensed |
+
+**Three-speed feedback pipeline:**
+1. **~50ms** — Tree-sitter detects test attributes in broken/incomplete code → immediate gutter markers
+2. **~350ms** — F# Compiler Service type-checks → namespace disambiguation, dependency graph, reachability annotations
+3. **~500ms** — Harmony patches + affected-test execution → ✓/✗ results inline
+
+Tests are categorized automatically (Unit, Integration, Browser, Property, Benchmark) with smart run policies — unit and property tests run on every keystroke, integration tests run on save, browser tests run on demand. All configurable.
+
+The architecture is fully designed with a [pure domain model](docs/live-testing-architecture.md), two-tier provider system (attribute-based covers 80% of frameworks in ~10 lines, custom providers handle Expecto-style value tests), and OTEL tracing so you can see the full pipeline waterfall in Aspire.
+
+**Status:** Architecture complete, implementation in progress. Track progress in [`docs/live-testing-architecture.md`](docs/live-testing-architecture.md).
+
+---
+
 ## Prerequisites
 
 - [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)
