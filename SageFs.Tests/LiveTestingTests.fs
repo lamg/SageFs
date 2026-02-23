@@ -885,3 +885,53 @@ let elmIntegrationTests = testList "LiveTesting Elm Integration" [
     }
   ]
 ]
+
+// ── Instrumentation Tests ──
+
+[<Tests>]
+let instrumentationTests = testList "LiveTestingInstrumentation" [
+  test "ActivitySource name is SageFs.LiveTesting" {
+    LiveTestingInstrumentation.activitySource.Name
+    |> Expect.equal "activity source name" "SageFs.LiveTesting"
+  }
+
+  test "Meter name is SageFs.LiveTesting" {
+    LiveTestingInstrumentation.meter.Name
+    |> Expect.equal "meter name" "SageFs.LiveTesting"
+  }
+
+  test "traced returns same value as wrapped function" {
+    LiveTestingInstrumentation.traced "test.op" [] (fun () -> 42)
+    |> Expect.equal "should return 42" 42
+  }
+
+  test "traced preserves exceptions" {
+    Expect.throwsT<System.InvalidOperationException>
+      "should rethrow"
+      (fun () ->
+        LiveTestingInstrumentation.traced
+          "test.fail" [] (fun () ->
+            raise (System.InvalidOperationException "boom")) |> ignore)
+  }
+
+  test "traced works with string return" {
+    LiveTestingInstrumentation.traced
+      "test.string" [("key", box "val")] (fun () -> "hello")
+    |> Expect.equal "should return hello" "hello"
+  }
+
+  test "treeSitterHistogram is created" {
+    LiveTestingInstrumentation.treeSitterHistogram
+    |> Expect.isNotNull "should not be null"
+  }
+
+  test "fcsHistogram is created" {
+    LiveTestingInstrumentation.fcsHistogram
+    |> Expect.isNotNull "should not be null"
+  }
+
+  test "executionHistogram is created" {
+    LiveTestingInstrumentation.executionHistogram
+    |> Expect.isNotNull "should not be null"
+  }
+]
