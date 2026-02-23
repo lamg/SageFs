@@ -13,5 +13,7 @@
   "SageFs.HotReloadToggle.DisplayName": "SageFs: Toggle Hot Reload for File",
   "SageFs.HotReloadWatchAll.DisplayName": "SageFs: Watch All Files",
   "SageFs.HotReloadUnwatchAll.DisplayName": "SageFs: Unwatch All Files",
-  "SageFs.HotReloadRefresh.DisplayName": "SageFs: Refresh Hot Reload"
+  "SageFs.HotReloadRefresh.DisplayName": "SageFs: Refresh Hot Reload",
+  "SageFs.ToggleErrorList.DisplayName": "SageFs: Toggle Error List Bridge",
+  "SageFs.CodeLens.DisplayName": "SageFs Eval"
 }

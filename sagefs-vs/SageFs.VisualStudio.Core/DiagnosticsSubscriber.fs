@@ -24,7 +24,7 @@ type DiagnosticsSubscriber(port: int) =
     let mutable v = Unchecked.defaultof<JsonElement>
     if el.TryGetProperty(prop, &v) && v.ValueKind = JsonValueKind.Array then Some v else None
 
-  member _.Start(onDiagnostic: string -> string -> int -> int -> int -> int -> string -> unit) =
+  member _.Start(onDiagnostic: Action<string, string, int, int, int, int, string>) =
     let newCts = new CancellationTokenSource()
     cts <- Some newCts
     let url = sprintf "http://localhost:%d/diagnostics" port
@@ -53,7 +53,7 @@ type DiagnosticsSubscriber(port: int) =
                   let endLine = tryInt d "endLine" 1
                   let endCol = tryInt d "endColumn" 1
                   let severity = tryStr d "severity" "error"
-                  onDiagnostic file message startLine startCol endLine endCol severity
+                  onDiagnostic.Invoke(file, message, startLine, startCol, endLine, endCol, severity)
               | None -> ()
             with _ -> ()
       with
