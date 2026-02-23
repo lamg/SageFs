@@ -152,9 +152,19 @@ Then press **F5** in VS Code to launch the Extension Development Host for develo
 
 The plugin auto-connects to the running daemon, shows eval results as virtual text below your code, and marks cells with ✓/✖/⏳ gutter signs. See the [sagefs.nvim README](https://github.com/WillEhrendreich/sagefs.nvim) for full setup and keybindings.
 
-### Visual Studio Extension (Coming Soon)
+### Visual Studio Extension
 
-A full **Visual Studio** extension is under active development in `sagefs-vs/`. It uses the [VisualStudio.Extensibility](https://learn.microsoft.com/en-us/visualstudio/extensibility/visualstudio.extensibility/) SDK with a thin C# shell and all real logic in an F# core library (`SageFs.VisualStudio.Core`). Inline eval, session management, and hot reload — the same SageFs experience, inside Visual Studio.
+The **SageFs Visual Studio extension** in `sagefs-vs/` uses the [VisualStudio.Extensibility](https://learn.microsoft.com/en-us/visualstudio/extensibility/visualstudio.extensibility/) SDK with a thin C# shell and all real logic in an F# core library (`SageFs.VisualStudio.Core`).
+
+**What you get:**
+
+- **Alt+Enter** — Evaluate selection, **Shift+Alt+Enter** — Evaluate file, **Ctrl+Alt+Enter** — Evaluate `;;`-delimited block
+- **CodeLens** — "▶ Eval" buttons on every F# function, type, and module
+- **Error List integration** — SageFs diagnostics stream into the native VS Error List via SSE
+- **Session Context tool window** — Live dashboard showing connection status, assemblies, namespaces, warmup details
+- **Hot reload** — Toggle files, directories, watch/unwatch all from the Extensions menu
+- **Multi-session** — Create, switch, reset, and hard-reset sessions
+- **Output window** — All eval results and command feedback logged to the SageFs output channel
 
 ### AI Agent (MCP)
 
@@ -269,6 +279,28 @@ A native GPU-rendered window via [Raylib](https://github.com/ChrisDill/Raylib-cs
 Already running at `http://localhost:37750/dashboard`. Submit code, view session status, manage sessions — all from the browser. Powered by [Falco.Datastar](https://github.com/spiraloss/Falco.Datastar) for real-time SSE updates.
 
 **All of these connect to the same daemon.** Open multiple at once — they all see the same state.
+
+### Frontend Feature Matrix
+
+| Feature | TUI | Raylib GUI | Web Dashboard | VS Code | Visual Studio | Neovim |
+|---------|:---:|:----------:|:------------:|:-------:|:------------:|:------:|
+| Eval code | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Eval file | — | — | — | ✅ | ✅ | — |
+| Eval block (`;;`) | ✅ | ✅ | — | ✅ | ✅ | ✅ |
+| Inline results | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Diagnostics | ✅ | ✅ | ✅ | ✅ | ✅ | — |
+| Create / switch session | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Stop session | ✅ | ✅ | ✅ | — | — | ✅ |
+| Reset / hard reset | ✅ | ✅ | ✅ | ✅ | ✅ | — |
+| Session context | ✅ | ✅ | ✅ | ✅ | ✅ | — |
+| Hot reload toggle | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Watch / unwatch all | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Code completion | ✅ | ✅ | — | — | — | — |
+| SSE live updates | ✅ | ✅ | ✅ | — | ✅ | ✅ |
+| Themes | ✅ | ✅ | ✅ | — | — | ✅ |
+| CodeLens | — | — | — | ✅ | ✅ | — |
+| Project discovery | ✅ | ✅ | ✅ | — | — | ✅ |
+| Session resume | ✅ | ✅ | ✅ | — | — | — |
 
 ---
 
