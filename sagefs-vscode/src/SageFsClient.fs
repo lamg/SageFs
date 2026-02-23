@@ -362,3 +362,31 @@ let getWarmupContext (sessionId: string) (c: Client) =
     with _ ->
       return None
   }
+
+type CompletionResult =
+  { label: string
+    kind: string
+    insertText: string }
+
+let getCompletions (code: string) (cursorPosition: int) (workingDirectory: string option) (c: Client) =
+  promise {
+    try
+      let payload =
+        {| code = code
+           cursor_position = cursorPosition
+           working_directory = workingDirectory |> Option.defaultValue "" |}
+      let! resp = dashHttpPost c "/dashboard/completions" (jsonStringify payload) 10000
+      if resp.statusCode = 200 then
+        let parsed = jsonParse resp.body
+        let items = parsed?completions |> unbox<obj array>
+        return
+          items
+          |> Array.map (fun item ->
+            { label = item?label |> unbox<string>
+              kind = item?kind |> unbox<string>
+              insertText = item?insertText |> unbox<string> })
+      else
+        return [||]
+    with _ ->
+      return [||]
+  }

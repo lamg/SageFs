@@ -266,6 +266,11 @@ module Languages =
   let registerCodeLensProvider (language: string) (provider: obj) =
     _registerCodeLensProvider languagesExports (createObj [ "language" ==> language ]) provider
 
+  [<Emit("$0.registerCompletionItemProvider($1, $2, ...$3)")>]
+  let private _registerCompletionItemProvider (l: obj) (selector: obj) (provider: obj) (triggerChars: string array) : Disposable = jsNative
+  let registerCompletionItemProvider (language: string) (provider: obj) (triggerChars: string array) =
+    _registerCompletionItemProvider languagesExports (createObj [ "language" ==> language ]) provider triggerChars
+
   [<Emit("$0.createDiagnosticCollection($1)")>]
   let private _createDiagnosticCollection (l: obj) (name: string) : DiagnosticCollection = jsNative
   let createDiagnosticCollection (name: string) = _createDiagnosticCollection languagesExports name
@@ -320,6 +325,35 @@ let newCodeLens (range: Range) (cmd: obj) = _newCodeLens vscodeAll range cmd
 [<Emit("new $0.EventEmitter()")>]
 let private _newEventEmitter (v: obj) : EventEmitter<'T> = jsNative
 let newEventEmitter<'T> () : EventEmitter<'T> = _newEventEmitter vscodeAll
+
+[<Emit("new $0.CompletionItem($1, $2)")>]
+let private _newCompletionItem (v: obj) (label: string) (kind: int) : obj = jsNative
+let newCompletionItem (label: string) (kind: int) = _newCompletionItem vscodeAll label kind
+
+[<RequireQualifiedAccess>]
+module CompletionItemKind =
+  [<Emit("0")>]
+  let Method: int = jsNative
+  [<Emit("1")>]
+  let Function: int = jsNative
+  [<Emit("4")>]
+  let Field: int = jsNative
+  [<Emit("5")>]
+  let Variable: int = jsNative
+  [<Emit("6")>]
+  let Class: int = jsNative
+  [<Emit("7")>]
+  let Interface: int = jsNative
+  [<Emit("8")>]
+  let Module: int = jsNative
+  [<Emit("9")>]
+  let Property: int = jsNative
+  [<Emit("13")>]
+  let Enum: int = jsNative
+  [<Emit("14")>]
+  let Keyword: int = jsNative
+  [<Emit("20")>]
+  let Event: int = jsNative
 
 // TreeItemCollapsibleState
 [<RequireQualifiedAccess>]

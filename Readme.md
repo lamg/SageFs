@@ -285,7 +285,7 @@ Already running at `http://localhost:37750/dashboard`. Submit code, view session
 | Feature | TUI | Raylib GUI | Web Dashboard | VS Code | Visual Studio | Neovim |
 |---------|:---:|:----------:|:------------:|:-------:|:------------:|:------:|
 | Eval code | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Eval file | — | — | — | ✅ | ✅ | — |
+| Eval file | — | — | — | ✅ | ✅ | ✅ |
 | Eval block (`;;`) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Inline results | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Diagnostics | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -295,12 +295,12 @@ Already running at `http://localhost:37750/dashboard`. Submit code, view session
 | Session context | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Hot reload toggle | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Watch / unwatch all | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Code completion | ✅ | ✅ | — | — | — | — |
+| Code completion | ✅ | ✅ | ✅ | ✅ | — | — |
 | SSE live updates | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Themes | ✅ | ✅ | ✅ | — | — | ✅ |
 | CodeLens | — | — | — | ✅ | ✅ | — |
 | Project discovery | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Session resume | ✅ | ✅ | ✅ | ✅ | ✅ | — |
+| Session resume | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 
 ---
 

@@ -7,6 +7,7 @@ open Vscode
 module Client = SageFs.Vscode.SageFsClient
 module Diag = SageFs.Vscode.DiagnosticsListener
 module Lens = SageFs.Vscode.CodeLensProvider
+module Completion = SageFs.Vscode.CompletionProvider
 module HotReload = SageFs.Vscode.HotReloadTreeProvider
 module SessionCtx = SageFs.Vscode.SessionContextTreeProvider
 
@@ -669,6 +670,17 @@ let activate (context: ExtensionContext) =
   // CodeLens
   let lensProvider = Lens.create ()
   context.subscriptions.Add (Languages.registerCodeLensProvider "fsharp" lensProvider)
+
+  // Code completion
+  let getWorkDir () =
+    Workspace.workspaceFolders ()
+    |> Option.bind (fun folders ->
+      if folders.Length > 0 then Some folders.[0].uri.fsPath
+      else None)
+  let completionProvider =
+    Completion.create (fun () -> client) getWorkDir
+  context.subscriptions.Add (
+    Languages.registerCompletionItemProvider "fsharp" completionProvider [| "." |])
 
   // Ionide hijack
   hijackIonideSendToFsi context.subscriptions
