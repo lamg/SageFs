@@ -4,6 +4,7 @@ open System
 open System.Reflection
 open Expecto
 open Expecto.Flip
+open SageFs
 open SageFs.Features.LiveTesting
 
 // --- Test Helpers ---
@@ -744,4 +745,143 @@ let propertyTests = testList "Property-based" [
     let allIds = Set.ofList [ t1; t2 ]
     affected |> Array.forall (fun id -> Set.contains id allIds)
   )
+]
+
+// ── Elm Integration Tests ──
+
+[<Tests>]
+let elmIntegrationTests = testList "LiveTesting Elm Integration" [
+
+  testList "Model structure" [
+    test "SageFsModel has LiveTesting field" {
+      typeof<SageFsModel>.GetProperties()
+      |> Array.exists (fun p -> p.Name = "LiveTesting")
+      |> Expect.isTrue "SageFsModel should have LiveTesting field"
+    }
+
+    test "SageFsModel.initial has empty LiveTestState" {
+      let model = SageFsModel.initial
+      model.LiveTesting.DiscoveredTests
+      |> Expect.equal "no discovered tests" Array.empty
+      model.LiveTesting.IsRunning
+      |> Expect.isFalse "not running"
+      model.LiveTesting.Enabled
+      |> Expect.isTrue "enabled"
+    }
+  ]
+
+  testList "Event cases" [
+    let hasCase name =
+      Microsoft.FSharp.Reflection.FSharpType.GetUnionCases(typeof<SageFsEvent>)
+      |> Array.exists (fun uc -> uc.Name = name)
+      |> Expect.isTrue (sprintf "SageFsEvent should have %s case" name)
+    test "TestsDiscovered" { hasCase "TestsDiscovered" }
+    test "TestResultsBatch" { hasCase "TestResultsBatch" }
+    test "LiveTestingToggled" { hasCase "LiveTestingToggled" }
+    test "AffectedTestsComputed" { hasCase "AffectedTestsComputed" }
+    test "CoverageUpdated" { hasCase "CoverageUpdated" }
+    test "RunPolicyChanged" { hasCase "RunPolicyChanged" }
+    test "ProvidersDetected" { hasCase "ProvidersDetected" }
+    test "TestRunStarted" { hasCase "TestRunStarted" }
+  ]
+
+  testList "Update behavior" [
+    test "TestsDiscovered updates DiscoveredTests" {
+      let tc : TestCase =
+        { Id = mkTestId "myTest" "expecto"; DisplayName = "myTest"
+          FullName = "MyModule.myTest"; Framework = "expecto"
+          Origin = TestOrigin.ReflectionOnly; Labels = []
+          Category = TestCategory.Unit }
+      let model', _ =
+        SageFsUpdate.update
+          (SageFsMsg.Event (SageFsEvent.TestsDiscovered [| tc |]))
+          SageFsModel.initial
+      model'.LiveTesting.DiscoveredTests.Length
+      |> Expect.equal "should have 1 test" 1
+    }
+    test "TestRunStarted sets IsRunning and AffectedTests" {
+      let tid = mkTestId "t1" "x"
+      let model', _ =
+        SageFsUpdate.update
+          (SageFsMsg.Event (SageFsEvent.TestRunStarted [| tid |]))
+          SageFsModel.initial
+      model'.LiveTesting.IsRunning
+      |> Expect.isTrue "should be running"
+      Set.contains tid model'.LiveTesting.AffectedTests
+      |> Expect.isTrue "should contain test id"
+    }
+    test "TestResultsBatch merges results and clears IsRunning" {
+      let m =
+        { SageFsModel.initial with
+            LiveTesting =
+              { SageFsModel.initial.LiveTesting with IsRunning = true } }
+      let tid = mkTestId "t1" "x"
+      let r : TestRunResult =
+        { TestId = tid; TestName = "t1"
+          Result = LTTestResult.Passed (ts 5.0)
+          Timestamp = DateTimeOffset.UtcNow }
+      let model', _ =
+        SageFsUpdate.update
+          (SageFsMsg.Event (SageFsEvent.TestResultsBatch [| r |])) m
+      model'.LiveTesting.IsRunning
+      |> Expect.isFalse "should not be running"
+      Map.containsKey tid model'.LiveTesting.LastResults
+      |> Expect.isTrue "should have result"
+    }
+    test "LiveTestingToggled updates Enabled" {
+      let model', _ =
+        SageFsUpdate.update
+          (SageFsMsg.Event (SageFsEvent.LiveTestingToggled false))
+          SageFsModel.initial
+      model'.LiveTesting.Enabled
+      |> Expect.isFalse "should be disabled"
+    }
+    test "AffectedTestsComputed sets AffectedTests" {
+      let t1 = mkTestId "t1" "x"
+      let t2 = mkTestId "t2" "x"
+      let model', _ =
+        SageFsUpdate.update
+          (SageFsMsg.Event (SageFsEvent.AffectedTestsComputed [| t1; t2 |]))
+          SageFsModel.initial
+      Set.count model'.LiveTesting.AffectedTests
+      |> Expect.equal "should have 2 affected" 2
+    }
+    test "RunPolicyChanged updates policy" {
+      let model', _ =
+        SageFsUpdate.update
+          (SageFsMsg.Event (SageFsEvent.RunPolicyChanged (TestCategory.Integration, RunPolicy.OnSaveOnly)))
+          SageFsModel.initial
+      Map.find TestCategory.Integration model'.LiveTesting.RunPolicies
+      |> Expect.equal "should be OnSaveOnly" RunPolicy.OnSaveOnly
+    }
+    test "ProvidersDetected updates providers" {
+      let p = ProviderDescription.Custom { Name = "expecto"; AssemblyMarker = "Expecto" }
+      let model', _ =
+        SageFsUpdate.update
+          (SageFsMsg.Event (SageFsEvent.ProvidersDetected [p]))
+          SageFsModel.initial
+      model'.LiveTesting.DetectedProviders.Length
+      |> Expect.equal "should have 1 provider" 1
+    }
+    test "CoverageUpdated produces annotations" {
+      let cs : CoverageState =
+        { Slots =
+            [| { SequencePoint.File = "a.fs"; Line = 10; Column = 0; BranchId = 0 }
+               { SequencePoint.File = "a.fs"; Line = 10; Column = 5; BranchId = 1 } |]
+          Hits = [| true; false |] }
+      let model', _ =
+        SageFsUpdate.update
+          (SageFsMsg.Event (SageFsEvent.CoverageUpdated cs))
+          SageFsModel.initial
+      model'.LiveTesting.CoverageAnnotations.Length
+      |> Expect.equal "should have 2 annotations" 2
+    }
+    test "no effects for live testing events" {
+      let _, effects =
+        SageFsUpdate.update
+          (SageFsMsg.Event (SageFsEvent.LiveTestingToggled true))
+          SageFsModel.initial
+      effects |> Expect.isEmpty "should produce no effects"
+    }
+  ]
 ]

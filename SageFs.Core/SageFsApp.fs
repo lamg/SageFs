@@ -28,6 +28,7 @@ type SageFsModel = {
   Theme: ThemeConfig
   ThemeName: string
   SessionContext: SessionContext option
+  LiveTesting: Features.LiveTesting.LiveTestState
 }
 
 module SageFsModel =
@@ -49,6 +50,7 @@ module SageFsModel =
       | None -> Theme.defaults
     ThemeName = "Kanagawa"
     SessionContext = None
+    LiveTesting = Features.LiveTesting.LiveTestState.empty
   }
 
 /// Pure update function: routes SageFsMsg through the right handler.
@@ -340,6 +342,58 @@ module SageFsUpdate =
 
       | SageFsEvent.WarmupContextUpdated ctx ->
         { model with SessionContext = Some ctx }, []
+
+      // ── Live testing events ──
+      | SageFsEvent.TestsDiscovered tests ->
+        let lt = model.LiveTesting
+        { model with
+            LiveTesting = { lt with DiscoveredTests = tests } }, []
+
+      | SageFsEvent.TestRunStarted testIds ->
+        let lt = model.LiveTesting
+        { model with
+            LiveTesting = { lt with IsRunning = true; AffectedTests = Set.ofArray testIds } }, []
+
+      | SageFsEvent.TestResultsBatch results ->
+        let lt = Features.LiveTesting.LiveTesting.mergeResults model.LiveTesting results
+        { model with LiveTesting = lt }, []
+
+      | SageFsEvent.LiveTestingToggled enabled ->
+        let lt = model.LiveTesting
+        { model with
+            LiveTesting = { lt with Enabled = enabled } }, []
+
+      | SageFsEvent.AffectedTestsComputed testIds ->
+        let lt = model.LiveTesting
+        { model with
+            LiveTesting = { lt with AffectedTests = Set.ofArray testIds } }, []
+
+      | SageFsEvent.CoverageUpdated coverage ->
+        let lt = model.LiveTesting
+        let annotations : Features.LiveTesting.CoverageAnnotation array =
+          coverage.Slots
+          |> Array.mapi (fun i slot ->
+            let status =
+              if coverage.Hits.[i] then
+                Features.LiveTesting.CoverageStatus.Covered (1, true)
+              else
+                Features.LiveTesting.CoverageStatus.NotCovered
+            { Symbol = sprintf "%s:%d" slot.File slot.Line
+              FilePath = slot.File
+              DefinitionLine = slot.Line
+              Status = status })
+        { model with
+            LiveTesting = { lt with CoverageAnnotations = annotations } }, []
+
+      | SageFsEvent.RunPolicyChanged (category, policy) ->
+        let lt = model.LiveTesting
+        { model with
+            LiveTesting = { lt with RunPolicies = Map.add category policy lt.RunPolicies } }, []
+
+      | SageFsEvent.ProvidersDetected providers ->
+        let lt = model.LiveTesting
+        { model with
+            LiveTesting = { lt with DetectedProviders = providers } }, []
 
     | SageFsMsg.CycleTheme ->
       let name, theme = ThemePresets.cycleNext model.Theme
