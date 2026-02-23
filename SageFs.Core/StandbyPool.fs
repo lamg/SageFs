@@ -106,7 +106,7 @@ type StandbyInfo =
 module StandbyInfo =
   let label = function
     | NoPool -> ""
-    | Warming "" -> "⏳ standby"
+    | Warming s when System.String.IsNullOrEmpty s -> "⏳ standby"
     | Warming phase -> sprintf "⏳ %s" phase
     | Ready -> "✓ standby"
     | Invalidated -> "⚠ standby"

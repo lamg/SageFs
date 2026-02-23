@@ -26,7 +26,7 @@ let nonBlockingRunMiddleware next (request, st: AppState) =
     let rewrittenCode =
       if isMultiLine && code.TrimEnd().EndsWith(".Build().Run()", System.StringComparison.Ordinal) then
         // For multi-line files, only replace the last .Build().Run()
-        let lastRunIndex = code.LastIndexOf(".Build().Run()")
+        let lastRunIndex = code.LastIndexOf(".Build().Run()", System.StringComparison.Ordinal)
         let beforeLastRun = code.Substring(0, lastRunIndex)
         
         // Check if this is an Aspire app (contains DistributedApplication)

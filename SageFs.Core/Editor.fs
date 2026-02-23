@@ -79,7 +79,7 @@ module ValidatedBuffer =
   let insertChar (c: char) (buf: ValidatedBuffer) : ValidatedBuffer =
     let line = buf.Lines.[buf.Cursor.Line]
     let col = buf.Cursor.Column
-    let newLine = line.Insert(col, string c)
+    let newLine = line.Insert(col, c.ToString())
     let newLines =
       buf.Lines
       |> List.mapi (fun i l -> if i = buf.Cursor.Line then newLine else l)
@@ -380,7 +380,7 @@ module EditorUpdate =
     | EditorAction.PromptChar c ->
       match state.Prompt with
       | Some prompt ->
-        { state with Prompt = Some { prompt with Input = prompt.Input + string c } }, []
+        { state with Prompt = Some { prompt with Input = prompt.Input + c.ToString() } }, []
       | None -> state, []
     | EditorAction.PromptBackspace ->
       match state.Prompt with

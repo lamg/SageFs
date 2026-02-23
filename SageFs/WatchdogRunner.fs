@@ -35,7 +35,7 @@ let run
         RedirectStandardOutput = false,
         RedirectStandardError = false)
     psi.Environment["SAGEFS_SUPERVISED"] <- "1"
-    psi.Environment["SAGEFS_RESTART_COUNT"] <- string state.RestartState.RestartCount
+    psi.Environment["SAGEFS_RESTART_COUNT"] <- state.RestartState.RestartCount.ToString()
     let proc = Process.Start(psi)
     eprintfn "[watchdog] Started daemon PID %d" proc.Id
     proc.Id

@@ -77,7 +77,7 @@ module DaemonClient =
   /// Map an EditorAction to a (name, value) pair for the dispatch API.
   let actionToApi (action: EditorAction) : (string * string option) option =
     match action with
-    | EditorAction.InsertChar c -> Some ("insertChar", Some (string c))
+    | EditorAction.InsertChar c -> Some ("insertChar", Some (c.ToString()))
     | EditorAction.NewLine -> Some ("newLine", None)
     | EditorAction.Submit -> Some ("submit", None)
     | EditorAction.Cancel -> Some ("cancel", None)
@@ -120,10 +120,10 @@ module DaemonClient =
     | EditorAction.SessionDelete -> Some ("sessionDelete", None)
     | EditorAction.SessionStopOthers -> Some ("sessionStopOthers", None)
     | EditorAction.ClearOutput -> Some ("clearOutput", None)
-    | EditorAction.SessionSetIndex idx -> Some ("sessionSetIndex", Some (string idx))
+    | EditorAction.SessionSetIndex idx -> Some ("sessionSetIndex", Some (idx.ToString()))
     | EditorAction.SessionCycleNext -> Some ("sessionCycleNext", None)
     | EditorAction.SessionCyclePrev -> Some ("sessionCyclePrev", None)
-    | EditorAction.PromptChar c -> Some ("promptChar", Some (string c))
+    | EditorAction.PromptChar c -> Some ("promptChar", Some (c.ToString()))
     | EditorAction.PromptBackspace -> Some ("promptBackspace", None)
     | EditorAction.PromptConfirm -> Some ("promptConfirm", None)
     | EditorAction.PromptCancel -> Some ("promptCancel", None)

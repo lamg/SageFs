@@ -20,8 +20,9 @@ type LaunchSettings = {
 let findLatestVersion (packagePath: string) =
   if Directory.Exists(packagePath) then
     Directory.GetDirectories(packagePath)
-    |> Array.map Path.GetFileName
-    |> Array.filter (fun v -> v.Contains("."))
+    |> Array.choose (fun d ->
+      let v = Path.GetFileName d
+      if v.Contains(".") then Some v else None)
     |> Array.sortDescending
     |> Array.tryHead
   else
@@ -166,7 +167,7 @@ let hasAspireReferences (projects: ProjectLoading.Solution) =
   
   let hasInProjectRefs =
     projects.Projects
-    |> Seq.exists (fun proj -> 
+    |> List.exists (fun proj -> 
       proj.PackageReferences
       |> Seq.exists (fun pkgRef -> pkgRef.Name.Contains("Aspire.Hosting", StringComparison.OrdinalIgnoreCase)))
   

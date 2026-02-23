@@ -380,7 +380,7 @@ module SageFsRender =
       Content =
         model.RecentOutput
         |> List.filter (fun line ->
-          line.SessionId = "" || line.SessionId = activeSessionId)
+          System.String.IsNullOrEmpty line.SessionId || line.SessionId = activeSessionId)
         |> List.rev
         |> List.map (fun line ->
           let kindLabel =

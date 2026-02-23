@@ -188,7 +188,7 @@ open HarmonyLib
 let detourMethod (method: MethodBase) (replacement: MethodBase) =
   typeof<Harmony>.Assembly
   |> _.GetTypes()
-  |> Seq.find (fun t -> t.Name = "PatchTools")
+  |> Array.find (fun t -> t.Name = "PatchTools")
   |> fun x -> x.GetDeclaredMethods()
   |> Seq.find (fun n -> n.Name = "DetourMethod")
   |> fun x -> x.Invoke(null, [| method; replacement |])
