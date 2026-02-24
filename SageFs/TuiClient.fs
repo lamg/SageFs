@@ -267,6 +267,12 @@ let run (daemonInfo: DaemonInfo) = task {
                 let! _ = client.PostAsync(sprintf "%s/api/sessions/%s/hotreload/unwatch-all" baseUrl lastSessionId, new StringContent("{}", System.Text.Encoding.UTF8, "application/json"))
                 ()
               with _ -> ()
+          | Some TerminalCommand.ToggleLiveTesting ->
+            do! DaemonClient.dispatchAction client baseUrl "toggleLiveTesting" None |> Async.AwaitTask
+            render ()
+          | Some TerminalCommand.CycleRunPolicy ->
+            do! DaemonClient.dispatchAction client baseUrl "cycleRunPolicy" None |> Async.AwaitTask
+            render ()
           | Some (TerminalCommand.Action action) ->
             // When Sessions pane is focused, remap movement keys
             let remappedAction =

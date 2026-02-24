@@ -11,6 +11,8 @@ type SageFsMsg =
   | Editor of EditorAction
   | Event of SageFsEvent
   | CycleTheme
+  | ToggleLiveTesting
+  | CycleRunPolicy
 
 /// Side effects the Elm loop can request.
 /// Wraps EditorEffect — will grow as app-level effects emerge.
@@ -398,6 +400,30 @@ module SageFsUpdate =
     | SageFsMsg.CycleTheme ->
       let name, theme = ThemePresets.cycleNext model.Theme
       { model with Theme = theme; ThemeName = name }, []
+
+    | SageFsMsg.ToggleLiveTesting ->
+      let lt = model.LiveTesting
+      { model with
+          LiveTesting = { lt with Enabled = not lt.Enabled } }, []
+
+    | SageFsMsg.CycleRunPolicy ->
+      let lt = model.LiveTesting
+      let nextPolicy (p: Features.LiveTesting.RunPolicy) =
+        match p with
+        | Features.LiveTesting.RunPolicy.OnEveryChange -> Features.LiveTesting.RunPolicy.OnSaveOnly
+        | Features.LiveTesting.RunPolicy.OnSaveOnly -> Features.LiveTesting.RunPolicy.OnDemand
+        | Features.LiveTesting.RunPolicy.OnDemand -> Features.LiveTesting.RunPolicy.Disabled
+        | Features.LiveTesting.RunPolicy.Disabled -> Features.LiveTesting.RunPolicy.OnEveryChange
+      let unitPolicy =
+        lt.RunPolicies
+        |> Map.tryFind Features.LiveTesting.TestCategory.Unit
+        |> Option.defaultValue Features.LiveTesting.RunPolicy.OnEveryChange
+      { model with
+          LiveTesting =
+            { lt with
+                RunPolicies =
+                  lt.RunPolicies
+                  |> Map.add Features.LiveTesting.TestCategory.Unit (nextPolicy unitPolicy) } }, []
 
 /// Pure render function: produces RenderRegion list from model.
 /// Every frontend consumes these regions — terminal, web, Neovim, etc.

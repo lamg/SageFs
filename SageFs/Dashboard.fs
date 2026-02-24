@@ -1984,9 +1984,15 @@ let createApiDispatchHandler
         | "promptConfirm" -> Some EditorAction.PromptConfirm
         | "promptCancel" -> Some EditorAction.PromptCancel
         | _ -> None
-      match editorAction with
-      | Some ea ->
-        dispatch (SageFsMsg.Editor ea)
+      // Handle app-level messages that aren't EditorActions
+      let appMsg =
+        match action.action with
+        | "toggleLiveTesting" -> Some SageFsMsg.ToggleLiveTesting
+        | "cycleRunPolicy" -> Some SageFsMsg.CycleRunPolicy
+        | _ -> editorAction |> Option.map SageFsMsg.Editor
+      match appMsg with
+      | Some msg ->
+        dispatch msg
         ctx.Response.StatusCode <- 200
         do! ctx.Response.WriteAsJsonAsync({| ok = true |})
       | None ->

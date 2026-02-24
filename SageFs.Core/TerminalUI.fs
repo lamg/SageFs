@@ -378,6 +378,8 @@ type TerminalCommand =
   | CycleTheme
   | HotReloadWatchAll
   | HotReloadUnwatchAll
+  | ToggleLiveTesting
+  | CycleRunPolicy
 
 
 /// Map console key presses to terminal commands
@@ -406,6 +408,8 @@ module TerminalInput =
     | Some (UiAction.CycleTheme) -> Some TerminalCommand.CycleTheme
     | Some (UiAction.HotReloadWatchAll) -> Some TerminalCommand.HotReloadWatchAll
     | Some (UiAction.HotReloadUnwatchAll) -> Some TerminalCommand.HotReloadUnwatchAll
+    | Some (UiAction.ToggleLiveTesting) -> Some TerminalCommand.ToggleLiveTesting
+    | Some (UiAction.CycleRunPolicy) -> Some TerminalCommand.CycleRunPolicy
     | Some (UiAction.Editor action) -> Some (TerminalCommand.Action action)
     | None ->
       // Fall through to character insertion for printable chars

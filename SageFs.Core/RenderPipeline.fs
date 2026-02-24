@@ -147,6 +147,8 @@ and [<RequireQualifiedAccess>] UiAction =
   | CycleTheme
   | HotReloadWatchAll
   | HotReloadUnwatchAll
+  | ToggleLiveTesting
+  | CycleRunPolicy
 
 /// Maps physical keys to semantic actions
 type KeyMap = Map<KeyCombo, UiAction>
@@ -289,6 +291,8 @@ module UiAction =
     | "CycleTheme" -> Some UiAction.CycleTheme
     | "HotReloadWatchAll" -> Some UiAction.HotReloadWatchAll
     | "HotReloadUnwatchAll" -> Some UiAction.HotReloadUnwatchAll
+    | "ToggleLiveTesting" -> Some UiAction.ToggleLiveTesting
+    | "CycleRunPolicy" -> Some UiAction.CycleRunPolicy
     | _ -> None
 
 module KeyMap =
@@ -372,6 +376,9 @@ module KeyMap =
       // Hot Reload
       KeyCombo.ctrlAlt ConsoleKey.W, UiAction.HotReloadWatchAll
       KeyCombo.ctrlAlt ConsoleKey.U, UiAction.HotReloadUnwatchAll
+      // Live Testing
+      KeyCombo.ctrlAlt ConsoleKey.T, UiAction.ToggleLiveTesting
+      KeyCombo.ctrlAlt ConsoleKey.P, UiAction.CycleRunPolicy
     ] |> Map.ofList
 
   /// Merge user overrides onto defaults (overrides win)
