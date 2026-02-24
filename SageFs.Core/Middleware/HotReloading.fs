@@ -58,6 +58,8 @@ type State = {
   Methods: Map<string, Method list>
   LastOpenModules: string list
   LastAssembly: Assembly Option
+  ProjectAssemblies: Assembly list
+  LiveTestInitDone: bool
 }
 
 type Event =
@@ -161,6 +163,8 @@ let mkReloadingState (sln: SageFs.ProjectLoading.Solution) =
     Methods = methods
     LastOpenModules = []
     LastAssembly = None
+    ProjectAssemblies = assemblies
+    LiveTestInitDone = false
   }
 
 let hotReloadingInitFunction sln =
@@ -175,6 +179,8 @@ let hotReloadingInitFunction sln =
          Methods = Map.empty
          LastOpenModules = []
          LastAssembly = None
+         ProjectAssemblies = []
+         LiveTestInitDone = false
        }
 
 let getReloadingState (st: AppState) =
@@ -353,11 +359,47 @@ let hotReloadingMiddleware next (request, st: AppState) =
 
     // Live testing hook: discover tests and detect providers after every successful eval.
     // Results flow as metadata → Elm loop dispatches as events.
-    let hookResult =
+    let fsiHookResult =
       SageFs.Features.LiveTesting.LiveTestingHook.afterReload
         SageFs.Features.LiveTesting.BuiltInExecutors.builtIn
         asm
         updatedMethods
+
+    // On first eval, also scan pre-built project assemblies for tests.
+    // This ensures tests in the compiled DLL are discovered immediately,
+    // not just tests defined interactively in FSI.
+    let hookResult, reloadingSt =
+      if not reloadingSt.LiveTestInitDone && not (List.isEmpty reloadingSt.ProjectAssemblies) then
+        let projectResults =
+          reloadingSt.ProjectAssemblies
+          |> List.map (fun projAsm ->
+            try
+              SageFs.Features.LiveTesting.LiveTestingHook.afterReload
+                SageFs.Features.LiveTesting.BuiltInExecutors.builtIn
+                projAsm
+                []
+            with _ -> SageFs.Features.LiveTesting.LiveTestHookResult.empty)
+        let merged =
+          { SageFs.Features.LiveTesting.LiveTestHookResult.empty with
+              DetectedProviders =
+                (fsiHookResult :: projectResults)
+                |> List.collect (fun r -> r.DetectedProviders)
+                |> List.distinctBy (fun p ->
+                  match p with
+                  | SageFs.Features.LiveTesting.ProviderDescription.AttributeBased a -> a.Name
+                  | SageFs.Features.LiveTesting.ProviderDescription.Custom c -> c.Name)
+              DiscoveredTests =
+                (fsiHookResult :: projectResults)
+                |> List.map (fun r -> r.DiscoveredTests)
+                |> Array.concat
+              AffectedTestIds =
+                (fsiHookResult :: projectResults)
+                |> List.map (fun r -> r.AffectedTestIds)
+                |> Array.concat
+                |> Array.distinct }
+        merged, { reloadingSt with LiveTestInitDone = true }
+      else
+        fsiHookResult, reloadingSt
 
     let metadata =
       if shouldTriggerReload request.Args then

@@ -4338,3 +4338,77 @@ let perFileMergeTests = testList "per-file merge correctness" [
     |> Expect.equal "baz maps to testB only" [| testBId |]
   }
 ]
+
+[<Tests>]
+let projectAssemblyDiscoveryTests = testList "Project assembly initial discovery" [
+  test "afterReload on SageFs.Tests assembly discovers tests" {
+    let asm = System.Reflection.Assembly.LoadFrom(
+      System.IO.Path.Combine(
+        System.AppDomain.CurrentDomain.BaseDirectory,
+        "SageFs.Tests.dll"))
+    let result = LiveTestingHook.afterReload BuiltInExecutors.builtIn asm []
+    Expect.isGreaterThan
+      "should discover at least 100 tests"
+      (result.DiscoveredTests.Length, 100)
+  }
+
+  test "afterReload detects expecto provider from test assembly" {
+    let asm = System.Reflection.Assembly.LoadFrom(
+      System.IO.Path.Combine(
+        System.AppDomain.CurrentDomain.BaseDirectory,
+        "SageFs.Tests.dll"))
+    let result = LiveTestingHook.afterReload BuiltInExecutors.builtIn asm []
+    result.DetectedProviders
+    |> List.exists (fun p ->
+      match p with
+      | ProviderDescription.Custom c -> c.Name = "expecto"
+      | _ -> false)
+    |> Expect.isTrue "should detect expecto provider"
+  }
+
+  test "all discovered tests have framework=expecto" {
+    let asm = System.Reflection.Assembly.LoadFrom(
+      System.IO.Path.Combine(
+        System.AppDomain.CurrentDomain.BaseDirectory,
+        "SageFs.Tests.dll"))
+    let result = LiveTestingHook.afterReload BuiltInExecutors.builtIn asm []
+    result.DiscoveredTests
+    |> Array.iter (fun t ->
+      t.Framework
+      |> Expect.equal "framework should be expecto" "expecto")
+  }
+
+  test "merging FSI + project results deduplicates providers" {
+    let fsiResult = LiveTestHookResult.empty
+    let projResult = {
+      DetectedProviders =
+        [ ProviderDescription.Custom
+            { Name = "expecto"; AssemblyMarker = "Expecto" } ]
+      DiscoveredTests =
+        [| { Id = TestId.create "test1" "expecto"
+             FullName = "test1"
+             DisplayName = "t1"
+             Origin = TestOrigin.ReflectionOnly
+             Labels = []
+             Framework = "expecto"
+             Category = TestCategory.Unit } |]
+      AffectedTestIds = [||]
+    }
+    let allResults = [fsiResult; projResult]
+    let mergedProviders =
+      allResults
+      |> List.collect (fun r -> r.DetectedProviders)
+      |> List.distinctBy (fun p ->
+        match p with
+        | ProviderDescription.AttributeBased a -> a.Name
+        | ProviderDescription.Custom c -> c.Name)
+    let mergedTests =
+      allResults
+      |> List.map (fun r -> r.DiscoveredTests)
+      |> Array.concat
+    mergedProviders.Length
+    |> Expect.equal "one distinct provider" 1
+    mergedTests.Length
+    |> Expect.equal "one test from project" 1
+  }
+]
