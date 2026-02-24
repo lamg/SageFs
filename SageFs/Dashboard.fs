@@ -1866,7 +1866,12 @@ let createApiStateHandler
                content = region.Content
                cursor = region.Cursor |> Option.map (fun c -> {| line = c.Line; col = c.Col |})
                completions = region.Completions |> Option.map (fun co ->
-                 {| items = co.Items; selectedIndex = co.SelectedIndex |}) |})
+                 {| items = co.Items; selectedIndex = co.SelectedIndex |})
+               lineAnnotations =
+                 region.LineAnnotations |> Array.map (fun a ->
+                   {| line = a.Line
+                      icon = SageFs.Features.LiveTesting.GutterIcon.toLabel a.Icon
+                      tooltip = a.Tooltip |}) |})
         | None -> []
       let! standby = getStandbyInfo ()
       let liveTestingStatus = getLiveTestingStatus ()

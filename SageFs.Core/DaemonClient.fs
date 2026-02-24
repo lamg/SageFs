@@ -11,6 +11,7 @@ type DaemonRegionData = {
   Content: string
   Cursor: RegionCursor option
   Completions: CompletionOverlay option
+  LineAnnotations: Features.LiveTesting.LineAnnotation array
 }
 
 module DaemonRegionData =
@@ -21,7 +22,7 @@ module DaemonRegionData =
       Affordances = []
       Cursor = d.Cursor
       Completions = d.Completions
-      LineAnnotations = [||] }
+      LineAnnotations = d.LineAnnotations }
 
 /// State event received from the daemon's /api/state SSE stream.
 type StateEvent = {
@@ -70,7 +71,28 @@ module DaemonClient =
               let idx = compEl.GetProperty("selectedIndex").GetInt32()
               Some { Items = items; SelectedIndex = idx }
             | _ -> None
-          { Id = id; Content = content; Cursor = cursor; Completions = completions })
+          let lineAnnotations =
+            match el.TryGetProperty("lineAnnotations") with
+            | true, annEl when annEl.ValueKind = JsonValueKind.Array ->
+              annEl.EnumerateArray()
+              |> Seq.choose (fun a ->
+                try
+                  let line = a.GetProperty("line").GetInt32()
+                  let iconStr = a.GetProperty("icon").GetString()
+                  let tooltip =
+                    match a.TryGetProperty("tooltip") with
+                    | true, t -> t.GetString()
+                    | _ -> ""
+                  match Features.LiveTesting.GutterIcon.parseLabel iconStr with
+                  | Some icon ->
+                    Some { Features.LiveTesting.LineAnnotation.Line = line
+                           Features.LiveTesting.LineAnnotation.Icon = icon
+                           Features.LiveTesting.LineAnnotation.Tooltip = tooltip }
+                  | None -> None
+                with _ -> None)
+              |> Seq.toArray
+            | _ -> [||]
+          { Id = id; Content = content; Cursor = cursor; Completions = completions; LineAnnotations = lineAnnotations })
         |> Seq.toList
       let avgMs =
         match root.TryGetProperty("avgMs") with

@@ -155,6 +155,7 @@ let multiConsumerTests = testList "multi-consumer consistency" [
       Content = "let x = 1"
       Cursor = Some { Line = 0; Col = 9 }
       Completions = Some { Items = ["int"; "int64"]; SelectedIndex = 0 }
+      LineAnnotations = [||]
     }
     let r1 = DaemonRegionData.toRenderRegion data
     let r2 = DaemonRegionData.toRenderRegion data

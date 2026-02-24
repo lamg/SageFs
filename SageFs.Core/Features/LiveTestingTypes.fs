@@ -305,6 +305,25 @@ module GutterIcon =
     | GutterIcon.Covered -> 34uy
     | GutterIcon.NotCovered -> 160uy
 
+  let toLabel = function
+    | GutterIcon.TestDiscovered -> "TestDiscovered"
+    | GutterIcon.TestPassed -> "TestPassed"
+    | GutterIcon.TestFailed -> "TestFailed"
+    | GutterIcon.TestRunning -> "TestRunning"
+    | GutterIcon.TestSkipped -> "TestSkipped"
+    | GutterIcon.Covered -> "Covered"
+    | GutterIcon.NotCovered -> "NotCovered"
+
+  let parseLabel = function
+    | "TestDiscovered" -> Some GutterIcon.TestDiscovered
+    | "TestPassed" -> Some GutterIcon.TestPassed
+    | "TestFailed" -> Some GutterIcon.TestFailed
+    | "TestRunning" -> Some GutterIcon.TestRunning
+    | "TestSkipped" -> Some GutterIcon.TestSkipped
+    | "Covered" -> Some GutterIcon.Covered
+    | "NotCovered" -> Some GutterIcon.NotCovered
+    | _ -> None
+
 module StatusToGutter =
   let fromTestStatus (status: TestRunStatus) : GutterIcon =
     match status with
