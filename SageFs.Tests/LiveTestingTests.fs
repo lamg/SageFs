@@ -1697,33 +1697,45 @@ let annotationTests = testList "Gutter Annotations" [
   }
 
   test "recomputeEditorAnnotations returns annotations when enabled" {
+    let filePath = "Tests.fs"
     let state = { LiveTestState.empty with
                     SourceLocations = [|
-                      { AttributeName = "Fact"; FunctionName = "test1"; FilePath = "editor"; Line = 5; Column = 0 }
-                      { AttributeName = "Test"; FunctionName = "test2"; FilePath = "editor"; Line = 10; Column = 0 }
+                      { AttributeName = "Fact"; FunctionName = "test1"; FilePath = filePath; Line = 5; Column = 0 }
+                      { AttributeName = "Test"; FunctionName = "test2"; FilePath = filePath; Line = 10; Column = 0 }
                     |] }
-    let cached = LiveTesting.recomputeEditorAnnotations state
+    let cached = LiveTesting.recomputeEditorAnnotations (Some filePath) state
     cached.Length |> Expect.equal "two annotations" 2
   }
 
   test "recomputeEditorAnnotations returns empty when disabled" {
+    let filePath = "Tests.fs"
     let state = { LiveTestState.empty with
                     Enabled = false
                     SourceLocations = [|
-                      { AttributeName = "Fact"; FunctionName = "test1"; FilePath = "editor"; Line = 5; Column = 0 }
+                      { AttributeName = "Fact"; FunctionName = "test1"; FilePath = filePath; Line = 5; Column = 0 }
                     |] }
-    LiveTesting.recomputeEditorAnnotations state
+    LiveTesting.recomputeEditorAnnotations (Some filePath) state
     |> Array.length |> Expect.equal "no annotations" 0
   }
 
   test "recomputeEditorAnnotations matches annotationsForFile" {
+    let filePath = "Tests.fs"
     let state = { LiveTestState.empty with
                     SourceLocations = [|
-                      { AttributeName = "Fact"; FunctionName = "test1"; FilePath = "editor"; Line = 5; Column = 0 }
+                      { AttributeName = "Fact"; FunctionName = "test1"; FilePath = filePath; Line = 5; Column = 0 }
                     |] }
-    let cached = LiveTesting.recomputeEditorAnnotations state
-    let direct = LiveTesting.annotationsForFile "editor" state
+    let cached = LiveTesting.recomputeEditorAnnotations (Some filePath) state
+    let direct = LiveTesting.annotationsForFile filePath state
     cached |> Expect.equal "cache matches direct" direct
+  }
+
+  test "recomputeEditorAnnotations returns empty when no active file" {
+    let state = { LiveTestState.empty with
+                    SourceLocations = [|
+                      { AttributeName = "Fact"; FunctionName = "test1"; FilePath = "Tests.fs"; Line = 5; Column = 0 }
+                    |] }
+    LiveTesting.recomputeEditorAnnotations None state
+    |> Array.length |> Expect.equal "no annotations without active file" 0
   }
 
   test "CachedEditorAnnotations defaults to empty" {
@@ -4112,7 +4124,7 @@ let pipelineBenchmarkTests = testList "Pipeline Core Benchmark" [
       let _ = TestDependencyGraph.findAffected ["Module.func1"] graph
       let _ = LiveTesting.filterByPolicy RunPolicyDefaults.defaults RunTrigger.Keystroke tests
       let _ = LiveTesting.computeStatusEntries stateWithEntries
-      let _ = LiveTesting.recomputeEditorAnnotations stateWithEntries
+      let _ = LiveTesting.recomputeEditorAnnotations (Some "editor") stateWithEntries
       sw.Stop()
       sw.Elapsed.TotalMilliseconds)
 
@@ -4152,7 +4164,7 @@ let pipelineBenchmarkTests = testList "Pipeline Core Benchmark" [
       let _ = TestDependencyGraph.findAffected ["func1"] graph
       let _ = LiveTesting.filterByPolicy RunPolicyDefaults.defaults RunTrigger.Keystroke tests
       let _ = LiveTesting.computeStatusEntries stateWithEntries
-      let _ = LiveTesting.recomputeEditorAnnotations stateWithEntries
+      let _ = LiveTesting.recomputeEditorAnnotations (Some "editor") stateWithEntries
       sw.Stop()
       sw.Elapsed.TotalMilliseconds)
 

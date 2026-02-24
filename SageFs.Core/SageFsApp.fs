@@ -94,7 +94,7 @@ module SageFsUpdate =
       |> Map.ofArray
     let updated = updateState lt.TestState
     let withStatuses = { updated with StatusEntries = Features.LiveTesting.LiveTesting.computeStatusEntriesWithHistory previous updated }
-    let withAnnotations = { withStatuses with CachedEditorAnnotations = Features.LiveTesting.LiveTesting.recomputeEditorAnnotations withStatuses }
+    let withAnnotations = { withStatuses with CachedEditorAnnotations = Features.LiveTesting.LiveTesting.recomputeEditorAnnotations lt.ActiveFile withStatuses }
     { lt with TestState = withAnnotations }
 
   let update (msg: SageFsMsg) (model: SageFsModel) : SageFsModel * SageFsEffect list =

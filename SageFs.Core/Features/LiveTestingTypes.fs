@@ -721,9 +721,10 @@ module LiveTesting =
     |> Array.sortBy (fun a -> a.Line)
 
   /// Recompute cached editor annotations. Call in update path, not render path.
-  let recomputeEditorAnnotations (state: LiveTestState) : LineAnnotation array =
-    if state.Enabled then annotationsForFile "editor" state
-    else [||]
+  let recomputeEditorAnnotations (activeFile: string option) (state: LiveTestState) : LineAnnotation array =
+    match activeFile with
+    | Some f when state.Enabled -> annotationsForFile f state
+    | _ -> [||]
 
 module SourceMapping =
   /// Extract the method/property name that should match tree-sitter's FunctionName.
