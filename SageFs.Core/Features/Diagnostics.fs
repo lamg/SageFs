@@ -74,17 +74,19 @@ type TypeCheckWithSymbolsResult = {
 }
 
 /// Extracts symbol references from FCS typed check results.
-/// Filters to uses only (not definitions or open statements).
+/// Includes both definitions and uses (needed for dependency graph building).
+/// Excludes open statements which are not relevant for test dependency tracking.
 let extractSymbolReferences
   (filePath: string)
   (checkResults: FSharp.Compiler.CodeAnalysis.FSharpCheckFileResults)
   : SymbolReference list =
   checkResults.GetAllUsesOfAllSymbolsInFile()
   |> Seq.choose (fun su ->
-    if su.IsFromDefinition || su.IsFromOpenStatement then None
+    if su.IsFromOpenStatement then None
     else
       Some {
         SymbolFullName = su.Symbol.FullName
+        IsFromDefinition = su.IsFromDefinition
         UsedInTestId = None
         FilePath = filePath
         Line = su.Range.StartLine

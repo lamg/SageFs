@@ -99,16 +99,17 @@ module WorkerProtocol =
   /// Wire-friendly symbol reference for TypeCheckWithSymbols response
   type WorkerSymbolRef = {
     SymbolFullName: string
+    IsFromDefinition: bool
     FilePath: string
     Line: int
   }
 
   module WorkerSymbolRef =
     let fromDomain (sr: Features.LiveTesting.SymbolReference) : WorkerSymbolRef =
-      { SymbolFullName = sr.SymbolFullName; FilePath = sr.FilePath; Line = sr.Line }
+      { SymbolFullName = sr.SymbolFullName; IsFromDefinition = sr.IsFromDefinition; FilePath = sr.FilePath; Line = sr.Line }
 
     let toDomain (ws: WorkerSymbolRef) : Features.LiveTesting.SymbolReference =
-      { SymbolFullName = ws.SymbolFullName; UsedInTestId = None; FilePath = ws.FilePath; Line = ws.Line }
+      { SymbolFullName = ws.SymbolFullName; IsFromDefinition = ws.IsFromDefinition; UsedInTestId = None; FilePath = ws.FilePath; Line = ws.Line }
 
   [<RequireQualifiedAccess>]
   type WorkerResponse =

@@ -2583,71 +2583,68 @@ let adaptiveDebounceTests = testList "AdaptiveDebounce" [
 
 [<Tests>]
 let symbolGraphTests = testList "SymbolGraphBuilder" [
-  test "buildIndex groups refs by symbol" {
-    let t1 = TestId.create "test1" "expecto"
-    let t2 = TestId.create "test2" "expecto"
+  test "buildIndex maps production symbols to test functions via line-range heuristic" {
     let refs = [
-      { SymbolFullName = "MyModule.parse"; UsedInTestId = Some t1; FilePath = "F.fs"; Line = 10 }
-      { SymbolFullName = "MyModule.parse"; UsedInTestId = Some t2; FilePath = "F.fs"; Line = 20 }
-      { SymbolFullName = "MyModule.format"; UsedInTestId = Some t1; FilePath = "F.fs"; Line = 15 }
+      { SymbolFullName = "MyApp.Tests.test1"; IsFromDefinition = true; UsedInTestId = None; FilePath = "F.fs"; Line = 1 }
+      { SymbolFullName = "MyModule.parse"; IsFromDefinition = false; UsedInTestId = None; FilePath = "F.fs"; Line = 5 }
+      { SymbolFullName = "MyModule.format"; IsFromDefinition = false; UsedInTestId = None; FilePath = "F.fs"; Line = 8 }
+      { SymbolFullName = "MyApp.Tests.test2"; IsFromDefinition = true; UsedInTestId = None; FilePath = "F.fs"; Line = 20 }
+      { SymbolFullName = "MyModule.parse"; IsFromDefinition = false; UsedInTestId = None; FilePath = "F.fs"; Line = 25 }
     ]
-    let index = SymbolGraphBuilder.buildIndex refs
+    let index = SymbolGraphBuilder.buildIndex ".Tests." "fcs" refs
     index |> Map.find "MyModule.parse" |> Array.length |> Expect.equal "parse has 2 tests" 2
     index |> Map.find "MyModule.format" |> Array.length |> Expect.equal "format has 1 test" 1
   }
 
-  test "buildIndex ignores refs outside test functions" {
+  test "buildIndex produces empty graph when no test definitions present" {
     let refs = [
-      { SymbolFullName = "MyModule.helper"; UsedInTestId = None; FilePath = "F.fs"; Line = 5 }
+      { SymbolFullName = "MyModule.helper"; IsFromDefinition = false; UsedInTestId = None; FilePath = "F.fs"; Line = 5 }
     ]
-    let index = SymbolGraphBuilder.buildIndex refs
+    let index = SymbolGraphBuilder.buildIndex ".Tests." "fcs" refs
     index |> Map.isEmpty |> Expect.isTrue "no test context means no entries"
   }
 
-  test "buildIndex deduplicates test IDs for same symbol" {
-    let t1 = TestId.create "test1" "expecto"
+  test "buildIndex deduplicates test entries for same symbol" {
     let refs = [
-      { SymbolFullName = "MyModule.parse"; UsedInTestId = Some t1; FilePath = "F.fs"; Line = 10 }
-      { SymbolFullName = "MyModule.parse"; UsedInTestId = Some t1; FilePath = "F.fs"; Line = 12 }
+      { SymbolFullName = "MyApp.Tests.test1"; IsFromDefinition = true; UsedInTestId = None; FilePath = "F.fs"; Line = 1 }
+      { SymbolFullName = "MyModule.parse"; IsFromDefinition = false; UsedInTestId = None; FilePath = "F.fs"; Line = 5 }
+      { SymbolFullName = "MyModule.parse"; IsFromDefinition = false; UsedInTestId = None; FilePath = "F.fs"; Line = 8 }
     ]
-    let index = SymbolGraphBuilder.buildIndex refs
+    let index = SymbolGraphBuilder.buildIndex ".Tests." "fcs" refs
     index |> Map.find "MyModule.parse" |> Array.length |> Expect.equal "deduped" 1
   }
 
   test "updateGraph merges new symbols into existing graph" {
-    let t1 = TestId.create "test1" "expecto"
-    let t2 = TestId.create "test2" "expecto"
     let existingGraph = {
       TestDependencyGraph.empty with
-        SymbolToTests = Map.ofList ["OldModule.fn", [|t1|]]
+        SymbolToTests = Map.ofList ["OldModule.fn", [|TestId.create "OldTest" "fcs"|]]
     }
     let newRefs = [
-      { SymbolFullName = "NewModule.fn"; UsedInTestId = Some t2; FilePath = "New.fs"; Line = 1 }
+      { SymbolFullName = "MyApp.Tests.test2"; IsFromDefinition = true; UsedInTestId = None; FilePath = "New.fs"; Line = 1 }
+      { SymbolFullName = "NewModule.fn"; IsFromDefinition = false; UsedInTestId = None; FilePath = "New.fs"; Line = 5 }
     ]
-    let updated = SymbolGraphBuilder.updateGraph newRefs "New.fs" existingGraph
+    let updated = SymbolGraphBuilder.updateGraph ".Tests." "fcs" newRefs "New.fs" existingGraph
     updated.SymbolToTests |> Map.containsKey "OldModule.fn" |> Expect.isTrue "old preserved"
     updated.SymbolToTests |> Map.containsKey "NewModule.fn" |> Expect.isTrue "new added"
     updated.SourceVersion |> Expect.equal "version bumped" 1
   }
 
   test "updateGraph overwrites existing symbol entries for same key" {
-    let t1 = TestId.create "test1" "expecto"
-    let t2 = TestId.create "test2" "expecto"
     let existingGraph = {
       TestDependencyGraph.empty with
-        SymbolToTests = Map.ofList ["MyModule.fn", [|t1|]]
+        SymbolToTests = Map.ofList ["MyModule.fn", [|TestId.create "OldTest" "fcs"|]]
     }
     let newRefs = [
-      { SymbolFullName = "MyModule.fn"; UsedInTestId = Some t2; FilePath = "F.fs"; Line = 1 }
+      { SymbolFullName = "MyApp.Tests.test2"; IsFromDefinition = true; UsedInTestId = None; FilePath = "F.fs"; Line = 1 }
+      { SymbolFullName = "MyModule.fn"; IsFromDefinition = false; UsedInTestId = None; FilePath = "F.fs"; Line = 5 }
     ]
-    let updated = SymbolGraphBuilder.updateGraph newRefs "F.fs" existingGraph
+    let updated = SymbolGraphBuilder.updateGraph ".Tests." "fcs" newRefs "F.fs" existingGraph
     let tests = updated.SymbolToTests |> Map.find "MyModule.fn"
     tests |> Array.length |> Expect.equal "overwritten with new" 1
-    tests.[0] |> Expect.equal "new test id" t2
   }
 
   test "empty refs produce empty index" {
-    let index = SymbolGraphBuilder.buildIndex []
+    let index = SymbolGraphBuilder.buildIndex ".Tests." "fcs" []
     index |> Map.isEmpty |> Expect.isTrue "empty"
   }
 ]
@@ -2686,12 +2683,12 @@ let symbolDiffTests = testList "SymbolDiff" [
   test "fromRefs computes diff from reference lists" {
     let t1 = TestId.create "t1" "expecto"
     let prev = [
-      { SymbolFullName = "A.fn"; UsedInTestId = Some t1; FilePath = "F.fs"; Line = 1 }
-      { SymbolFullName = "B.fn"; UsedInTestId = Some t1; FilePath = "F.fs"; Line = 2 }
+      { SymbolFullName = "A.fn"; IsFromDefinition = false; UsedInTestId = Some t1; FilePath = "F.fs"; Line = 1 }
+      { SymbolFullName = "B.fn"; IsFromDefinition = false; UsedInTestId = Some t1; FilePath = "F.fs"; Line = 2 }
     ]
     let curr = [
-      { SymbolFullName = "A.fn"; UsedInTestId = Some t1; FilePath = "F.fs"; Line = 1 }
-      { SymbolFullName = "C.fn"; UsedInTestId = Some t1; FilePath = "F.fs"; Line = 3 }
+      { SymbolFullName = "A.fn"; IsFromDefinition = false; UsedInTestId = Some t1; FilePath = "F.fs"; Line = 1 }
+      { SymbolFullName = "C.fn"; IsFromDefinition = false; UsedInTestId = Some t1; FilePath = "F.fs"; Line = 3 }
     ]
     let sc = SymbolDiff.fromRefs prev curr
     sc.Added |> Expect.hasLength "one added" 1
@@ -2718,7 +2715,7 @@ let fileAnalysisCacheTests = testList "FileAnalysisCache" [
   test "empty cache returns all symbols as added" {
     let t1 = TestId.create "t1" "expecto"
     let refs = [
-      { SymbolFullName = "A.fn"; UsedInTestId = Some t1; FilePath = "F.fs"; Line = 1 }
+      { SymbolFullName = "A.fn"; IsFromDefinition = false; UsedInTestId = Some t1; FilePath = "F.fs"; Line = 1 }
     ]
     let changes, _ = FileAnalysisCache.empty |> FileAnalysisCache.update "F.fs" refs
     changes.Added |> Expect.hasLength "one added" 1
@@ -2728,7 +2725,7 @@ let fileAnalysisCacheTests = testList "FileAnalysisCache" [
   test "second update with same symbols returns no changes" {
     let t1 = TestId.create "t1" "expecto"
     let refs = [
-      { SymbolFullName = "A.fn"; UsedInTestId = Some t1; FilePath = "F.fs"; Line = 1 }
+      { SymbolFullName = "A.fn"; IsFromDefinition = false; UsedInTestId = Some t1; FilePath = "F.fs"; Line = 1 }
     ]
     let _, cache1 = FileAnalysisCache.empty |> FileAnalysisCache.update "F.fs" refs
     let changes, _ = cache1 |> FileAnalysisCache.update "F.fs" refs
@@ -2737,8 +2734,8 @@ let fileAnalysisCacheTests = testList "FileAnalysisCache" [
 
   test "different file doesn't affect existing file's cache" {
     let t1 = TestId.create "t1" "expecto"
-    let refs1 = [{ SymbolFullName = "A.fn"; UsedInTestId = Some t1; FilePath = "F1.fs"; Line = 1 }]
-    let refs2 = [{ SymbolFullName = "B.fn"; UsedInTestId = Some t1; FilePath = "F2.fs"; Line = 1 }]
+    let refs1 = [{ SymbolFullName = "A.fn"; IsFromDefinition = false; UsedInTestId = Some t1; FilePath = "F1.fs"; Line = 1 }]
+    let refs2 = [{ SymbolFullName = "B.fn"; IsFromDefinition = false; UsedInTestId = Some t1; FilePath = "F2.fs"; Line = 1 }]
     let _, cache1 = FileAnalysisCache.empty |> FileAnalysisCache.update "F1.fs" refs1
     let _, cache2 = cache1 |> FileAnalysisCache.update "F2.fs" refs2
     cache2 |> FileAnalysisCache.getFileSymbols "F1.fs" |> Expect.hasLength "F1 preserved" 1
@@ -2748,12 +2745,12 @@ let fileAnalysisCacheTests = testList "FileAnalysisCache" [
   test "modified file separates added and removed" {
     let t1 = TestId.create "t1" "expecto"
     let refs1 = [
-      { SymbolFullName = "A.fn"; UsedInTestId = Some t1; FilePath = "F.fs"; Line = 1 }
-      { SymbolFullName = "B.fn"; UsedInTestId = Some t1; FilePath = "F.fs"; Line = 2 }
+      { SymbolFullName = "A.fn"; IsFromDefinition = false; UsedInTestId = Some t1; FilePath = "F.fs"; Line = 1 }
+      { SymbolFullName = "B.fn"; IsFromDefinition = false; UsedInTestId = Some t1; FilePath = "F.fs"; Line = 2 }
     ]
     let refs2 = [
-      { SymbolFullName = "A.fn"; UsedInTestId = Some t1; FilePath = "F.fs"; Line = 1 }
-      { SymbolFullName = "C.fn"; UsedInTestId = Some t1; FilePath = "F.fs"; Line = 3 }
+      { SymbolFullName = "A.fn"; IsFromDefinition = false; UsedInTestId = Some t1; FilePath = "F.fs"; Line = 1 }
+      { SymbolFullName = "C.fn"; IsFromDefinition = false; UsedInTestId = Some t1; FilePath = "F.fs"; Line = 3 }
     ]
     let _, cache1 = FileAnalysisCache.empty |> FileAnalysisCache.update "F.fs" refs1
     let changes, _ = cache1 |> FileAnalysisCache.update "F.fs" refs2
@@ -2770,29 +2767,29 @@ let fileAnalysisCacheTests = testList "FileAnalysisCache" [
 [<Tests>]
 let compositionTests = testList "compositionTests" [
   test "no-op edit with same symbols produces no affected tests" {
-    let t1 = TestId.create "MyTest.test1" "expecto"
     let refs = [
-      { SymbolFullName = "Lib.add"; UsedInTestId = Some t1; FilePath = "Lib.fs"; Line = 1 }
-      { SymbolFullName = "Lib.sub"; UsedInTestId = Some t1; FilePath = "Lib.fs"; Line = 5 }
+      { SymbolFullName = "MyApp.Tests.test1"; IsFromDefinition = true; UsedInTestId = None; FilePath = "Lib.fs"; Line = 1 }
+      { SymbolFullName = "Lib.add"; IsFromDefinition = false; UsedInTestId = None; FilePath = "Lib.fs"; Line = 5 }
+      { SymbolFullName = "Lib.sub"; IsFromDefinition = false; UsedInTestId = None; FilePath = "Lib.fs"; Line = 8 }
     ]
     let _, cache1 = FileAnalysisCache.empty |> FileAnalysisCache.update "Lib.fs" refs
     let changes, _ = cache1 |> FileAnalysisCache.update "Lib.fs" refs
     changes |> SymbolChanges.isEmpty |> Expect.isTrue "no symbol changes"
     let depGraph = {
       TestDependencyGraph.empty with
-        SymbolToTests = SymbolGraphBuilder.buildIndex refs
-        TransitiveCoverage = SymbolGraphBuilder.buildIndex refs
+        SymbolToTests = SymbolGraphBuilder.buildIndex ".Tests." "fcs" refs
+        TransitiveCoverage = SymbolGraphBuilder.buildIndex ".Tests." "fcs" refs
     }
     let affected = TestDependencyGraph.findAffected (SymbolChanges.allChanged changes) depGraph
     affected |> Expect.hasLength "no affected tests" 0
   }
 
   test "full pipeline roundtrip: keystroke → debounce → FCS → affected tests" {
-    let tc = mkTestCase "MyTest.test1" "expecto" TestCategory.Unit
-    let t1 = tc.Id
+    let tc = mkTestCase "MyApp.Tests.test1" "expecto" TestCategory.Unit
     let t0 = DateTimeOffset(2025, 1, 1, 0, 0, 0, TimeSpan.Zero)
     let refs = [
-      { SymbolFullName = "Lib.add"; UsedInTestId = Some t1; FilePath = "Lib.fs"; Line = 1 }
+      { SymbolFullName = "MyApp.Tests.test1"; IsFromDefinition = true; UsedInTestId = None; FilePath = "Lib.fs"; Line = 1 }
+      { SymbolFullName = "Lib.add"; IsFromDefinition = false; UsedInTestId = None; FilePath = "Lib.fs"; Line = 5 }
     ]
     let state = {
       LiveTestPipelineState.empty with
@@ -2852,22 +2849,22 @@ let compositionTests = testList "compositionTests" [
   }
 
   test "symbol rename: cache detects removal+addition, graph finds affected" {
-    let t1 = TestId.create "MyTest.test1" "expecto"
-    let t2 = TestId.create "MyTest.test2" "expecto"
     let refsV1 = [
-      { SymbolFullName = "Lib.add"; UsedInTestId = Some t1; FilePath = "Lib.fs"; Line = 1 }
-      { SymbolFullName = "Lib.oldFn"; UsedInTestId = Some t2; FilePath = "Lib.fs"; Line = 5 }
+      { SymbolFullName = "MyApp.Tests.test1"; IsFromDefinition = true; UsedInTestId = None; FilePath = "Lib.fs"; Line = 1 }
+      { SymbolFullName = "Lib.add"; IsFromDefinition = false; UsedInTestId = None; FilePath = "Lib.fs"; Line = 5 }
+      { SymbolFullName = "Lib.oldFn"; IsFromDefinition = false; UsedInTestId = None; FilePath = "Lib.fs"; Line = 8 }
     ]
     let refsV2 = [
-      { SymbolFullName = "Lib.add"; UsedInTestId = Some t1; FilePath = "Lib.fs"; Line = 1 }
-      { SymbolFullName = "Lib.newFn"; UsedInTestId = Some t2; FilePath = "Lib.fs"; Line = 5 }
+      { SymbolFullName = "MyApp.Tests.test1"; IsFromDefinition = true; UsedInTestId = None; FilePath = "Lib.fs"; Line = 1 }
+      { SymbolFullName = "Lib.add"; IsFromDefinition = false; UsedInTestId = None; FilePath = "Lib.fs"; Line = 5 }
+      { SymbolFullName = "Lib.newFn"; IsFromDefinition = false; UsedInTestId = None; FilePath = "Lib.fs"; Line = 8 }
     ]
     let _, cache1 = FileAnalysisCache.empty |> FileAnalysisCache.update "Lib.fs" refsV1
-    let graph1 = TestDependencyGraph.empty |> SymbolGraphBuilder.updateGraph refsV1 "Lib.fs"
+    let graph1 = TestDependencyGraph.empty |> SymbolGraphBuilder.updateGraph ".Tests." "fcs" refsV1 "Lib.fs"
     let changes, _ = cache1 |> FileAnalysisCache.update "Lib.fs" refsV2
     changes.Added |> Expect.contains "newFn added" "Lib.newFn"
     changes.Removed |> Expect.contains "oldFn removed" "Lib.oldFn"
-    let graph2 = graph1 |> SymbolGraphBuilder.updateGraph refsV2 "Lib.fs"
+    let graph2 = graph1 |> SymbolGraphBuilder.updateGraph ".Tests." "fcs" refsV2 "Lib.fs"
     let affectedByRemoved = TestDependencyGraph.findAffected changes.Removed graph1
     affectedByRemoved |> Expect.hasLength "t2 affected by removal" 1
     let affectedByAdded = TestDependencyGraph.findAffected changes.Added graph2
@@ -3185,20 +3182,20 @@ let fileContentChangedTests = testList "FileContentChanged" [
 [<Tests>]
 let fcsTypeCheckResultTests = testList "FcsTypeCheckResult" [
   test "Success updates symbol graph via onFcsComplete" {
-    let tc = mkTestCase "Test.add" "expecto" TestCategory.Unit
+    let tc = mkTestCase "MyApp.Tests.testAdd" "expecto" TestCategory.Unit
     let refs = [
+      { SymbolReference.SymbolFullName = "MyApp.Tests.testAdd"
+        IsFromDefinition = true; UsedInTestId = None
+        FilePath = "Test.fs"; Line = 1 }
       { SymbolReference.SymbolFullName = "Lib.add"
-        UsedInTestId = None
-        FilePath = "Lib.fs"; Line = 5 }
-      { SymbolReference.SymbolFullName = "Lib.add"
-        UsedInTestId = Some tc.Id
-        FilePath = "Test.fs"; Line = 10 }
+        IsFromDefinition = false; UsedInTestId = None
+        FilePath = "Test.fs"; Line = 5 }
     ]
     let state = {
       LiveTestPipelineState.empty with
         TestState = { LiveTestState.empty with DiscoveredTests = [|tc|]; Enabled = true }
     }
-    let result = FcsTypeCheckResult.Success ("Lib.fs", refs)
+    let result = FcsTypeCheckResult.Success ("Test.fs", refs)
     let _effects, s1 = LiveTestPipelineState.handleFcsResult result state
     s1.DepGraph.SymbolToTests
     |> Map.containsKey "Lib.add"
@@ -3206,20 +3203,20 @@ let fcsTypeCheckResultTests = testList "FcsTypeCheckResult" [
   }
 
   test "Success with changed symbols triggers RunAffectedTests" {
-    let tc = mkTestCase "Test.add" "expecto" TestCategory.Unit
+    let tc = mkTestCase "MyApp.Tests.testAdd" "expecto" TestCategory.Unit
     let refs = [
+      { SymbolReference.SymbolFullName = "MyApp.Tests.testAdd"
+        IsFromDefinition = true; UsedInTestId = None
+        FilePath = "Test.fs"; Line = 1 }
       { SymbolReference.SymbolFullName = "Lib.add"
-        UsedInTestId = None
-        FilePath = "Lib.fs"; Line = 5 }
-      { SymbolReference.SymbolFullName = "Lib.add"
-        UsedInTestId = Some tc.Id
-        FilePath = "Test.fs"; Line = 10 }
+        IsFromDefinition = false; UsedInTestId = None
+        FilePath = "Test.fs"; Line = 5 }
     ]
     let state = {
       LiveTestPipelineState.empty with
         TestState = { LiveTestState.empty with DiscoveredTests = [|tc|]; Enabled = true }
     }
-    let result = FcsTypeCheckResult.Success ("Lib.fs", refs)
+    let result = FcsTypeCheckResult.Success ("Test.fs", refs)
     let effects, _ = LiveTestPipelineState.handleFcsResult result state
     effects
     |> List.exists (fun e -> match e with PipelineEffect.RunAffectedTests _ -> true | _ -> false)
@@ -3282,12 +3279,12 @@ let fcsTypeCheckResultTests = testList "FcsTypeCheckResult" [
   }
 
   test "Elm wiring: FcsTypeCheckCompleted Success updates model and emits effects" {
-    let tc = mkTestCase "Test.add" "expecto" TestCategory.Unit
+    let tc = mkTestCase "MyApp.Tests.testAdd" "expecto" TestCategory.Unit
     let refs = [
+      { SymbolReference.SymbolFullName = "MyApp.Tests.testAdd"
+        IsFromDefinition = true; UsedInTestId = None; FilePath = "Test.fs"; Line = 1 }
       { SymbolReference.SymbolFullName = "Lib.add"
-        UsedInTestId = None; FilePath = "Lib.fs"; Line = 5 }
-      { SymbolReference.SymbolFullName = "Lib.add"
-        UsedInTestId = Some tc.Id; FilePath = "Test.fs"; Line = 10 }
+        IsFromDefinition = false; UsedInTestId = None; FilePath = "Test.fs"; Line = 5 }
     ]
     let model = {
       SageFsModel.initial with
@@ -3296,7 +3293,7 @@ let fcsTypeCheckResultTests = testList "FcsTypeCheckResult" [
             TestState = { LiveTestState.empty with DiscoveredTests = [|tc|]; Enabled = true }
         }
     }
-    let msg = SageFsMsg.FcsTypeCheckCompleted (FcsTypeCheckResult.Success ("Lib.fs", refs))
+    let msg = SageFsMsg.FcsTypeCheckCompleted (FcsTypeCheckResult.Success ("Test.fs", refs))
     let model', effects = SageFsUpdate.update msg model
     model'.LiveTesting.DepGraph.SymbolToTests
     |> Map.containsKey "Lib.add"
@@ -3333,10 +3330,13 @@ let triggerWiringTests = testList "RunTrigger wiring" [
   }
 
   test "handleFcsResult uses stored FileSave trigger for OnSaveOnly tests" {
-    let tc = mkTestCase "Arch.test" "expecto" TestCategory.Architecture
+    let tc = mkTestCase "MyApp.Tests.archTest" "expecto" TestCategory.Architecture
     let refs = [
+      { SymbolReference.SymbolFullName = "MyApp.Tests.archTest"
+        IsFromDefinition = true; UsedInTestId = None
+        FilePath = "Test.fs"; Line = 1 }
       { SymbolReference.SymbolFullName = "Lib.check"
-        UsedInTestId = Some tc.Id
+        IsFromDefinition = false; UsedInTestId = None
         FilePath = "Test.fs"; Line = 5 }
     ]
     let now = DateTimeOffset.UtcNow
@@ -3355,10 +3355,13 @@ let triggerWiringTests = testList "RunTrigger wiring" [
   }
 
   test "handleFcsResult with Keystroke trigger filters out OnSaveOnly tests" {
-    let tc = mkTestCase "Arch.test" "expecto" TestCategory.Architecture
+    let tc = mkTestCase "MyApp.Tests.archTest" "expecto" TestCategory.Architecture
     let refs = [
+      { SymbolReference.SymbolFullName = "MyApp.Tests.archTest"
+        IsFromDefinition = true; UsedInTestId = None
+        FilePath = "Test.fs"; Line = 1 }
       { SymbolReference.SymbolFullName = "Lib.check"
-        UsedInTestId = Some tc.Id
+        IsFromDefinition = false; UsedInTestId = None
         FilePath = "Test.fs"; Line = 5 }
     ]
     let now = DateTimeOffset.UtcNow
@@ -4051,7 +4054,7 @@ let fcsGraphTests = testList "FCS dependency graph builder" [
       { FullName = "MyApp.Math.add"; DisplayName = "add"; IsFromDefinition = false; StartLine = 5; EndLine = 5 }
       { FullName = "MyApp.Math.multiply"; DisplayName = "multiply"; IsFromDefinition = false; StartLine = 7; EndLine = 7 }
     |]
-    let graph = TestDependencyGraph.buildFromSymbolUses ".Tests." uses
+    let graph = TestDependencyGraph.buildFromSymbolUses ".Tests." "fcs" uses
     graph.SymbolToTests.Count
     |> Expect.equal "should have 2 production symbols" 2
     let addAffected = TestDependencyGraph.findAffected ["MyApp.Math.add"] graph
@@ -4070,8 +4073,8 @@ let fcsGraphTests = testList "FCS dependency graph builder" [
       { FullName = "MyApp.Math.add"; DisplayName = "add"; IsFromDefinition = false; StartLine = 6; EndLine = 6 }
       { FullName = "MyApp.Math.multiply"; DisplayName = "multiply"; IsFromDefinition = false; StartLine = 7; EndLine = 7 }
     |]
-    let graph = TestDependencyGraph.buildFromSymbolUses ".Tests." uses
-    let combinedId = TestId.create "MyApp.Tests.combinedTest" "expecto"
+    let graph = TestDependencyGraph.buildFromSymbolUses ".Tests." "fcs" uses
+    let combinedId = TestId.create "MyApp.Tests.combinedTest" "fcs"
     TestDependencyGraph.findAffected ["MyApp.Math.add"] graph
     |> Array.contains combinedId
     |> Expect.isTrue "add should affect combinedTest"
@@ -4085,7 +4088,7 @@ let fcsGraphTests = testList "FCS dependency graph builder" [
       { FullName = "MyApp.Math.unused"; DisplayName = "unused"; IsFromDefinition = true; StartLine = 2; EndLine = 2 }
       { FullName = "MyApp.Tests.someTest"; DisplayName = "someTest"; IsFromDefinition = true; StartLine = 5; EndLine = 5 }
     |]
-    let graph = TestDependencyGraph.buildFromSymbolUses ".Tests." uses
+    let graph = TestDependencyGraph.buildFromSymbolUses ".Tests." "fcs" uses
     TestDependencyGraph.findAffected ["MyApp.Math.unused"] graph
     |> Array.length
     |> Expect.equal "unused should affect 0 tests" 0
@@ -4100,14 +4103,14 @@ let fcsGraphTests = testList "FCS dependency graph builder" [
       { FullName = "MyApp.Math.add"; DisplayName = "add"; IsFromDefinition = false; StartLine = 6; EndLine = 6 }
       { FullName = "MyApp.Math.sub"; DisplayName = "sub"; IsFromDefinition = false; StartLine = 9; EndLine = 9 }
     |]
-    let graph = TestDependencyGraph.buildFromSymbolUses ".Tests." uses
+    let graph = TestDependencyGraph.buildFromSymbolUses ".Tests." "fcs" uses
     TestDependencyGraph.findAffected ["MyApp.Math.add"; "MyApp.Math.sub"] graph
     |> Array.length
     |> Expect.equal "should find 2 distinct tests" 2
   }
 
   test "empty symbol uses produces empty graph" {
-    let graph = TestDependencyGraph.buildFromSymbolUses ".Tests." [||]
+    let graph = TestDependencyGraph.buildFromSymbolUses ".Tests." "fcs" [||]
     graph.SymbolToTests.Count
     |> Expect.equal "empty uses produces empty graph" 0
   }
@@ -4118,7 +4121,7 @@ let fcsGraphTests = testList "FCS dependency graph builder" [
       { FullName = "Microsoft.FSharp.Core.ExtraTopLevelOperators.printfn"; DisplayName = "printfn"; IsFromDefinition = false; StartLine = 2; EndLine = 2 }
       { FullName = "MyApp.Logic.doThing"; DisplayName = "doThing"; IsFromDefinition = false; StartLine = 3; EndLine = 3 }
     |]
-    let graph = TestDependencyGraph.buildFromSymbolUses ".Tests." uses
+    let graph = TestDependencyGraph.buildFromSymbolUses ".Tests." "fcs" uses
     graph.SymbolToTests.Count
     |> Expect.equal "only production symbols, not stdlib" 1
     graph.SymbolToTests |> Map.containsKey "Microsoft.FSharp.Core.ExtraTopLevelOperators.printfn"
@@ -4132,18 +4135,18 @@ let fcsGraphTests = testList "FCS dependency graph builder" [
       { FullName = "MyApp.Tests.otherTest"; DisplayName = "otherTest"; IsFromDefinition = true; StartLine = 8; EndLine = 8 }
       { FullName = "MyApp.Math.add"; DisplayName = "add"; IsFromDefinition = false; StartLine = 6; EndLine = 6 }
     |]
-    let graph = TestDependencyGraph.buildFromSymbolUses ".Tests." uses
+    let graph = TestDependencyGraph.buildFromSymbolUses ".Tests." "fcs" uses
     let addTestCase = {
-      Id = TestId.create "MyApp.Tests.addTest" "expecto"
+      Id = TestId.create "MyApp.Tests.addTest" "fcs"
       FullName = "MyApp.Tests.addTest"; DisplayName = "addTest"
       Origin = TestOrigin.SourceMapped ("test.fsx", 5)
-      Labels = []; Framework = "expecto"; Category = TestCategory.Unit
+      Labels = []; Framework = "fcs"; Category = TestCategory.Unit
     }
     let otherTestCase = {
-      Id = TestId.create "MyApp.Tests.otherTest" "expecto"
+      Id = TestId.create "MyApp.Tests.otherTest" "fcs"
       FullName = "MyApp.Tests.otherTest"; DisplayName = "otherTest"
       Origin = TestOrigin.SourceMapped ("test.fsx", 8)
-      Labels = []; Framework = "expecto"; Category = TestCategory.Unit
+      Labels = []; Framework = "fcs"; Category = TestCategory.Unit
     }
     let state = { LiveTestState.empty with
                     DiscoveredTests = [| addTestCase; otherTestCase |]
@@ -4165,8 +4168,8 @@ let fcsGraphTests = testList "FCS dependency graph builder" [
       { FullName = "MyApp.Tests.addTest"; DisplayName = "addTest"; IsFromDefinition = true; StartLine = 5; EndLine = 5 }
       { FullName = "MyApp.Math.add"; DisplayName = "add"; IsFromDefinition = false; StartLine = 6; EndLine = 6 }
     |]
-    let graph = TestDependencyGraph.buildFromSymbolUses ".Tests." uses
-    let addTestId = TestId.create "MyApp.Tests.addTest" "expecto"
+    let graph = TestDependencyGraph.buildFromSymbolUses ".Tests." "fcs" uses
+    let addTestId = TestId.create "MyApp.Tests.addTest" "fcs"
     let results = Map.ofList [
       addTestId, {
         TestId = addTestId; TestName = "addTest"

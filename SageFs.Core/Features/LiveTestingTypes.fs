@@ -515,6 +515,7 @@ module TestDependencyGraph =
   /// Returns an inverted index: production symbol → test IDs that reference it.
   let buildFromSymbolUses
     (testModuleIdentifier: string)
+    (framework: string)
     (uses: ExtractedSymbolUse array)
     : TestDependencyGraph =
     let testDefs =
@@ -538,7 +539,7 @@ module TestDependencyGraph =
         && u.FullName.Contains("."))
     let invertedIndex =
       [| for (testDef, startLine, endLine) in testRanges do
-           let testId = TestId.create testDef.FullName "expecto"
+           let testId = TestId.create testDef.FullName framework
            let refs =
              nonDefUses
              |> Array.filter (fun u ->
@@ -1091,26 +1092,31 @@ module AdaptiveDebounce =
 /// Represents a resolved symbol reference from FCS.
 type SymbolReference = {
   SymbolFullName: string
+  IsFromDefinition: bool
   UsedInTestId: TestId option
   FilePath: string
   Line: int
 }
 
-/// Builds SymbolToTests from a list of symbol references.
+/// Builds SymbolToTests from a list of symbol references using the line-range heuristic
+/// in buildFromSymbolUses. Converts SymbolReference to ExtractedSymbolUse first.
 module SymbolGraphBuilder =
-  let buildIndex (refs: SymbolReference list) : Map<string, TestId array> =
-    refs
-    |> List.choose (fun r ->
-      match r.UsedInTestId with
-      | Some tid -> Some (r.SymbolFullName, tid)
-      | None -> None)
-    |> List.groupBy fst
-    |> List.map (fun (sym, pairs) ->
-      sym, pairs |> List.map snd |> List.distinct |> Array.ofList)
-    |> Map.ofList
+  let private toExtractedSymbolUse (sr: SymbolReference) : ExtractedSymbolUse =
+    let parts = sr.SymbolFullName.Split('.')
+    let displayName = if parts.Length > 0 then parts[parts.Length - 1] else sr.SymbolFullName
+    { FullName = sr.SymbolFullName
+      DisplayName = displayName
+      IsFromDefinition = sr.IsFromDefinition
+      StartLine = sr.Line
+      EndLine = sr.Line }
 
-  let updateGraph (newRefs: SymbolReference list) (filePath: string) (graph: TestDependencyGraph) : TestDependencyGraph =
-    let newIndex = buildIndex newRefs
+  let buildIndex (testModuleIdentifier: string) (framework: string) (refs: SymbolReference list) : Map<string, TestId array> =
+    let extracted = refs |> List.map toExtractedSymbolUse |> Array.ofList
+    let graph = TestDependencyGraph.buildFromSymbolUses testModuleIdentifier framework extracted
+    graph.SymbolToTests
+
+  let updateGraph (testModuleIdentifier: string) (framework: string) (newRefs: SymbolReference list) (filePath: string) (graph: TestDependencyGraph) : TestDependencyGraph =
+    let newIndex = buildIndex testModuleIdentifier framework newRefs
     let merged =
       (graph.SymbolToTests, newIndex)
       ||> Map.fold (fun acc key value ->
@@ -1236,7 +1242,7 @@ module LiveTestPipelineState =
 
   let onFcsComplete (filePath: string) (refs: SymbolReference list) (s: LiveTestPipelineState) =
     let changes, newCache = FileAnalysisCache.update filePath refs s.AnalysisCache
-    let newDepGraph = SymbolGraphBuilder.updateGraph refs filePath s.DepGraph
+    let newDepGraph = SymbolGraphBuilder.updateGraph ".Tests." "expecto" refs filePath s.DepGraph
     let newDebounce = AdaptiveDebounce.onFcsCompleted s.AdaptiveDebounce
     { s with
         DepGraph = newDepGraph

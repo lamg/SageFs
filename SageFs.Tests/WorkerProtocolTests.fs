@@ -192,8 +192,8 @@ let workerProtocolTests =
           StartLine = 1; StartColumn = 4
           EndLine = 1; EndColumn = 5
         }
-        let sym1 = { WorkerSymbolRef.SymbolFullName = "MyModule.add"; FilePath = "MyModule.fs"; Line = 10 }
-        let sym2 = { WorkerSymbolRef.SymbolFullName = "MyModule.validate"; FilePath = "MyModule.fs"; Line = 20 }
+        let sym1 = { WorkerSymbolRef.SymbolFullName = "MyModule.add"; IsFromDefinition = false; FilePath = "MyModule.fs"; Line = 10 }
+        let sym2 = { WorkerSymbolRef.SymbolFullName = "MyModule.validate"; IsFromDefinition = true; FilePath = "MyModule.fs"; Line = 20 }
         let resp = WorkerResponse.TypeCheckWithSymbolsResult("r-tc3", true, [diag], [sym1; sym2])
         let _, result = roundTrip<WorkerResponse> resp
         result |> Expect.equal "should round-trip" resp
@@ -273,20 +273,23 @@ let workerProtocolTests =
       <| fun _ ->
         let domainRef: SageFs.Features.LiveTesting.SymbolReference = {
           SymbolFullName = "Helpers.parseInput"
+          IsFromDefinition = false
           UsedInTestId = Some (SageFs.Features.LiveTesting.TestId.create "parseTests.should_parse" "expecto")
           FilePath = "Helpers.fs"
           Line = 42
         }
         let wireRef = WorkerSymbolRef.fromDomain domainRef
         wireRef.SymbolFullName |> Expect.equal "full name preserved" "Helpers.parseInput"
+        wireRef.IsFromDefinition |> Expect.isFalse "IsFromDefinition preserved"
         wireRef.FilePath |> Expect.equal "file path preserved" "Helpers.fs"
         wireRef.Line |> Expect.equal "line preserved" 42
 
       testCase "toDomain sets UsedInTestId to None"
       <| fun _ ->
-        let wireRef = { WorkerSymbolRef.SymbolFullName = "M.f"; FilePath = "M.fs"; Line = 10 }
+        let wireRef = { WorkerSymbolRef.SymbolFullName = "M.f"; IsFromDefinition = true; FilePath = "M.fs"; Line = 10 }
         let backRef = WorkerSymbolRef.toDomain wireRef
         backRef.SymbolFullName |> Expect.equal "full name back" "M.f"
+        backRef.IsFromDefinition |> Expect.isTrue "IsFromDefinition preserved"
         backRef.UsedInTestId |> Expect.isNone "UsedInTestId should be None"
         backRef.FilePath |> Expect.equal "file path back" "M.fs"
         backRef.Line |> Expect.equal "line back" 10
