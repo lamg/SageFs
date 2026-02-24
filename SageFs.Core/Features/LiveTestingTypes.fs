@@ -1071,7 +1071,6 @@ type PipelineEffect =
   | ParseTreeSitter of content: string * filePath: string
   | RequestFcsTypeCheck of filePath: string
   | RunAffectedTests of testIds: TestId array * trigger: RunTrigger
-  | NoOp
 
 module PipelineEffects =
   let fromTick
@@ -1091,11 +1090,11 @@ module PipelineEffects =
     (trigger: RunTrigger)
     (depGraph: TestDependencyGraph)
     (state: LiveTestState)
-    : PipelineEffect =
-    if not state.Enabled then PipelineEffect.NoOp
+    : PipelineEffect option =
+    if not state.Enabled then None
     else
       let affected = TestDependencyGraph.findAffected changedSymbols depGraph
-      if Array.isEmpty affected then PipelineEffect.NoOp
+      if Array.isEmpty affected then None
       else
         let affectedTests =
           state.DiscoveredTests
@@ -1103,8 +1102,8 @@ module PipelineEffects =
         let filtered =
           PolicyFilter.filterTests state.RunPolicies trigger affectedTests
           |> Array.map (fun tc -> tc.Id)
-        if Array.isEmpty filtered then PipelineEffect.NoOp
-        else PipelineEffect.RunAffectedTests(filtered, trigger)
+        if Array.isEmpty filtered then None
+        else Some (PipelineEffect.RunAffectedTests(filtered, trigger))
 
 /// Adaptive debounce configuration.
 type AdaptiveDebounceConfig = {
@@ -1295,16 +1294,10 @@ module LiveTestPipelineState =
 
   /// Ticks the debounce channels and produces pipeline effects.
   /// Returns (effects, updatedState).
+  /// Note: afterTypeCheck is NOT called here — it runs after FCS completes,
+  /// not when the FCS request is emitted (avoids stale symbol data).
   let tick (now: DateTimeOffset) (s: LiveTestPipelineState) =
     let (tsPayload, fcsPayload), db = s.Debounce |> PipelineDebounce.tick now
     let filePath = s.ActiveFile |> Option.defaultValue ""
     let effects = PipelineEffects.fromTick tsPayload fcsPayload filePath
-    let fcsEffect =
-      match fcsPayload with
-      | Some _ ->
-        PipelineEffects.afterTypeCheck s.ChangedSymbols RunTrigger.Keystroke s.DepGraph s.TestState
-      | None -> PipelineEffect.NoOp
-    let allEffects =
-      effects @ [fcsEffect]
-      |> List.filter (fun e -> e <> PipelineEffect.NoOp)
-    allEffects, { s with Debounce = db }
+    effects, { s with Debounce = db }

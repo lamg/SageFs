@@ -308,6 +308,12 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
       (Some elmRuntime)
       (Some getWarmupContextForMcp)
 
+  // Pipeline tick timer — drives debounce channels for live testing (50ms fixed interval)
+  let pipelineTimer = new System.Threading.Timer(
+    System.Threading.TimerCallback(fun _ ->
+      elmRuntime.Dispatch(SageFsMsg.PipelineTick DateTimeOffset.UtcNow)),
+    null, 50, 50)
+
   // Start dashboard web server on MCP port + 1
   let dashboardPort = mcpPort + 1
   let connectionTracker = ConnectionTracker()
@@ -748,7 +754,8 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
   with
   | :? OperationCanceledException -> ()
 
-  // Graceful shutdown: stop all sessions and persist stop events
+  // Graceful shutdown: stop pipeline timer and all sessions
+  pipelineTimer.Dispose()
   let! activeSessions =
     sessionManager.PostAndAsyncReply(fun reply ->
       SessionManager.SessionCommand.ListSessions reply)

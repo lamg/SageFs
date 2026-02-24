@@ -400,7 +400,6 @@ module PipelineCancellation =
     | PipelineEffect.ParseTreeSitter _ -> pc.TreeSitter.next()
     | PipelineEffect.RequestFcsTypeCheck _ -> pc.Fcs.next()
     | PipelineEffect.RunAffectedTests _ -> pc.TestRun.next()
-    | PipelineEffect.NoOp -> System.Threading.CancellationToken.None
 
   let dispose (pc: PipelineCancellation) =
     pc.TreeSitter.dispose()

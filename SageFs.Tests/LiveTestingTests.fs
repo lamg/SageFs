@@ -2295,24 +2295,24 @@ let pipelineEffectsTests = testList "PipelineEffects" [
         SymbolToTests = Map.ofList [ "Module.add", [| tc1.Id |] ]
     }
     match PipelineEffects.afterTypeCheck ["Module.add"] RunTrigger.Keystroke graph state with
-    | PipelineEffect.RunAffectedTests (ids, trigger) ->
+    | Some (PipelineEffect.RunAffectedTests (ids, trigger)) ->
       ids.Length |> Expect.equal "one test" 1
       trigger |> Expect.equal "keystroke trigger" RunTrigger.Keystroke
-    | other -> failtestf "expected RunAffectedTests, got %A" other
+    | other -> failtestf "expected Some RunAffectedTests, got %A" other
   }
 
-  test "afterTypeCheck with no affected tests returns NoOp" {
+  test "afterTypeCheck with no affected tests returns None" {
     let state = { LiveTestState.empty with DiscoveredTests = [||]; Enabled = true }
     let graph = TestDependencyGraph.empty
     PipelineEffects.afterTypeCheck ["unknown.symbol"] RunTrigger.Keystroke graph state
-    |> Expect.equal "no op" PipelineEffect.NoOp
+    |> Expect.isNone "no affected tests"
   }
 
-  test "afterTypeCheck when disabled returns NoOp" {
+  test "afterTypeCheck when disabled returns None" {
     let state = { LiveTestState.empty with Enabled = false }
     let graph = TestDependencyGraph.empty
     PipelineEffects.afterTypeCheck ["Module.add"] RunTrigger.Keystroke graph state
-    |> Expect.equal "disabled" PipelineEffect.NoOp
+    |> Expect.isNone "disabled"
   }
 
   test "afterTypeCheck filters integration tests on keystroke" {
@@ -2332,10 +2332,10 @@ let pipelineEffectsTests = testList "PipelineEffects" [
         SymbolToTests = Map.ofList [ "Module.add", [| tc1.Id; tc2.Id |] ]
     }
     match PipelineEffects.afterTypeCheck ["Module.add"] RunTrigger.Keystroke graph state with
-    | PipelineEffect.RunAffectedTests (ids, _) ->
+    | Some (PipelineEffect.RunAffectedTests (ids, _)) ->
       ids.Length |> Expect.equal "only unit test" 1
       ids.[0] |> Expect.equal "unit test id" tc1.Id
-    | other -> failtestf "expected RunAffectedTests, got %A" other
+    | other -> failtestf "expected Some RunAffectedTests, got %A" other
   }
 ]
 
@@ -2380,9 +2380,7 @@ module EffectDispatcher =
   let create () = { Effects = [] }
 
   let dispatch (log: EffectLog) (effect: PipelineEffect) =
-    match effect with
-    | PipelineEffect.NoOp -> ()
-    | e -> log.Effects <- log.Effects @ [e]
+    log.Effects <- log.Effects @ [effect]
 
   let dispatchAll (log: EffectLog) (effects: PipelineEffect list) =
     effects |> List.iter (dispatch log)
@@ -2443,7 +2441,7 @@ let pipelineStateTests = testList "LiveTestPipelineState" [
     |> Expect.isTrue "should have fcs request"
   }
 
-  test "tick with fcs and dependency graph produces RunAffectedTests" {
+  test "tick with fcs debounce does NOT produce RunAffectedTests (deferred to afterTypeCheck)" {
     let t0 = DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero)
     let t301 = t0.AddMilliseconds(301.0)
     let tc = mkTestCase "MyModule.myTest" "expecto" TestCategory.Unit
@@ -2464,7 +2462,13 @@ let pipelineStateTests = testList "LiveTestPipelineState" [
       match e with
       | PipelineEffect.RunAffectedTests _ -> true
       | _ -> false)
-    |> Expect.isTrue "should have run affected tests"
+    |> Expect.isFalse "tick should not produce RunAffectedTests (stale symbols fix)"
+    effects
+    |> List.exists (fun e ->
+      match e with
+      | PipelineEffect.RequestFcsTypeCheck _ -> true
+      | _ -> false)
+    |> Expect.isTrue "tick should produce RequestFcsTypeCheck"
   }
 
   test "file save shortens fcs debounce to 50ms" {
@@ -2513,12 +2517,6 @@ let effectDispatchTests = testList "EffectDispatcher" [
       tids |> Expect.hasLength "one test" 1
       trigger |> Expect.equal "trigger" RunTrigger.Keystroke
     | _ -> failtest "wrong effect type"
-  }
-
-  test "NoOp leaves log unchanged" {
-    let log = EffectDispatcher.create()
-    EffectDispatcher.dispatch log PipelineEffect.NoOp
-    log.Effects |> Expect.isEmpty "no effects from NoOp"
   }
 
   test "dispatchAll processes multiple effects" {
@@ -2689,13 +2687,6 @@ let pipelineCancellationTests = testList "PipelineCancellation" [
     ts.IsCancellationRequested |> Expect.isTrue "ts cancelled"
     fcs.IsCancellationRequested |> Expect.isTrue "fcs cancelled"
     run.IsCancellationRequested |> Expect.isTrue "run cancelled"
-  }
-
-  test "NoOp returns CancellationToken.None" {
-    let pc = PipelineCancellation.create()
-    let t = PipelineCancellation.tokenForEffect PipelineEffect.NoOp pc
-    (t = System.Threading.CancellationToken.None) |> Expect.isTrue "none token"
-    PipelineCancellation.dispose pc
   }
 ]
 
@@ -3324,5 +3315,50 @@ let elmWiringBehavioralTests = testList "Elm Wiring Behavioral Scenarios" [
     let entries = LiveTesting.computeStatusEntries state
     entries |> Array.exists (fun e -> match e.Status with TestRunStatus.PolicyDisabled -> true | _ -> false)
     |> Expect.isTrue "disabled policy shows PolicyDisabled"
+  }
+]
+
+// --- FileContentChanged Integration Tests ---
+
+[<Tests>]
+let fileContentChangedTests = testList "FileContentChanged" [
+  test "feeds content to pipeline debounce when enabled" {
+    let model = { SageFsModel.initial with LiveTesting = { LiveTestPipelineState.empty with TestState = { LiveTestState.empty with Enabled = true } } }
+    let newModel, _effects = SageFsUpdate.update (SageFsMsg.FileContentChanged("src/MyModule.fs", "let x = 1")) model
+    newModel.LiveTesting.ActiveFile
+    |> Expect.equal "active file set" (Some "src/MyModule.fs")
+    newModel.LiveTesting.Debounce.TreeSitter.Pending.IsSome
+    |> Expect.isTrue "tree-sitter debounce pending"
+    newModel.LiveTesting.Debounce.Fcs.Pending.IsSome
+    |> Expect.isTrue "fcs debounce pending"
+  }
+
+  test "is no-op when live testing is disabled" {
+    let model = { SageFsModel.initial with LiveTesting = { LiveTestPipelineState.empty with TestState = { LiveTestState.empty with Enabled = false } } }
+    let newModel, _effects = SageFsUpdate.update (SageFsMsg.FileContentChanged("src/MyModule.fs", "let x = 1")) model
+    newModel.LiveTesting.ActiveFile
+    |> Expect.equal "active file unchanged" model.LiveTesting.ActiveFile
+  }
+
+  test "pipeline tick after debounce fires tree-sitter effect" {
+    let model = { SageFsModel.initial with LiveTesting = { LiveTestPipelineState.empty with TestState = { LiveTestState.empty with Enabled = true } } }
+    let afterKeystroke, _ = SageFsUpdate.update (SageFsMsg.FileContentChanged("src/MyModule.fs", "let x = 1")) model
+    let pipeline = afterKeystroke.LiveTesting
+    let t51 = DateTimeOffset.UtcNow.AddMilliseconds(51.0)
+    let effects, _ = LiveTestPipelineState.tick t51 pipeline
+    effects
+    |> List.exists (fun e ->
+      match e with
+      | PipelineEffect.ParseTreeSitter _ -> true
+      | _ -> false)
+    |> Expect.isTrue "tree-sitter parse fires after debounce"
+  }
+
+  test "multiple file changes supersede earlier ones" {
+    let model = { SageFsModel.initial with LiveTesting = { LiveTestPipelineState.empty with TestState = { LiveTestState.empty with Enabled = true } } }
+    let after1, _ = SageFsUpdate.update (SageFsMsg.FileContentChanged("src/First.fs", "let a = 1")) model
+    let after2, _ = SageFsUpdate.update (SageFsMsg.FileContentChanged("src/Second.fs", "let b = 2")) after1
+    after2.LiveTesting.ActiveFile
+    |> Expect.equal "latest file wins" (Some "src/Second.fs")
   }
 ]
