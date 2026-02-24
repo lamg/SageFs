@@ -648,6 +648,10 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
           | None -> return []
         with _ -> return []
       }))
+      // Live testing status for TUI/Raylib status bar
+      (fun () ->
+        let model = elmRuntime.GetModel()
+        SageFs.Features.LiveTesting.LiveTestPipelineState.liveTestingStatusBar model.LiveTesting)
 
   // Hot-reload proxy endpoints — forward to worker HTTP servers
   let hotReloadHttpClient = new Net.Http.HttpClient()

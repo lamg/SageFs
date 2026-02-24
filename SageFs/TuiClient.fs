@@ -51,6 +51,7 @@ let run (daemonInfo: DaemonInfo) = task {
   let mutable lastEvalCount = 0
   let mutable lastAvgMs = 0.0
   let mutable lastStandbyLabel = ""
+  let mutable lastLiveTestingStatus = ""
   let mutable layoutConfig = LayoutConfig.defaults
   let mutable currentTheme =
     match ThemePresets.tryFind "Kanagawa" with
@@ -80,10 +81,11 @@ let run (daemonInfo: DaemonInfo) = task {
         let statusLeft =
           let sid = if lastSessionId.Length > 8 then lastSessionId.[..7] else lastSessionId
           let standby = if lastStandbyLabel.Length > 0 then sprintf " | %s" lastStandbyLabel else ""
+          let liveTesting = if lastLiveTestingStatus.Length > 0 then sprintf " | %s" lastLiveTestingStatus else ""
           if lastEvalCount > 0 then
-            sprintf " %s %s | evals: %d (avg %.0fms)%s | %s" sid lastSessionState lastEvalCount lastAvgMs standby (PaneId.displayName focusedPane)
+            sprintf " %s %s | evals: %d (avg %.0fms)%s%s | %s" sid lastSessionState lastEvalCount lastAvgMs standby liveTesting (PaneId.displayName focusedPane)
           else
-            sprintf " %s %s | evals: %d%s | %s" sid lastSessionState lastEvalCount standby (PaneId.displayName focusedPane)
+            sprintf " %s %s | evals: %d%s%s | %s" sid lastSessionState lastEvalCount standby liveTesting (PaneId.displayName focusedPane)
         let statusRight = sprintf " %s | %.1fms |%s" currentThemeName lastFrameMs (StatusHints.build keyMap focusedPane layoutConfig.VisiblePanes)
         let cursorPos = Screen.drawWith layoutConfig currentTheme grid lastRegions focusedPane scrollOffsets statusLeft statusRight
         let cursorRow, cursorCol =
@@ -108,7 +110,7 @@ let run (daemonInfo: DaemonInfo) = task {
   let sseTask =
     DaemonClient.runSseListener
       baseUrl
-      (fun sessionId sessionState evalCount avgMs activeWorkingDir standbyLabel regions ->
+      (fun sessionId sessionState evalCount avgMs activeWorkingDir standbyLabel liveTestingStatus regions ->
         // Detect session switch by working directory change
         if activeWorkingDir.Length > 0 && activeWorkingDir <> lastWorkingDir && lastWorkingDir.Length > 0 then
           sessionThemes.[lastWorkingDir] <- currentThemeName
@@ -127,6 +129,7 @@ let run (daemonInfo: DaemonInfo) = task {
         lastEvalCount <- evalCount
         lastAvgMs <- avgMs
         lastStandbyLabel <- standbyLabel
+        lastLiveTestingStatus <- liveTestingStatus
         lastRegions <- regions
         render ())
       (fun _ ->

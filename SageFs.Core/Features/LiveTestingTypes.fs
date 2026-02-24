@@ -1096,6 +1096,19 @@ module LiveTestPipelineState =
     LastTiming = None
   }
 
+  let liveTestingStatusBar (state: LiveTestPipelineState) : string =
+    let timing =
+      match state.LastTiming with
+      | None -> ""
+      | Some t -> PipelineTiming.toStatusBar t
+    let statuses = state.TestState.StatusEntries |> Array.map (fun e -> e.Status)
+    let summary = TestSummary.fromStatuses statuses |> TestSummary.toStatusBar
+    match timing, summary with
+    | "", "Tests: none" -> ""
+    | "", s -> s
+    | t, "Tests: none" -> t
+    | t, s -> sprintf "%s | %s" t s
+
   let currentFcsDelay (s: LiveTestPipelineState) =
     AdaptiveDebounce.currentFcsDelay s.AdaptiveDebounce
 

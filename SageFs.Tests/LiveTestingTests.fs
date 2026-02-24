@@ -3832,3 +3832,80 @@ let pipelineTimingDispatchTests = testList "pipeline timing dispatch" [
     | None -> failtest "timing should be Some after two dispatches"
   }
 ]
+
+[<Tests>]
+let liveTestingStatusBarTests = testList "liveTestingStatusBar" [
+
+  test "returns empty string when no timing and no tests" {
+    let state = LiveTestPipelineState.empty
+    LiveTestPipelineState.liveTestingStatusBar state
+    |> Expect.equal "should be empty" ""
+  }
+
+  test "returns timing only when tests are empty" {
+    let timing = {
+      Depth = PipelineDepth.ThroughExecution (
+        TimeSpan.FromMilliseconds 1.0,
+        TimeSpan.FromMilliseconds 50.0,
+        TimeSpan.FromMilliseconds 30.0)
+      TotalTests = 5
+      AffectedTests = 2
+      Trigger = RunTrigger.FileSave
+      Timestamp = DateTimeOffset.UtcNow
+    }
+    let state = { LiveTestPipelineState.empty with LastTiming = Some timing }
+    let result = LiveTestPipelineState.liveTestingStatusBar state
+    result |> Expect.isNotEmpty "should have timing text"
+    result |> Expect.stringContains "should contain TS" "TS:"
+  }
+
+  test "returns tests only when timing is None" {
+    let testId = TestId.create "MyTest.test1" "expecto"
+    let entry = {
+      TestId = testId
+      DisplayName = "test1"
+      FullName = "MyTest.test1"
+      Origin = TestOrigin.ReflectionOnly
+      Framework = "expecto"
+      Category = TestCategory.Unit
+      CurrentPolicy = RunPolicy.OnEveryChange
+      Status = TestRunStatus.Passed (TimeSpan.FromMilliseconds 10.0)
+      PreviousStatus = TestRunStatus.Detected
+    }
+    let testState = { LiveTestPipelineState.empty.TestState with StatusEntries = [| entry |] }
+    let state = { LiveTestPipelineState.empty with TestState = testState }
+    let result = LiveTestPipelineState.liveTestingStatusBar state
+    result |> Expect.isNotEmpty "should have tests text"
+    result |> Expect.stringContains "should contain pass count" "1"
+  }
+
+  test "returns combined timing and tests" {
+    let timing = {
+      Depth = PipelineDepth.ThroughExecution (
+        TimeSpan.FromMilliseconds 1.0,
+        TimeSpan.FromMilliseconds 50.0,
+        TimeSpan.FromMilliseconds 30.0)
+      TotalTests = 5
+      AffectedTests = 2
+      Trigger = RunTrigger.FileSave
+      Timestamp = DateTimeOffset.UtcNow
+    }
+    let testId = TestId.create "MyTest.test1" "expecto"
+    let entry = {
+      TestId = testId
+      DisplayName = "test1"
+      FullName = "MyTest.test1"
+      Origin = TestOrigin.ReflectionOnly
+      Framework = "expecto"
+      Category = TestCategory.Unit
+      CurrentPolicy = RunPolicy.OnEveryChange
+      Status = TestRunStatus.Passed (TimeSpan.FromMilliseconds 10.0)
+      PreviousStatus = TestRunStatus.Detected
+    }
+    let testState = { LiveTestPipelineState.empty.TestState with StatusEntries = [| entry |] }
+    let state = { LiveTestPipelineState.empty with LastTiming = Some timing; TestState = testState }
+    let result = LiveTestPipelineState.liveTestingStatusBar state
+    result |> Expect.stringContains "should contain TS" "TS:"
+    result |> Expect.stringContains "should contain pipe separator" " | "
+  }
+]

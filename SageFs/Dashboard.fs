@@ -1836,6 +1836,7 @@ let createApiStateHandler
   (stateChanged: IEvent<string> option)
   (connectionTracker: ConnectionTracker option)
   (getStandbyInfo: unit -> Threading.Tasks.Task<StandbyInfo>)
+  (getLiveTestingStatus: unit -> string)
   : HttpHandler =
   fun ctx -> task {
     ctx.Response.ContentType <- "text/event-stream"
@@ -1868,6 +1869,7 @@ let createApiStateHandler
                  {| items = co.Items; selectedIndex = co.SelectedIndex |}) |})
         | None -> []
       let! standby = getStandbyInfo ()
+      let liveTestingStatus = getLiveTestingStatus ()
       let payload =
         System.Text.Json.JsonSerializer.Serialize(
           {| sessionId = activeSid
@@ -1876,6 +1878,7 @@ let createApiStateHandler
              avgMs = if stats.EvalCount > 0 then stats.TotalDuration.TotalMilliseconds / float stats.EvalCount else 0.0
              activeWorkingDir = activeDir
              standbyLabel = StandbyInfo.label standby
+             liveTestingStatus = liveTestingStatus
              regions = regions |})
       do! ctx.Response.WriteAsync(sprintf "data: %s\n\n" payload)
       do! ctx.Response.Body.FlushAsync()
@@ -2030,6 +2033,7 @@ let createEndpoints
   (getHotReloadState: string -> Threading.Tasks.Task<{| files: {| path: string; watched: bool |} list; watchedCount: int |} option>)
   (getWarmupContext: string -> Threading.Tasks.Task<WarmupContext option>)
   (getCompletions: (string -> string -> int -> Threading.Tasks.Task<Features.AutoCompletion.CompletionItem list>) option)
+  (getLiveTestingStatus: unit -> string)
   : HttpEndpoint list =
   [
     yield get "/dashboard" (FalcoResponse.ofHtml (renderShell version))
@@ -2108,7 +2112,7 @@ let createEndpoints
         })
     | None -> ()
     // TUI client API
-    yield get "/api/state" (createApiStateHandler getSessionState getEvalStats getActiveSessionId getSessionWorkingDir getAllSessions getElmRegions stateChanged connectionTracker getStandbyInfo)
+    yield get "/api/state" (createApiStateHandler getSessionState getEvalStats getActiveSessionId getSessionWorkingDir getAllSessions getElmRegions stateChanged connectionTracker getStandbyInfo getLiveTestingStatus)
     yield post "/api/dispatch" (createApiDispatchHandler dispatch)
     match createSession with
     | Some handler ->
