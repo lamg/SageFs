@@ -222,6 +222,7 @@ let parserTests = testList "parser integration" [
 let mkRegion id content = {
   Id = id; Flags = RegionFlags.None; Content = content
   Affordances = []; Cursor = None; Completions = None
+  LineAnnotations = [||]
 }
 
 let standbyBadgeSseTests = testList "SSE standby badge" [

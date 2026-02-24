@@ -32,6 +32,7 @@ type RenderRegion = {
   Affordances: Affordance list
   Cursor: RegionCursor option
   Completions: CompletionOverlay option
+  LineAnnotations: SageFs.Features.LiveTesting.LineAnnotation array
 }
 
 /// Completion overlay data for rendering

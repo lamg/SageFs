@@ -20,7 +20,8 @@ module DaemonRegionData =
       Content = d.Content
       Affordances = []
       Cursor = d.Cursor
-      Completions = d.Completions }
+      Completions = d.Completions
+      LineAnnotations = [||] }
 
 /// Shared daemon client logic for both TUI and GUI.
 module DaemonClient =

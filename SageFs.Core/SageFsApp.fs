@@ -447,6 +447,10 @@ module SageFsRender =
       | Some prompt ->
         sprintf "%s\n─── %s: %s█" bufText prompt.Label prompt.Input
       | None -> bufText
+    let editorAnnotations =
+      if model.LiveTesting.Enabled then
+        Features.LiveTesting.LiveTesting.annotationsForFile "editor" model.LiveTesting
+      else [||]
     let editorRegion = {
       Id = "editor"
       Flags = RegionFlags.Focusable ||| RegionFlags.LiveUpdate
@@ -454,6 +458,7 @@ module SageFsRender =
       Affordances = []
       Cursor = Some { Line = bufCursor.Line; Col = bufCursor.Column }
       Completions = editorCompletions
+      LineAnnotations = editorAnnotations
     }
 
     let activeSessionId =
@@ -481,6 +486,7 @@ module SageFsRender =
       Affordances = []
       Cursor = None
       Completions = None
+      LineAnnotations = [||]
     }
 
     let diagnosticsRegion = {
@@ -498,6 +504,7 @@ module SageFsRender =
       Affordances = []
       Cursor = None
       Completions = None
+      LineAnnotations = [||]
     }
 
     let sessionsRegion = {
@@ -549,6 +556,7 @@ module SageFsRender =
       Affordances = []
       Cursor = None
       Completions = None
+      LineAnnotations = [||]
     }
 
     let contextRegion = {
@@ -561,6 +569,7 @@ module SageFsRender =
       Affordances = []
       Cursor = None
       Completions = None
+      LineAnnotations = [||]
     }
 
     [ editorRegion; outputRegion; diagnosticsRegion; sessionsRegion; contextRegion ]

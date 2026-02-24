@@ -1,6 +1,28 @@
 namespace SageFs
 
 open System
+open SageFs.Features.LiveTesting
+
+/// Helper functions for rendering gutter annotations in panes.
+module GutterRender =
+  /// Gutter width: 0 if no annotations, 2 if any exist.
+  let gutterWidth (annotations: LineAnnotation array) : int =
+    if annotations.Length = 0 then 0 else 2
+
+  /// Build a lookup from line number to annotation for O(1) access.
+  let buildLookup (annotations: LineAnnotation array) : Map<int, LineAnnotation> =
+    annotations |> Array.fold (fun m a -> Map.add a.Line a m) Map.empty
+
+  /// Map GutterIcon to a theme foreground color.
+  let iconFgColor (theme: ThemeConfig) (icon: GutterIcon) : uint32 =
+    match icon with
+    | GutterIcon.TestPassed -> Theme.hexToRgb theme.ColorPass
+    | GutterIcon.TestFailed -> Theme.hexToRgb theme.ColorFail
+    | GutterIcon.TestDiscovered -> Theme.hexToRgb theme.ColorWarn
+    | GutterIcon.TestRunning -> Theme.hexToRgb theme.ColorInfo
+    | GutterIcon.TestSkipped -> Theme.hexToRgb theme.FgDim
+    | GutterIcon.Covered -> Theme.hexToRgb theme.ColorPass
+    | GutterIcon.NotCovered -> Theme.hexToRgb theme.FgDim
 
 /// Generate context-sensitive status bar hints from the active KeyMap.
 module StatusHints =
@@ -239,6 +261,12 @@ module Screen =
         let visibleLines = lines |> Array.skip skip |> Array.truncate inner.Clip.Height
         let fg = Theme.hexToRgb theme.FgDefault
 
+        // Gutter annotations (test status / coverage icons)
+        let gw = GutterRender.gutterWidth region.LineAnnotations
+        let annotationLookup =
+          if gw > 0 then GutterRender.buildLookup region.LineAnnotations
+          else Map.empty
+
         // Apply syntax highlighting for editor and output panes
         let shouldHighlight =
           paneId = PaneId.Editor || paneId = PaneId.Output
@@ -251,10 +279,19 @@ module Screen =
 
         visibleLines |> Array.iteri (fun row line ->
           let lineIdx = spanOffset + row
+          // Draw gutter icon if annotations exist
+          if gw > 0 then
+            match Map.tryFind lineIdx annotationLookup with
+            | Some ann ->
+              let iconFg = GutterRender.iconFgColor theme ann.Icon
+              Draw.text inner row 0 iconFg bg CellAttrs.None (sprintf "%c " (GutterIcon.toChar ann.Icon))
+            | None ->
+              Draw.text inner row 0 (Theme.hexToRgb theme.FgDim) bg CellAttrs.None "  "
+          // Draw text content offset by gutter width
           if shouldHighlight && lineIdx < allSpans.Length && allSpans.[lineIdx].Length > 0 then
-            Draw.textHighlighted inner row 0 fg bg CellAttrs.None allSpans.[lineIdx] line
+            Draw.textHighlighted inner row gw fg bg CellAttrs.None allSpans.[lineIdx] line
           else
-            Draw.text inner row 0 fg bg CellAttrs.None line)
+            Draw.text inner row gw fg bg CellAttrs.None line)
 
         // Scroll indicators
         if skip > 0 then
@@ -262,17 +299,17 @@ module Screen =
         if lines.Length > skip + inner.Clip.Height then
           Draw.text inner (inner.Clip.Height - 1) (inner.Clip.Width - 1) (Theme.hexToRgb theme.FgDim) bg CellAttrs.None "▼"
 
-        // Track cursor for focused pane
+        // Track cursor for focused pane (offset by gutter width)
         if paneId = focusedPane then
           match region.Cursor with
           | Some c ->
             let screenRow = rect.Row + 1 + c.Line
-            let screenCol = rect.Col + 1 + c.Col
+            let screenCol = rect.Col + 1 + c.Col + gw
             cursorPos <- Some (screenRow, screenCol)
           | None ->
-            cursorPos <- Some (rect.Row + 1, rect.Col + 1)
+            cursorPos <- Some (rect.Row + 1, rect.Col + 1 + gw)
 
-        // Completion popup overlay
+        // Completion popup overlay (offset by gutter width)
         match region.Completions with
         | Some compl when compl.Items.Length > 0 ->
           let cursorScreenRow =
@@ -281,8 +318,8 @@ module Screen =
             | None -> rect.Row + 1
           let cursorScreenCol =
             match region.Cursor with
-            | Some c -> rect.Col + 1 + c.Col
-            | None -> rect.Col + 1
+            | Some c -> rect.Col + 1 + c.Col + gw
+            | None -> rect.Col + 1 + gw
           let popupRow = cursorScreenRow + 1
           let popupCol = cursorScreenCol
           let maxVisible = min 8 compl.Items.Length

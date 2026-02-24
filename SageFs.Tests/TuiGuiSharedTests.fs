@@ -23,16 +23,16 @@ let verifyGrid (name: string) (text: string) =
 
 let mkRegion id content =
   { Id = id; Content = content; Flags = RegionFlags.None
-    Affordances = []; Cursor = None; Completions = None }
+    Affordances = []; Cursor = None; Completions = None; LineAnnotations = [||] }
 
 let mkRegionWithCursor id content line col =
   { Id = id; Content = content; Flags = RegionFlags.None
-    Affordances = []; Cursor = Some { Line = line; Col = col }; Completions = None }
+    Affordances = []; Cursor = Some { Line = line; Col = col }; Completions = None; LineAnnotations = [||] }
 
 let mkRegionWithCompletions id content items selectedIdx =
   { Id = id; Content = content; Flags = RegionFlags.None
     Affordances = []; Cursor = Some { Line = 0; Col = 0 }
-    Completions = Some { Items = items; SelectedIndex = selectedIdx } }
+    Completions = Some { Items = items; SelectedIndex = selectedIdx }; LineAnnotations = [||] }
 
 // ─── Tier 1: Full pane content rendering ─────────────────────────────────────
 

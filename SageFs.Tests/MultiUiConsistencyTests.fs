@@ -31,7 +31,8 @@ let mkRegion id content cursor completions : RenderRegion =
     Content = content
     Affordances = []
     Cursor = cursor
-    Completions = completions }
+    Completions = completions
+    LineAnnotations = [||] }
 
 let roundtripTests = testList "SSE roundtrip" [
   testCase "content survives serialization roundtrip" <| fun _ ->
