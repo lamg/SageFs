@@ -3669,3 +3669,64 @@ let elmUpdateStatusRecomputationTests = testList "Elm update StatusEntries recom
     failAnns |> Array.length |> Expect.equal "should have 1 fail annotation" 1
   }
 ]
+
+// --- Serialization Roundtrip Integration Tests ---
+
+[<Tests>]
+let serializationRoundtripTests = testList "serialization roundtrip integration" [
+  test "LiveTestHookResult survives JSON roundtrip" {
+    let original : LiveTestHookResult = {
+      DetectedProviders = [
+        ProviderDescription.Custom { Name = "expecto"; AssemblyMarker = "Expecto" }
+        ProviderDescription.AttributeBased { Name = "xunit"; TestAttributes = ["Fact"; "Theory"]; AssemblyMarker = "xunit.core" }
+      ]
+      DiscoveredTests = [|
+        { Id = TestId.create "Test.add" "expecto"
+          FullName = "Test.add"; DisplayName = "add"
+          Origin = TestOrigin.SourceMapped ("test.fs", 10)
+          Labels = ["fast"]; Framework = "expecto"; Category = TestCategory.Unit }
+        { Id = TestId.create "Test.validate" "xunit"
+          FullName = "Test.validate"; DisplayName = "validate"
+          Origin = TestOrigin.ReflectionOnly
+          Labels = []; Framework = "xunit"; Category = TestCategory.Integration }
+      |]
+      AffectedTestIds = [| TestId.create "Test.add" "expecto" |]
+    }
+
+    let json = SageFs.WorkerProtocol.Serialization.serialize original
+    let deserialized = SageFs.WorkerProtocol.Serialization.deserialize<LiveTestHookResult> json
+
+    deserialized
+    |> Expect.equal "roundtrip preserves data" original
+  }
+
+  test "full pipeline: serialize → deserialize → dispatch → annotations" {
+    let hookResult : LiveTestHookResult = {
+      DetectedProviders = [
+        ProviderDescription.Custom { Name = "expecto"; AssemblyMarker = "Expecto" }
+      ]
+      DiscoveredTests = [|
+        { Id = TestId.create "Mod.test1" "expecto"
+          FullName = "Mod.test1"; DisplayName = "test1"
+          Origin = TestOrigin.SourceMapped ("Mod.fs", 5)
+          Labels = []; Framework = "expecto"; Category = TestCategory.Unit }
+      |]
+      AffectedTestIds = [| TestId.create "Mod.test1" "expecto" |]
+    }
+
+    let json = SageFs.WorkerProtocol.Serialization.serialize hookResult
+    let deserialized = SageFs.WorkerProtocol.Serialization.deserialize<LiveTestHookResult> json
+
+    let m0 = SageFsModel.initial
+    let m1, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.ProvidersDetected deserialized.DetectedProviders)) m0
+    let m2, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestsDiscovered deserialized.DiscoveredTests)) m1
+    let m3, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.AffectedTestsComputed deserialized.AffectedTestIds)) m2
+
+    let annotations = LiveTesting.annotationsForFile "Mod.fs" m3.LiveTesting.TestState
+    annotations.Length
+    |> Expect.equal "should have 1 annotation" 1
+
+    annotations.[0].Line
+    |> Expect.equal "annotation on line 5" 5
+  }
+]
