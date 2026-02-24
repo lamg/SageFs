@@ -249,3 +249,100 @@ module TestOrchestrator =
         |> Async.Parallel
       return results
     }
+
+// --- Hot-reload integration hook ---
+
+/// Pure data returned by the live testing hook after a hot reload.
+/// The Elm loop dispatches this as events (ProvidersDetected, TestsDiscovered, etc.)
+type LiveTestHookResult = {
+  DetectedProviders: ProviderDescription list
+  DiscoveredTests: TestCase array
+  AffectedTestIds: TestId array
+}
+
+module LiveTestHookResult =
+  let empty = {
+    DetectedProviders = []
+    DiscoveredTests = [||]
+    AffectedTestIds = [||]
+  }
+
+module LiveTestingHook =
+
+  /// Detect which providers apply to an assembly by checking referenced assemblies.
+  let detectProviders
+    (executors: TestExecutor list)
+    (asm: Assembly)
+    : ProviderDescription list =
+    let referencedNames =
+      try
+        asm.GetReferencedAssemblies()
+        |> Array.map (fun a -> a.Name)
+        |> Set.ofArray
+      with _ -> Set.empty
+    executors
+    |> List.choose (fun executor ->
+      match executor with
+      | TestExecutor.AttributeBased ae ->
+        if referencedNames.Contains ae.Description.AssemblyMarker
+        then Some (ProviderDescription.AttributeBased ae.Description)
+        else None
+      | TestExecutor.Custom ce ->
+        if referencedNames.Contains ce.Description.AssemblyMarker
+        then Some (ProviderDescription.Custom ce.Description)
+        else None)
+
+  /// Discover all tests in an assembly using matching executors.
+  let discoverTests
+    (executors: TestExecutor list)
+    (asm: Assembly)
+    : TestCase array =
+    let referencedNames =
+      try
+        asm.GetReferencedAssemblies()
+        |> Array.map (fun a -> a.Name)
+        |> Set.ofArray
+      with _ -> Set.empty
+    executors
+    |> List.collect (fun executor ->
+      match executor with
+      | TestExecutor.AttributeBased ae ->
+        if referencedNames.Contains ae.Description.AssemblyMarker
+        then AttributeDiscovery.discoverInAssembly ae.Description TestCategory.Unit asm
+        else []
+      | TestExecutor.Custom ce ->
+        if referencedNames.Contains ce.Description.AssemblyMarker
+        then ce.Discover asm
+        else [])
+    |> Array.ofList
+
+  /// Find which discovered tests are affected by updated method names.
+  /// Simple name matching — FCS-based matching comes in Phase 4.
+  let findAffectedTests
+    (discoveredTests: TestCase array)
+    (updatedMethodNames: string list)
+    : TestId array =
+    if List.isEmpty updatedMethodNames then
+      discoveredTests |> Array.map (fun t -> t.Id)
+    else
+      discoveredTests
+      |> Array.filter (fun tc ->
+        updatedMethodNames
+        |> List.exists (fun updated ->
+          tc.FullName.Contains updated
+          || updated.Contains (tc.FullName.Split('.').[0])))
+      |> Array.map (fun t -> t.Id)
+
+  /// Main hook: given executors and a freshly loaded assembly,
+  /// produce the full result for the Elm loop.
+  let afterReload
+    (executors: TestExecutor list)
+    (asm: Assembly)
+    (updatedMethodNames: string list)
+    : LiveTestHookResult =
+    let providers = detectProviders executors asm
+    let tests = discoverTests executors asm
+    let affected = findAffectedTests tests updatedMethodNames
+    { DetectedProviders = providers
+      DiscoveredTests = tests
+      AffectedTestIds = affected }

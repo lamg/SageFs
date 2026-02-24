@@ -59,7 +59,14 @@ let handleMessage
         match response.EvaluationResult with
         | Ok output -> Ok output
         | Error ex -> Error (ex.ToString())
-      return WorkerResponse.EvalResult(replyId, result |> Result.mapError SageFsError.EvalFailed, diags)
+      let metadata =
+        response.Metadata
+        |> Map.fold (fun acc k v ->
+          match v with
+          | :? SageFs.Features.LiveTesting.LiveTestHookResult as hookResult ->
+            acc |> Map.add k (WorkerProtocol.Serialization.serialize hookResult)
+          | _ -> acc) Map.empty
+      return WorkerResponse.EvalResult(replyId, result |> Result.mapError SageFsError.EvalFailed, diags, metadata)
 
     | WorkerMessage.CheckCode(code, replyId) ->
       let! diags = actor.PostAndAsyncReply(fun rc -> GetDiagnostics(code, rc))

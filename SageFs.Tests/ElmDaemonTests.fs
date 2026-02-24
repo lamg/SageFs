@@ -71,7 +71,7 @@ let elmDaemonTests =
       test "creates a valid ElmProgram with all wired components" {
         let deps =
           ElmDaemonTestHelpers.mockDeps (fun _ ->
-            WorkerResponse.EvalResult ("r", Ok "done", []))
+            WorkerResponse.EvalResult ("r", Ok "done", [], Map.empty))
         let tracker = ElmDaemonTestHelpers.ModelTracker()
         let program = ElmDaemon.createProgram deps tracker.OnModelChanged
 
@@ -92,7 +92,7 @@ let elmDaemonTests =
       test "Update delegates to SageFsUpdate.update" {
         let deps =
           ElmDaemonTestHelpers.mockDeps (fun _ ->
-            WorkerResponse.EvalResult ("r", Ok "done", []))
+            WorkerResponse.EvalResult ("r", Ok "done", [], Map.empty))
         let tracker = ElmDaemonTestHelpers.ModelTracker()
         let program = ElmDaemon.createProgram deps tracker.OnModelChanged
 
@@ -110,7 +110,7 @@ let elmDaemonTests =
       test "Render delegates to SageFsRender.render" {
         let deps =
           ElmDaemonTestHelpers.mockDeps (fun _ ->
-            WorkerResponse.EvalResult ("r", Ok "done", []))
+            WorkerResponse.EvalResult ("r", Ok "done", [], Map.empty))
         let tracker = ElmDaemonTestHelpers.ModelTracker()
         let program = ElmDaemon.createProgram deps tracker.OnModelChanged
 
@@ -126,7 +126,7 @@ let elmDaemonTests =
       test "returns a runtime with dispatch that can be called" {
         let deps =
           ElmDaemonTestHelpers.mockDeps (fun _ ->
-            WorkerResponse.EvalResult ("r", Ok "done", []))
+            WorkerResponse.EvalResult ("r", Ok "done", [], Map.empty))
         let tracker = ElmDaemonTestHelpers.ModelTracker()
         let runtime =
           ElmDaemon.start deps tracker.OnModelChanged
@@ -141,7 +141,7 @@ let elmDaemonTests =
       test "initial model is rendered on start" {
         let deps =
           ElmDaemonTestHelpers.mockDeps (fun _ ->
-            WorkerResponse.EvalResult ("r", Ok "done", []))
+            WorkerResponse.EvalResult ("r", Ok "done", [], Map.empty))
         let tracker = ElmDaemonTestHelpers.ModelTracker()
         let _runtime =
           ElmDaemon.start deps tracker.OnModelChanged
@@ -154,7 +154,7 @@ let elmDaemonTests =
       test "dispatching a message updates the model" {
         let deps =
           ElmDaemonTestHelpers.mockDeps (fun _ ->
-            WorkerResponse.EvalResult ("r", Ok "done", []))
+            WorkerResponse.EvalResult ("r", Ok "done", [], Map.empty))
         let tracker = ElmDaemonTestHelpers.ModelTracker()
         let runtime =
           ElmDaemon.start deps tracker.OnModelChanged
@@ -180,7 +180,7 @@ let elmDaemonTests =
             match msg with
             | WorkerMessage.EvalCode _ ->
               evalCalled <- true
-              WorkerResponse.EvalResult ("r", Ok "evaluated!", [])
+              WorkerResponse.EvalResult ("r", Ok "evaluated!", [], Map.empty)
             | _ ->
               WorkerResponse.WorkerError SageFsError.NoActiveSessions)
         let tracker = ElmDaemonTestHelpers.ModelTracker()
@@ -204,7 +204,7 @@ let elmDaemonTests =
       test "GetModel returns current model state" {
         let deps =
           ElmDaemonTestHelpers.mockDeps (fun _ ->
-            WorkerResponse.EvalResult ("r", Ok "done", []))
+            WorkerResponse.EvalResult ("r", Ok "done", [], Map.empty))
         let tracker = ElmDaemonTestHelpers.ModelTracker()
         let runtime =
           ElmDaemon.start deps tracker.OnModelChanged
@@ -218,7 +218,7 @@ let elmDaemonTests =
       test "GetRegions returns current render regions" {
         let deps =
           ElmDaemonTestHelpers.mockDeps (fun _ ->
-            WorkerResponse.EvalResult ("r", Ok "done", []))
+            WorkerResponse.EvalResult ("r", Ok "done", [], Map.empty))
         let tracker = ElmDaemonTestHelpers.ModelTracker()
         let runtime =
           ElmDaemon.start deps tracker.OnModelChanged
@@ -234,7 +234,7 @@ let elmDaemonTests =
       test "dispatches message and returns updated model" {
         let deps =
           ElmDaemonTestHelpers.mockDeps (fun _ ->
-            WorkerResponse.EvalResult ("r", Ok "done", []))
+            WorkerResponse.EvalResult ("r", Ok "done", [], Map.empty))
         let tracker = ElmDaemonTestHelpers.ModelTracker()
         let runtime =
           ElmDaemon.start deps tracker.OnModelChanged

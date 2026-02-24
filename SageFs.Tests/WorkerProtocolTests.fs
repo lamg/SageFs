@@ -74,7 +74,7 @@ let workerProtocolTests =
 
       testCase "EvalResult success round-trips"
       <| fun _ ->
-        let resp = WorkerResponse.EvalResult("r1", Ok "val x: int = 42", [])
+        let resp = WorkerResponse.EvalResult("r1", Ok "val x: int = 42", [], Map.empty)
         let _, result = roundTrip<WorkerResponse> resp
         result |> Expect.equal "should round-trip" resp
 
@@ -88,13 +88,13 @@ let workerProtocolTests =
           EndLine = 1
           EndColumn = 5
         }
-        let resp = WorkerResponse.EvalResult("r2", Ok "val x = 42", [diag])
+        let resp = WorkerResponse.EvalResult("r2", Ok "val x = 42", [diag], Map.empty)
         let _, result = roundTrip<WorkerResponse> resp
         result |> Expect.equal "should round-trip" resp
 
       testCase "EvalResult error round-trips"
       <| fun _ ->
-        let resp = WorkerResponse.EvalResult("r3", Error (SageFsError.EvalFailed "type mismatch"), [])
+        let resp = WorkerResponse.EvalResult("r3", Error (SageFsError.EvalFailed "type mismatch"), [], Map.empty)
         let _, result = roundTrip<WorkerResponse> resp
         result |> Expect.equal "should round-trip" resp
 

@@ -327,9 +327,9 @@ let sessionManagerLifecycleTests =
           proxy (WorkerMessage.EvalCode("let x = 42;;", "e1"))
           |> Async.RunSynchronously
         match evalResp with
-        | WorkerResponse.EvalResult("e1", Ok output, _) ->
+        | WorkerResponse.EvalResult("e1", Ok output, _, _) ->
           output |> Expect.stringContains "has 42" "42"
-        | WorkerResponse.EvalResult(_, Error e, _) ->
+        | WorkerResponse.EvalResult(_, Error e, _, _) ->
           failwithf "eval error: %s" (SageFsError.describe e)
         | other ->
           failwithf "unexpected eval response: %A" other
@@ -459,13 +459,13 @@ let sessionManagerLifecycleTests =
             |> Async.RunSynchronously
 
           match resp1 with
-          | WorkerResponse.EvalResult(_, Ok output, _) ->
+          | WorkerResponse.EvalResult(_, Ok output, _, _) ->
             output
             |> Expect.stringContains "session 1 has 111" "111"
           | _ -> failwithf "unexpected: %A" resp1
 
           match resp2 with
-          | WorkerResponse.EvalResult(_, Ok output, _) ->
+          | WorkerResponse.EvalResult(_, Ok output, _, _) ->
             output
             |> Expect.stringContains "session 2 has 222" "222"
           | _ -> failwithf "unexpected: %A" resp2

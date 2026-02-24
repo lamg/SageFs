@@ -549,7 +549,7 @@ Available: %s%s
 
   let formatWorkerEvalResultJson (response: WorkerProtocol.WorkerResponse) : string =
     match response with
-    | WorkerProtocol.WorkerResponse.EvalResult(_, result, diags) ->
+    | WorkerProtocol.WorkerResponse.EvalResult(_, result, diags, _) ->
       let diagsJson =
         diags
         |> List.map (fun (d: WorkerProtocol.WorkerDiagnostic) ->
@@ -787,7 +787,7 @@ module McpTools =
   /// Format a WorkerResponse.EvalResult for display.
   let formatWorkerEvalResult (response: WorkerProtocol.WorkerResponse) : string =
     match response with
-    | WorkerProtocol.WorkerResponse.EvalResult(_, result, diags) ->
+    | WorkerProtocol.WorkerResponse.EvalResult(_, result, diags, _) ->
       let diagStr =
         if List.isEmpty diags then ""
         else
@@ -823,10 +823,24 @@ module McpTools =
           | Ok response ->
             let formatted = formatWorkerEvalResult response
             match response with
-            | WorkerProtocol.WorkerResponse.EvalResult(_, Ok _, diags) ->
+            | WorkerProtocol.WorkerResponse.EvalResult(_, Ok _, diags, metadata) ->
               notifyElm ctx (
                 SageFsEvent.EvalCompleted (sid, formatted, diags |> List.map WorkerProtocol.WorkerDiagnostic.toDiagnostic))
-            | WorkerProtocol.WorkerResponse.EvalResult(_, Error err, _) ->
+              // Dispatch live testing events from hook metadata
+              match metadata |> Map.tryFind "liveTestHookResult" with
+              | Some json ->
+                try
+                  let hookResult =
+                    WorkerProtocol.Serialization.deserialize<Features.LiveTesting.LiveTestHookResult> json
+                  if not (List.isEmpty hookResult.DetectedProviders) then
+                    notifyElm ctx (SageFsEvent.ProvidersDetected hookResult.DetectedProviders)
+                  if not (Array.isEmpty hookResult.DiscoveredTests) then
+                    notifyElm ctx (SageFsEvent.TestsDiscovered hookResult.DiscoveredTests)
+                  if not (Array.isEmpty hookResult.AffectedTestIds) then
+                    notifyElm ctx (SageFsEvent.AffectedTestsComputed hookResult.AffectedTestIds)
+                with _ -> ()
+              | None -> ()
+            | WorkerProtocol.WorkerResponse.EvalResult(_, Error err, _, _) ->
               notifyElm ctx (
                 SageFsEvent.EvalFailed (sid, SageFsError.describe err))
             | _ -> ()

@@ -561,7 +561,7 @@ module SageFsEffectHandler =
     (sessionId: SessionId)
     (response: WorkerResponse) : SageFsMsg =
     match response with
-    | WorkerResponse.EvalResult (_, Ok output, diags) ->
+    | WorkerResponse.EvalResult (_, Ok output, diags, _) ->
       let diagnostics =
         diags |> List.map (fun d -> {
           Message = d.Message
@@ -576,7 +576,7 @@ module SageFsEffectHandler =
         })
       SageFsMsg.Event (
         SageFsEvent.EvalCompleted (sessionId, output, diagnostics))
-    | WorkerResponse.EvalResult (_, Error err, _) ->
+    | WorkerResponse.EvalResult (_, Error err, _, _) ->
       SageFsMsg.Event (
         SageFsEvent.EvalFailed (sessionId, SageFsError.describe err))
     | WorkerResponse.EvalCancelled _ ->

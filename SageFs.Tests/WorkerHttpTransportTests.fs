@@ -88,7 +88,7 @@ let testHandler (msg: WorkerMessage) : Async<WorkerResponse> = async {
           MaxDurationMs = 500L
           StatusMessage = None })
   | WorkerMessage.EvalCode(code, rid) ->
-    return WorkerResponse.EvalResult(rid, Ok (sprintf "val it: string = \"%s\"" code), [])
+    return WorkerResponse.EvalResult(rid, Ok (sprintf "val it: string = \"%s\"" code), [], Map.empty)
   | WorkerMessage.CheckCode(_, rid) ->
     return WorkerResponse.CheckResult(rid, [])
   | WorkerMessage.GetCompletions(_, _, rid) ->
@@ -111,7 +111,7 @@ let slowEvalHandler (msg: WorkerMessage) : Async<WorkerResponse> = async {
   | WorkerMessage.EvalCode(_, rid) ->
     // Simulate a long-running eval
     do! Async.Sleep 3000
-    return WorkerResponse.EvalResult(rid, Ok "done", [])
+    return WorkerResponse.EvalResult(rid, Ok "done", [], Map.empty)
   | WorkerMessage.GetStatus rid ->
     // Status is always instant
     return
@@ -153,7 +153,7 @@ let httpRoundTripTests =
         let proxy = WorkerHttpTransport.httpProxy server.BaseUrl
         let! resp = proxy (WorkerMessage.EvalCode("hello", "e1")) |> Async.StartAsTask
         match resp with
-        | WorkerResponse.EvalResult(rid, Ok output, _) ->
+        | WorkerResponse.EvalResult(rid, Ok output, _, _) ->
           rid |> Expect.equal "replyId" "e1"
           output |> Expect.stringContains "output" "hello"
         | other -> failwithf "unexpected: %A" other
@@ -220,7 +220,7 @@ let concurrencyTests =
         // Wait for eval to finish
         let! evalResp = evalTask |> Async.AwaitTask
         match evalResp with
-        | WorkerResponse.EvalResult(_, Ok _, _) -> ()
+        | WorkerResponse.EvalResult(_, Ok _, _, _) -> ()
         | other -> failwithf "eval unexpected: %A" other
       finally
         disposeServer server

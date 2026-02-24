@@ -146,3 +146,178 @@ let allExecutorTests = testList "Provider Executors" [
   findExecutorTests
   discoverTests
 ]
+
+// --- LiveTestingHook tests ---
+
+let private getTestAsm () =
+  System.AppDomain.CurrentDomain.GetAssemblies()
+  |> Array.tryFind (fun a -> a.GetName().Name = "SageFs.Tests")
+
+let detectProvidersTests = testList "LiveTestingHook.detectProviders" [
+  test "detects Expecto provider for SageFs.Tests assembly" {
+    match getTestAsm () with
+    | Some asm ->
+      let providers = LiveTestingHook.detectProviders BuiltInExecutors.builtIn asm
+      providers
+      |> List.exists (fun p ->
+        match p with
+        | ProviderDescription.Custom c -> c.Name = "expecto"
+        | _ -> false)
+      |> Expect.isTrue "should detect expecto provider"
+    | None -> skiptest "SageFs.Tests assembly not loaded"
+  }
+
+  test "does not detect xunit provider for SageFs.Tests assembly" {
+    match getTestAsm () with
+    | Some asm ->
+      let providers = LiveTestingHook.detectProviders BuiltInExecutors.builtIn asm
+      providers
+      |> List.exists (fun p ->
+        match p with
+        | ProviderDescription.AttributeBased a -> a.Name = "xunit"
+        | _ -> false)
+      |> Expect.isFalse "should not detect xunit provider"
+    | None -> skiptest "SageFs.Tests assembly not loaded"
+  }
+
+  test "returns empty for assembly with no test frameworks" {
+    let coreAsm = typeof<TestCase>.Assembly
+    let providers = LiveTestingHook.detectProviders BuiltInExecutors.builtIn coreAsm
+    providers
+    |> List.length
+    |> Expect.equal "should detect no providers" 0
+  }
+]
+
+let hookDiscoverTestsTests = testList "LiveTestingHook.discoverTests" [
+  test "discovers Expecto tests in SageFs.Tests assembly" {
+    match getTestAsm () with
+    | Some asm ->
+      let tests = LiveTestingHook.discoverTests BuiltInExecutors.builtIn asm
+      Expect.isTrue "should discover multiple tests" (tests.Length > 0)
+    | None -> skiptest "SageFs.Tests assembly not loaded"
+  }
+
+  test "all discovered tests have framework = expecto" {
+    match getTestAsm () with
+    | Some asm ->
+      let tests = LiveTestingHook.discoverTests BuiltInExecutors.builtIn asm
+      tests
+      |> Array.forall (fun t -> t.Framework = "expecto")
+      |> Expect.isTrue "all tests should be expecto framework"
+    | None -> skiptest "SageFs.Tests assembly not loaded"
+  }
+
+  test "discovers no tests in assembly with no test frameworks" {
+    let coreAsm = typeof<TestCase>.Assembly
+    let tests = LiveTestingHook.discoverTests BuiltInExecutors.builtIn coreAsm
+    tests
+    |> Array.length
+    |> Expect.equal "should discover no tests" 0
+  }
+]
+
+let findAffectedTestsTests = testList "LiveTestingHook.findAffectedTests" [
+  test "returns all test IDs when no updated methods specified" {
+    let tests = [|
+      { Id = TestId.create "Mod.test1" "expecto"
+        FullName = "Mod.test1"; DisplayName = "test1"
+        Origin = TestOrigin.ReflectionOnly; Labels = []
+        Framework = "expecto"; Category = TestCategory.Unit }
+      { Id = TestId.create "Mod.test2" "expecto"
+        FullName = "Mod.test2"; DisplayName = "test2"
+        Origin = TestOrigin.ReflectionOnly; Labels = []
+        Framework = "expecto"; Category = TestCategory.Unit }
+    |]
+    let affected = LiveTestingHook.findAffectedTests tests []
+    affected
+    |> Array.length
+    |> Expect.equal "all tests affected on full reload" 2
+  }
+
+  test "filters to matching tests when updated methods specified" {
+    let tests = [|
+      { Id = TestId.create "MyModule.test1" "expecto"
+        FullName = "MyModule.test1"; DisplayName = "test1"
+        Origin = TestOrigin.ReflectionOnly; Labels = []
+        Framework = "expecto"; Category = TestCategory.Unit }
+      { Id = TestId.create "OtherModule.test2" "expecto"
+        FullName = "OtherModule.test2"; DisplayName = "test2"
+        Origin = TestOrigin.ReflectionOnly; Labels = []
+        Framework = "expecto"; Category = TestCategory.Unit }
+    |]
+    let affected = LiveTestingHook.findAffectedTests tests ["MyModule.helper"]
+    affected
+    |> Array.length
+    |> Expect.equal "only affected test matched" 1
+  }
+
+  test "returns empty when no tests match updated methods" {
+    let tests = [|
+      { Id = TestId.create "MyModule.test1" "expecto"
+        FullName = "MyModule.test1"; DisplayName = "test1"
+        Origin = TestOrigin.ReflectionOnly; Labels = []
+        Framework = "expecto"; Category = TestCategory.Unit }
+    |]
+    let affected = LiveTestingHook.findAffectedTests tests ["UnrelatedModule.func"]
+    affected
+    |> Array.length
+    |> Expect.equal "no tests affected" 0
+  }
+]
+
+let afterReloadTests = testList "LiveTestingHook.afterReload" [
+  test "afterReload produces complete result for SageFs.Tests assembly" {
+    match getTestAsm () with
+    | Some asm ->
+      let result = LiveTestingHook.afterReload BuiltInExecutors.builtIn asm []
+      Expect.isTrue "should detect providers" (not (List.isEmpty result.DetectedProviders))
+      Expect.isTrue "should discover tests" (result.DiscoveredTests.Length > 0)
+      Expect.isTrue "affected = discovered on full reload"
+        (result.AffectedTestIds.Length = result.DiscoveredTests.Length)
+    | None -> skiptest "SageFs.Tests assembly not loaded"
+  }
+
+  test "afterReload returns empty for assembly with no test frameworks" {
+    let coreAsm = typeof<TestCase>.Assembly
+    let result = LiveTestingHook.afterReload BuiltInExecutors.builtIn coreAsm []
+    result.DetectedProviders
+    |> List.length
+    |> Expect.equal "no providers" 0
+    result.DiscoveredTests
+    |> Array.length
+    |> Expect.equal "no tests" 0
+    result.AffectedTestIds
+    |> Array.length
+    |> Expect.equal "no affected" 0
+  }
+
+  test "detected providers match discovered test frameworks" {
+    match getTestAsm () with
+    | Some asm ->
+      let result = LiveTestingHook.afterReload BuiltInExecutors.builtIn asm []
+      let providerNames =
+        result.DetectedProviders
+        |> List.map (fun p ->
+          match p with
+          | ProviderDescription.AttributeBased a -> a.Name
+          | ProviderDescription.Custom c -> c.Name)
+        |> Set.ofList
+      let testFrameworks =
+        result.DiscoveredTests
+        |> Array.map (fun t -> t.Framework)
+        |> Set.ofArray
+      testFrameworks
+      |> Set.forall (fun fw -> providerNames.Contains fw)
+      |> Expect.isTrue "all test frameworks should have detected providers"
+    | None -> skiptest "SageFs.Tests assembly not loaded"
+  }
+]
+
+[<Tests>]
+let allHookTests = testList "LiveTestingHook" [
+  detectProvidersTests
+  hookDiscoverTestsTests
+  findAffectedTestsTests
+  afterReloadTests
+]

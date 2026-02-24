@@ -424,11 +424,11 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
               |> Async.StartAsTask
             let result =
               match resp with
-              | WorkerProtocol.WorkerResponse.EvalResult(_, Ok msg, diags) ->
+              | WorkerProtocol.WorkerResponse.EvalResult(_, Ok msg, diags, _) ->
                 elmRuntime.Dispatch (SageFsMsg.Event (
                   SageFsEvent.EvalCompleted (sid, msg, diags |> List.map WorkerProtocol.WorkerDiagnostic.toDiagnostic)))
                 msg
-              | WorkerProtocol.WorkerResponse.EvalResult(_, Error err, _) ->
+              | WorkerProtocol.WorkerResponse.EvalResult(_, Error err, _, _) ->
                 let msg = SageFsError.describe err
                 elmRuntime.Dispatch (SageFsMsg.Event (
                   SageFsEvent.EvalFailed (sid, msg)))

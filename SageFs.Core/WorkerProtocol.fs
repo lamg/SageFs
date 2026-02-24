@@ -97,7 +97,7 @@ module WorkerProtocol =
 
   [<RequireQualifiedAccess>]
   type WorkerResponse =
-    | EvalResult of replyId: string * result: Result<string, SageFsError> * diagnostics: WorkerDiagnostic list
+    | EvalResult of replyId: string * result: Result<string, SageFsError> * diagnostics: WorkerDiagnostic list * metadata: Map<string, string>
     | CheckResult of replyId: string * diagnostics: WorkerDiagnostic list
     | CompletionResult of replyId: string * completions: string list
     | StatusResult of replyId: string * status: WorkerStatusSnapshot

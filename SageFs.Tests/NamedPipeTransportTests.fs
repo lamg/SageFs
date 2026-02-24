@@ -131,7 +131,7 @@ let pipeIntegrationTests =
         | WorkerMessage.EvalCode(code, rid) ->
           return
             WorkerResponse.EvalResult(
-              rid, Ok (sprintf "val it: int = %s" code), [])
+              rid, Ok (sprintf "val it: int = %s" code), [], Map.empty)
         | WorkerMessage.Shutdown ->
           return WorkerResponse.WorkerShuttingDown
         | _ ->
@@ -151,7 +151,7 @@ let pipeIntegrationTests =
 
         let! resp = proxy (WorkerMessage.EvalCode("1+1", "eval-1"))
         match resp with
-        | WorkerResponse.EvalResult(rid, Ok output, diags) ->
+        | WorkerResponse.EvalResult(rid, Ok output, diags, _) ->
           Expect.equal rid "eval-1" "replyId should match"
           Expect.stringContains output "1+1" "output should contain code"
           Expect.isEmpty diags "no diagnostics expected"

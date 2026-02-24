@@ -108,7 +108,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
     let deps = TestDeps.singleSession log (fun msg ->
       match msg with
       | WorkerMessage.EvalCode (_, rid) ->
-        WorkerResponse.EvalResult (rid, Result.Ok "val x = 42", [])
+        WorkerResponse.EvalResult (rid, Result.Ok "val x = 42", [], Map.empty)
       | _ ->
         WorkerResponse.WorkerError (
           SageFsError.Unexpected (exn "unexpected")))
@@ -135,7 +135,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
         WorkerResponse.EvalResult (
           rid,
           Result.Error (SageFsError.EvalFailed "type mismatch"),
-          [])
+          [], Map.empty)
       | _ ->
         WorkerResponse.WorkerError (SageFsError.Unexpected (exn "x")))
     let mutable dispatched : SageFsMsg list = []
@@ -159,7 +159,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
     let deps = TestDeps.singleSession log (fun msg ->
       match msg with
       | WorkerMessage.EvalCode (_, rid) ->
-        WorkerResponse.EvalResult (rid, Result.Ok "ok", [diag])
+        WorkerResponse.EvalResult (rid, Result.Ok "ok", [diag], Map.empty)
       | _ ->
         WorkerResponse.WorkerError (SageFsError.Unexpected (exn "x")))
     let mutable dispatched : SageFsMsg list = []
@@ -305,7 +305,7 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
       match msg with
       | WorkerMessage.EvalCode (code, rid) ->
         WorkerResponse.EvalResult (
-          rid, Result.Ok (sprintf "val it = %s" code), [])
+          rid, Result.Ok (sprintf "val it = %s" code), [], Map.empty)
       | _ ->
         WorkerResponse.WorkerError (SageFsError.Unexpected (exn "x")))
     let mutable lastModel : SageFsModel option = None

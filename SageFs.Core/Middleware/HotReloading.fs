@@ -351,11 +351,20 @@ let hotReloadingMiddleware next (request, st: AppState) =
     if shouldTriggerReload request.Args && not (List.isEmpty updatedMethods) then
       triggerReload()
 
+    // Live testing hook: discover tests and detect providers after every successful eval.
+    // Results flow as metadata → Elm loop dispatches as events.
+    let hookResult =
+      SageFs.Features.LiveTesting.LiveTestingHook.afterReload
+        SageFs.Features.LiveTesting.BuiltInExecutors.builtIn
+        asm
+        updatedMethods
+
     let metadata =
       if shouldTriggerReload request.Args then
         response.Metadata.Add("reloadedMethods", updatedMethods)
       else
         response.Metadata
+    let metadata = metadata.Add("liveTestHookResult", hookResult)
 
     { response with Metadata = metadata },
     { st with Custom = st.Custom.Add("hotReload", reloadingSt) }
