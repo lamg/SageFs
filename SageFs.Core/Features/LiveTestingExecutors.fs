@@ -514,10 +514,16 @@ module LiveTestingHook =
         else [])
     |> Array.ofList
 
+  /// Returns ALL discovered test IDs. Used by explicit "run all" triggers
+  /// and as conservative fallback when no specific match is found.
+  let findAllTestIds (discoveredTests: TestCase array) : TestId array =
+    discoveredTests |> Array.map (fun t -> t.Id)
+
   /// Find which discovered tests are affected by updated method names.
   /// Simple name matching — FCS-based matching comes in Phase 4.
-  /// Find tests affected by method updates. Empty updatedMethodNames means
-  /// nothing changed — returns empty. Use findAllTestIds for explicit "run all".
+  /// Empty updatedMethodNames means nothing changed — returns empty.
+  /// Conservative fallback: when methods changed but none match by name,
+  /// run ALL discovered tests rather than silently skipping them.
   let findAffectedTests
     (discoveredTests: TestCase array)
     (updatedMethodNames: string list)
@@ -525,17 +531,20 @@ module LiveTestingHook =
     if List.isEmpty updatedMethodNames then
       Array.empty
     else
-      discoveredTests
-      |> Array.filter (fun tc ->
-        updatedMethodNames
-        |> List.exists (fun updated ->
-          tc.FullName.Contains updated
-          || updated.Contains (tc.FullName.Split('.').[0])))
-      |> Array.map (fun t -> t.Id)
-
-  /// Returns ALL discovered test IDs. Used by explicit "run all" triggers.
-  let findAllTestIds (discoveredTests: TestCase array) : TestId array =
-    discoveredTests |> Array.map (fun t -> t.Id)
+      let matched =
+        discoveredTests
+        |> Array.filter (fun tc ->
+          updatedMethodNames
+          |> List.exists (fun updated ->
+            tc.FullName.Contains updated
+            || updated.Contains (tc.FullName.Split('.').[0])))
+        |> Array.map (fun t -> t.Id)
+      // Conservative fallback: if nothing matched, run everything.
+      // Better to run extra tests than silently miss affected ones.
+      if Array.isEmpty matched then
+        findAllTestIds discoveredTests
+      else
+        matched
 
   /// Main hook: given executors and a freshly loaded assembly,
   /// produce the full result for the Elm loop.

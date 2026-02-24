@@ -4727,10 +4727,11 @@ let findAffectedTestsFixTests =
       |> Array.length
       |> Expect.equal "two matches" 2
     }
-    test "non-matching method returns empty" {
+    test "non-matching method falls back to all tests" {
+      // Conservative fallback: non-empty methods but no match → run everything
       LiveTestingHook.findAffectedTests sampleTests ["nonexistent"]
       |> Array.length
-      |> Expect.equal "no matches" 0
+      |> Expect.equal "falls back to all tests" 3
     }
   ]
 

@@ -252,17 +252,18 @@ let findAffectedTestsTests = testList "LiveTestingHook.findAffectedTests" [
     |> Expect.equal "only affected test matched" 1
   }
 
-  test "returns empty when no tests match updated methods" {
+  test "falls back to all tests when no tests match updated methods" {
     let tests = [|
       { Id = TestId.create "MyModule.test1" "expecto"
         FullName = "MyModule.test1"; DisplayName = "test1"
         Origin = TestOrigin.ReflectionOnly; Labels = []
         Framework = "expecto"; Category = TestCategory.Unit }
     |]
+    // Conservative fallback: non-empty methods but no match → run everything
     let affected = LiveTestingHook.findAffectedTests tests ["UnrelatedModule.func"]
     affected
     |> Array.length
-    |> Expect.equal "no tests affected" 0
+    |> Expect.equal "falls back to all tests" 1
   }
 ]
 
