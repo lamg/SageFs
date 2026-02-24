@@ -3,6 +3,7 @@ namespace SageFs
 open System
 open SageFs.WorkerProtocol
 open SageFs.Features.Diagnostics
+open SageFs.Features.LiveTesting
 
 /// The unified message type for the SageFs Elm loop.
 /// All state changes flow through here — user actions and system events.
@@ -381,7 +382,9 @@ module SageFsUpdate =
         { model with LiveTesting = lt }, []
 
       | SageFsEvent.TestRunStarted testIds ->
-        let lt = recomputeStatuses model.LiveTesting (fun s -> { s with IsRunning = true; AffectedTests = Set.ofArray testIds })
+        let lt = recomputeStatuses model.LiveTesting (fun s ->
+          let phase, gen = TestRunPhase.startRun s.LastGeneration
+          { s with RunPhase = phase; LastGeneration = gen; AffectedTests = Set.ofArray testIds })
         { model with LiveTesting = lt }, []
 
       | SageFsEvent.TestResultsBatch results ->
@@ -403,7 +406,9 @@ module SageFsUpdate =
 
       | SageFsEvent.RunTestsRequested tests ->
         let testIds = tests |> Array.map (fun t -> t.Id)
-        let lt = recomputeStatuses model.LiveTesting (fun s -> { s with IsRunning = true; AffectedTests = Set.ofArray testIds })
+        let lt = recomputeStatuses model.LiveTesting (fun s ->
+          let phase, gen = TestRunPhase.startRun s.LastGeneration
+          { s with RunPhase = phase; LastGeneration = gen; AffectedTests = Set.ofArray testIds })
         let effects =
           if Array.isEmpty tests || not lt.TestState.Enabled then []
           else
@@ -854,12 +859,19 @@ module SageFsEffectHandler =
       async {
         match pipelineEffect with
         | Features.LiveTesting.PipelineEffect.ParseTreeSitter (content, filePath) ->
-          let sw = System.Diagnostics.Stopwatch.StartNew()
-          let locations = Features.LiveTesting.TestTreeSitter.discover filePath content
-          sw.Stop()
+          let (locations, elapsed) =
+            Features.LiveTesting.LiveTestingInstrumentation.traced
+              "SageFs.LiveTesting.TreeSitterParse"
+              ["file", box filePath]
+              (fun () ->
+                let sw = System.Diagnostics.Stopwatch.StartNew()
+                let locs = Features.LiveTesting.TestTreeSitter.discover filePath content
+                sw.Stop()
+                (locs, sw.Elapsed))
+          Features.LiveTesting.LiveTestingInstrumentation.treeSitterHistogram.Record(elapsed.TotalMilliseconds)
           dispatch (SageFsMsg.Event (SageFsEvent.TestLocationsDetected locations))
           let timing : Features.LiveTesting.PipelineTiming = {
-            Depth = Features.LiveTesting.PipelineDepth.TreeSitterOnly sw.Elapsed
+            Depth = Features.LiveTesting.PipelineDepth.TreeSitterOnly elapsed
             TotalTests = 0; AffectedTests = 0
             Trigger = Features.LiveTesting.RunTrigger.Keystroke
             Timestamp = System.DateTimeOffset.UtcNow
@@ -876,6 +888,7 @@ module SageFsEffectHandler =
                 let replyId = newReplyId ()
                 let! resp = proxy (WorkerMessage.TypeCheckWithSymbols(code, filePath, replyId))
                 fcsStopwatch.Stop()
+                Features.LiveTesting.LiveTestingInstrumentation.fcsHistogram.Record(fcsStopwatch.Elapsed.TotalMilliseconds)
                 let result =
                   match resp with
                   | WorkerResponse.TypeCheckWithSymbolsResult(_rid, hasErrors, _diags, symRefs) ->
@@ -902,12 +915,20 @@ module SageFsEffectHandler =
             dispatch (SageFsMsg.Event (SageFsEvent.TestRunStarted testIds))
             let ct = deps.PipelineCancellation.TestRun.next()
             Async.Start(async {
+              use activity =
+                Features.LiveTesting.LiveTestingInstrumentation.activitySource.StartActivity(
+                  "SageFs.LiveTesting.TestExecution")
               let sw = System.Diagnostics.Stopwatch.StartNew()
               try
                 let! results =
                   Features.LiveTesting.TestOrchestrator.executeFiltered
                     Features.LiveTesting.BuiltInExecutors.builtIn 4 tests ct
                 sw.Stop()
+                Features.LiveTesting.LiveTestingInstrumentation.executionHistogram.Record(sw.Elapsed.TotalMilliseconds)
+                if activity <> null then
+                  activity.SetTag("test_count", tests.Length) |> ignore
+                  activity.SetTag("trigger", sprintf "%A" trigger) |> ignore
+                  activity.SetTag("duration_ms", sw.Elapsed.TotalMilliseconds) |> ignore
                 dispatch (SageFsMsg.Event (SageFsEvent.TestResultsBatch results))
                 let timing : Features.LiveTesting.PipelineTiming = {
                   Depth = Features.LiveTesting.PipelineDepth.ThroughExecution(

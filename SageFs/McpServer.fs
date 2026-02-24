@@ -24,6 +24,7 @@ open SageFs.McpTools
 // ---------------------------------------------------------------------------
 
 open SageFs.Features.Diagnostics
+open SageFs.Features.LiveTesting
 
 /// Structured events for the push notification accumulator.
 /// Stored as data, formatted for the LLM only on drain.
@@ -719,7 +720,7 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                     | Some getModel ->
                       let model = getModel()
                       let lt = model.LiveTesting.TestState
-                      if lt.StatusEntries.Length > 0 || lt.IsRunning then
+                      if lt.StatusEntries.Length > 0 || TestRunPhase.isRunning lt.RunPhase then
                         let s = SageFs.Features.LiveTesting.TestSummary.fromStatuses
                                   (lt.StatusEntries |> Array.map (fun e -> e.Status))
                         serverTracker.AccumulateEvent(

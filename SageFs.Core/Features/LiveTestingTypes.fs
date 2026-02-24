@@ -275,6 +275,56 @@ type TestSummary = {
   Disabled: int
 }
 
+// --- Run Generation & Phase (replaces IsRunning: bool) ---
+
+[<Struct>]
+type RunGeneration = RunGeneration of int
+
+module RunGeneration =
+  let zero = RunGeneration 0
+  let next (RunGeneration n) = RunGeneration (n + 1)
+  let value (RunGeneration n) = n
+
+type TestRunPhase =
+  | Idle
+  | Running of generation: RunGeneration
+  | RunningButEdited of generation: RunGeneration
+
+/// Why did results arrive the way they did?
+type ResultFreshness =
+  | Fresh
+  | StaleCodeEdited
+  | StaleWrongGeneration
+
+module TestRunPhase =
+  let startRun (currentGen: RunGeneration) : TestRunPhase * RunGeneration =
+    let gen = RunGeneration.next currentGen
+    Running gen, gen
+
+  let onEdit (phase: TestRunPhase) : TestRunPhase =
+    match phase with
+    | Idle -> Idle
+    | Running gen -> RunningButEdited gen
+    | RunningButEdited gen -> RunningButEdited gen
+
+  let onResultsArrived (resultGen: RunGeneration) (phase: TestRunPhase) : TestRunPhase * ResultFreshness =
+    match phase with
+    | Idle -> Idle, Fresh
+    | Running gen when resultGen = gen -> Idle, Fresh
+    | Running _ -> Idle, StaleWrongGeneration
+    | RunningButEdited gen when resultGen = gen -> Idle, StaleCodeEdited
+    | RunningButEdited _ -> Idle, StaleWrongGeneration
+
+  let isRunning (phase: TestRunPhase) : bool =
+    match phase with
+    | Idle -> false
+    | Running _ | RunningButEdited _ -> true
+
+  let currentGeneration (lastGen: RunGeneration) (phase: TestRunPhase) : RunGeneration =
+    match phase with
+    | Idle -> lastGen
+    | Running gen | RunningButEdited gen -> gen
+
 // --- Live Test State (Elm model aggregate) ---
 
 type LiveTestState = {
@@ -283,7 +333,8 @@ type LiveTestState = {
   LastResults: Map<TestId, TestRunResult>
   StatusEntries: TestStatusEntry array
   CoverageAnnotations: CoverageAnnotation array
-  IsRunning: bool
+  RunPhase: TestRunPhase
+  LastGeneration: RunGeneration
   History: RunHistory
   AffectedTests: Set<TestId>
   Enabled: bool
@@ -300,7 +351,8 @@ module LiveTestState =
     LastResults = Map.empty
     StatusEntries = Array.empty
     CoverageAnnotations = Array.empty
-    IsRunning = false
+    RunPhase = Idle
+    LastGeneration = RunGeneration.zero
     History = RunHistory.NeverRun
     AffectedTests = Set.empty
     Enabled = true
@@ -612,7 +664,7 @@ module LiveTesting =
         match Map.tryFind test.Category state.RunPolicies with
         | Some RunPolicy.Disabled -> TestRunStatus.PolicyDisabled
         | _ ->
-          if Set.contains test.Id state.AffectedTests && state.IsRunning then
+          if Set.contains test.Id state.AffectedTests && TestRunPhase.isRunning state.RunPhase then
             TestRunStatus.Running
           elif Set.contains test.Id state.AffectedTests then
             match Map.tryFind test.Id state.LastResults with
@@ -677,13 +729,18 @@ module LiveTesting =
         state.StatusEntries
         |> Array.map (fun e -> e.TestId, e.Status)
         |> Map.ofArray
-      // If IsRunning is already false, code changed mid-run — results are stale.
-      // Keep AffectedTests so status shows Stale instead of the stale result.
-      let alreadyStale = not state.IsRunning
+      // Use RunPhase to determine if results are stale.
+      // RunningButEdited means code changed mid-run — keep AffectedTests so status shows Stale.
+      let newPhase, freshness =
+        TestRunPhase.onResultsArrived state.LastGeneration state.RunPhase
+      let alreadyStale =
+        match freshness with
+        | Fresh -> false
+        | StaleCodeEdited | StaleWrongGeneration -> true
       let updatedState =
         { state with
             LastResults = newResults
-            IsRunning = false
+            RunPhase = newPhase
             AffectedTests = if alreadyStale then state.AffectedTests else Set.empty
             History = RunHistory.PreviousRun maxDuration }
       { updatedState with StatusEntries = computeStatusEntriesWithHistory previousStatuses updatedState }
@@ -992,7 +1049,7 @@ module PipelineOrchestrator =
     : PipelineDecision =
     if not state.Enabled then
       PipelineDecision.Skip "Live testing disabled"
-    elif state.IsRunning then
+    elif TestRunPhase.isRunning state.RunPhase then
       PipelineDecision.Skip "Pipeline already running"
     elif Array.isEmpty state.DiscoveredTests then
       PipelineDecision.TreeSitterOnly
@@ -1332,14 +1389,13 @@ module LiveTestPipelineState =
   let onKeystroke (content: string) (filePath: string) (now: DateTimeOffset) (s: LiveTestPipelineState) =
     let fcsDelay = int (currentFcsDelay s)
     let db = s.Debounce |> PipelineDebounce.onKeystroke content filePath fcsDelay now
-    // When edits arrive while tests are running, in-flight results will be stale.
-    // Set IsRunning=false but keep AffectedTests so computeStatusEntries shows Stale.
-    let ts = if s.TestState.IsRunning then { s.TestState with IsRunning = false } else s.TestState
+    // When edits arrive while tests are running, mark phase as edited so in-flight results are stale.
+    let ts = { s.TestState with RunPhase = TestRunPhase.onEdit s.TestState.RunPhase }
     { s with Debounce = db; TestState = ts; ActiveFile = Some filePath; LastTrigger = RunTrigger.Keystroke }
 
   let onFileSave (filePath: string) (now: DateTimeOffset) (s: LiveTestPipelineState) =
     let db = s.Debounce |> PipelineDebounce.onFileSave filePath now
-    let ts = if s.TestState.IsRunning then { s.TestState with IsRunning = false } else s.TestState
+    let ts = { s.TestState with RunPhase = TestRunPhase.onEdit s.TestState.RunPhase }
     { s with Debounce = db; TestState = ts; ActiveFile = Some filePath; LastTrigger = RunTrigger.FileSave }
 
   let onFcsComplete (filePath: string) (refs: SymbolReference list) (s: LiveTestPipelineState) =

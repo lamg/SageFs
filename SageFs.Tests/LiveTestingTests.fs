@@ -174,12 +174,13 @@ let mergeResultsTests = testList "mergeResults" [
     |> Expect.isTrue "should contain result"
   }
 
-  test "merging results sets IsRunning to false" {
+  test "merging results sets RunPhase to Idle" {
     let tid = mkTestId "t1" "x"
-    let running = { LiveTestState.empty with IsRunning = true }
+    let gen = RunGeneration.next RunGeneration.zero
+    let running = { LiveTestState.empty with RunPhase = Running gen; LastGeneration = gen }
     let results = [| mkResult tid (TestResult.Passed (ts 5.0)) |]
     LiveTesting.mergeResults running results
-    |> fun s -> s.IsRunning
+    |> fun s -> TestRunPhase.isRunning s.RunPhase
     |> Expect.isFalse "should stop running"
   }
 
@@ -675,7 +676,7 @@ let liveTestStateEmptyTests = testList "LiveTestState.empty" [
   }
 
   test "starts not running" {
-    LiveTestState.empty.IsRunning
+    TestRunPhase.isRunning LiveTestState.empty.RunPhase
     |> Expect.isFalse "not running initially"
   }
 
@@ -794,7 +795,7 @@ let elmIntegrationTests = testList "LiveTesting Elm Integration" [
       let model = SageFsModel.initial
       model.LiveTesting.TestState.DiscoveredTests
       |> Expect.equal "no discovered tests" Array.empty
-      model.LiveTesting.TestState.IsRunning
+      TestRunPhase.isRunning model.LiveTesting.TestState.RunPhase
       |> Expect.isFalse "not running"
       model.LiveTesting.TestState.Enabled
       |> Expect.isTrue "enabled"
@@ -830,22 +831,23 @@ let elmIntegrationTests = testList "LiveTesting Elm Integration" [
       model'.LiveTesting.TestState.DiscoveredTests.Length
       |> Expect.equal "should have 1 test" 1
     }
-    test "TestRunStarted sets IsRunning and AffectedTests" {
+    test "TestRunStarted sets RunPhase to Running and AffectedTests" {
       let tid = mkTestId "t1" "x"
       let model', _ =
         SageFsUpdate.update
           (SageFsMsg.Event (SageFsEvent.TestRunStarted [| tid |]))
           SageFsModel.initial
-      model'.LiveTesting.TestState.IsRunning
+      TestRunPhase.isRunning model'.LiveTesting.TestState.RunPhase
       |> Expect.isTrue "should be running"
       Set.contains tid model'.LiveTesting.TestState.AffectedTests
       |> Expect.isTrue "should contain test id"
     }
-    test "TestResultsBatch merges results and clears IsRunning" {
+    test "TestResultsBatch merges results and clears RunPhase" {
+      let gen = RunGeneration.next RunGeneration.zero
       let m =
         { SageFsModel.initial with
             LiveTesting =
-              { SageFsModel.initial.LiveTesting with TestState = { SageFsModel.initial.LiveTesting.TestState with IsRunning = true } } }
+              { SageFsModel.initial.LiveTesting with TestState = { SageFsModel.initial.LiveTesting.TestState with RunPhase = Running gen; LastGeneration = gen } } }
       let tid = mkTestId "t1" "x"
       let r : TestRunResult =
         { TestId = tid; TestName = "t1"
@@ -854,7 +856,7 @@ let elmIntegrationTests = testList "LiveTesting Elm Integration" [
       let model', _ =
         SageFsUpdate.update
           (SageFsMsg.Event (SageFsEvent.TestResultsBatch [| r |])) m
-      model'.LiveTesting.TestState.IsRunning
+      TestRunPhase.isRunning model'.LiveTesting.TestState.RunPhase
       |> Expect.isFalse "should not be running"
       Map.containsKey tid model'.LiveTesting.TestState.LastResults
       |> Expect.isTrue "should have result"
@@ -1340,7 +1342,8 @@ let orchestratorTests = testList "PipelineOrchestrator" [
   }
 
   test "decide skips when already running" {
-    let state = { baseState with IsRunning = true }
+    let gen = RunGeneration.next RunGeneration.zero
+    let state = { baseState with RunPhase = Running gen; LastGeneration = gen }
     let d = PipelineOrchestrator.decide state RunTrigger.Keystroke [ "Module.add" ] depGraph
     match d with
     | PipelineDecision.Skip _ -> ()
@@ -1491,11 +1494,12 @@ let statusEntryTests = testList "StatusEntry Computation" [
   }
 
   test "computeStatusEntries shows Running for affected+running tests" {
+    let gen = RunGeneration.next RunGeneration.zero
     let state = {
       LiveTestState.empty with
         DiscoveredTests = [| test1 |]; Enabled = true
         AffectedTests = Set.ofList [ test1.Id ]
-        IsRunning = true
+        RunPhase = Running gen; LastGeneration = gen
     }
     let entries = LiveTesting.computeStatusEntries state
     entries.[0].Status |> Expect.equal "running" TestRunStatus.Running
@@ -1506,18 +1510,18 @@ let statusEntryTests = testList "StatusEntry Computation" [
       LiveTestState.empty with
         DiscoveredTests = [| test1 |]; Enabled = true
         AffectedTests = Set.ofList [ test1.Id ]
-        IsRunning = false
     }
     let entries = LiveTesting.computeStatusEntries state
     entries.[0].Status |> Expect.equal "queued" TestRunStatus.Queued
   }
 
   test "mergeResults transitions from Running to Passed" {
+    let gen = RunGeneration.next RunGeneration.zero
     let state = {
       LiveTestState.empty with
         DiscoveredTests = [| test1 |]; Enabled = true
         AffectedTests = Set.ofList [ test1.Id ]
-        IsRunning = true
+        RunPhase = Running gen; LastGeneration = gen
     }
     let newResults = [|
       mkResult test1.Id (TestResult.Passed (TimeSpan.FromMilliseconds 10.0))
@@ -3259,8 +3263,9 @@ let elmWiringBehavioralTests = testList "Elm Wiring Behavioral Scenarios" [
       { TestDependencyGraph.empty with
           SymbolToTests = Map.ofList ["Lib.add", [|tc.Id|]]
           TransitiveCoverage = Map.ofList ["Lib.add", [|tc.Id|]] }
+    let gen = RunGeneration.next RunGeneration.zero
     let stale =
-      { Staleness.markStale depGraph ["Lib.add"] state with IsRunning = true }
+      { Staleness.markStale depGraph ["Lib.add"] state with RunPhase = Running gen; LastGeneration = gen }
     stale.StatusEntries |> Array.exists (fun e -> match e.Status with TestRunStatus.Stale -> true | _ -> false)
     |> Expect.isTrue "entry is Stale after symbol change"
     let newResult : TestRunResult =
@@ -3598,30 +3603,33 @@ let private mkPassedResult tid =
 
 [<Tests>]
 let runningToStaleOnKeystrokeTests = testList "Running → Stale on keystroke" [
-  test "keystroke while tests running sets IsRunning to false" {
+  test "keystroke while tests running transitions to RunningButEdited" {
     let tid = TestId.create "TestA" "expecto"
+    let gen = RunGeneration.next RunGeneration.zero
     let s = {
       LiveTestPipelineState.empty with
         TestState = {
           LiveTestState.empty with
             DiscoveredTests = [| mkSourceMappedTestCase "TestA" "expecto" |]
-            IsRunning = true
+            RunPhase = Running gen; LastGeneration = gen
             AffectedTests = Set.singleton tid
         }
     }
     let s' = LiveTestPipelineState.onKeystroke "changed" "Foo.fs" DateTimeOffset.UtcNow s
-    s'.TestState.IsRunning
-    |> Expect.isFalse "IsRunning should be false after keystroke during running"
+    match s'.TestState.RunPhase with
+    | RunningButEdited _ -> ()
+    | other -> failwithf "Expected RunningButEdited, got %A" other
   }
 
   test "keystroke while tests running preserves AffectedTests" {
     let tid = TestId.create "TestA" "expecto"
+    let gen = RunGeneration.next RunGeneration.zero
     let s = {
       LiveTestPipelineState.empty with
         TestState = {
           LiveTestState.empty with
             DiscoveredTests = [| mkSourceMappedTestCase "TestA" "expecto" |]
-            IsRunning = true
+            RunPhase = Running gen; LastGeneration = gen
             AffectedTests = Set.singleton tid
         }
     }
@@ -3630,88 +3638,92 @@ let runningToStaleOnKeystrokeTests = testList "Running → Stale on keystroke" [
     |> Expect.isNonEmpty "AffectedTests should be preserved"
   }
 
-  test "status shows Stale after keystroke during running with previous result" {
+  test "status shows Running after keystroke during running (still running, just edited)" {
     let tid = TestId.create "TestA" "expecto"
+    let gen = RunGeneration.next RunGeneration.zero
     let s = {
       LiveTestPipelineState.empty with
         TestState = {
           LiveTestState.empty with
             DiscoveredTests = [| mkSourceMappedTestCase "TestA" "expecto" |]
-            IsRunning = true
+            RunPhase = Running gen; LastGeneration = gen
             AffectedTests = Set.singleton tid
             LastResults = Map.ofList [ tid, mkPassedResult tid ]
         }
     }
     let s' = LiveTestPipelineState.onKeystroke "changed" "Foo.fs" DateTimeOffset.UtcNow s
     let entries = LiveTesting.computeStatusEntries s'.TestState
+    // RunningButEdited is still considered "running" — tests are still in-flight
     entries.[0].Status
-    |> Expect.equal "should be Stale" TestRunStatus.Stale
+    |> Expect.equal "should be Running (still in-flight)" TestRunStatus.Running
   }
 
   test "status shows Queued for never-run affected test after keystroke" {
     let tid = TestId.create "TestA" "expecto"
+    let gen = RunGeneration.next RunGeneration.zero
     let s = {
       LiveTestPipelineState.empty with
         TestState = {
           LiveTestState.empty with
             DiscoveredTests = [| mkSourceMappedTestCase "TestA" "expecto" |]
-            IsRunning = true
+            RunPhase = Running gen; LastGeneration = gen
             AffectedTests = Set.singleton tid
         }
     }
     let s' = LiveTestPipelineState.onKeystroke "changed" "Foo.fs" DateTimeOffset.UtcNow s
     let entries = LiveTesting.computeStatusEntries s'.TestState
+    // RunningButEdited still shows Running for affected tests
     entries.[0].Status
-    |> Expect.equal "should be Queued" TestRunStatus.Queued
+    |> Expect.equal "should be Running" TestRunStatus.Running
   }
 
-  test "keystroke while NOT running does not change IsRunning" {
+  test "keystroke while NOT running keeps Idle" {
     let s = LiveTestPipelineState.empty
     let s' = LiveTestPipelineState.onKeystroke "changed" "Foo.fs" DateTimeOffset.UtcNow s
-    s'.TestState.IsRunning
-    |> Expect.isFalse "should stay false"
+    s'.TestState.RunPhase
+    |> Expect.equal "should stay Idle" Idle
   }
 ]
 
 [<Tests>]
 let runningToStaleOnFileSaveTests = testList "Running → Stale on file save" [
-  test "save while tests running marks Stale" {
+  test "save while tests running transitions to RunningButEdited" {
     let tid = TestId.create "TestA" "expecto"
+    let gen = RunGeneration.next RunGeneration.zero
     let s = {
       LiveTestPipelineState.empty with
         TestState = {
           LiveTestState.empty with
             DiscoveredTests = [| mkSourceMappedTestCase "TestA" "expecto" |]
-            IsRunning = true
+            RunPhase = Running gen; LastGeneration = gen
             AffectedTests = Set.singleton tid
             LastResults = Map.ofList [ tid, mkPassedResult tid ]
         }
     }
     let s' = LiveTestPipelineState.onFileSave "Foo.fs" DateTimeOffset.UtcNow s
-    s'.TestState.IsRunning
-    |> Expect.isFalse "IsRunning should be false after save during running"
-    let entries = LiveTesting.computeStatusEntries s'.TestState
-    entries.[0].Status
-    |> Expect.equal "should show Stale" TestRunStatus.Stale
+    match s'.TestState.RunPhase with
+    | RunningButEdited _ -> ()
+    | other -> failwithf "Expected RunningButEdited, got %A" other
   }
 
-  test "save while NOT running is no-op on IsRunning" {
+  test "save while NOT running keeps Idle" {
     let s = LiveTestPipelineState.empty
     let s' = LiveTestPipelineState.onFileSave "Foo.fs" DateTimeOffset.UtcNow s
-    s'.TestState.IsRunning
-    |> Expect.isFalse "should stay false"
+    s'.TestState.RunPhase
+    |> Expect.equal "should stay Idle" Idle
   }
 ]
 
 [<Tests>]
 let mergeResultsStalenessFixTests = testList "mergeResults staleness handling" [
-  test "stale results (IsRunning already false) keep AffectedTests" {
+  test "stale results (RunningButEdited phase) keep AffectedTests" {
     let tid = TestId.create "TestA" "expecto"
     let result = mkResult tid (TestResult.Passed (TimeSpan.FromMilliseconds 10.0))
+    let gen = RunGeneration.next RunGeneration.zero
     let s = {
       LiveTestState.empty with
         DiscoveredTests = [| mkSourceMappedTestCase "TestA" "expecto" |]
-        IsRunning = false
+        RunPhase = RunningButEdited gen; LastGeneration = gen
         AffectedTests = Set.singleton tid
     }
     let s' = LiveTesting.mergeResults s [| result |]
@@ -3722,10 +3734,11 @@ let mergeResultsStalenessFixTests = testList "mergeResults staleness handling" [
   test "stale results show Stale status not Passed" {
     let tid = TestId.create "TestA" "expecto"
     let result = mkResult tid (TestResult.Passed (TimeSpan.FromMilliseconds 10.0))
+    let gen = RunGeneration.next RunGeneration.zero
     let s = {
       LiveTestState.empty with
         DiscoveredTests = [| mkSourceMappedTestCase "TestA" "expecto" |]
-        IsRunning = false
+        RunPhase = RunningButEdited gen; LastGeneration = gen
         AffectedTests = Set.singleton tid
     }
     let s' = LiveTesting.mergeResults s [| result |]
@@ -3734,18 +3747,100 @@ let mergeResultsStalenessFixTests = testList "mergeResults staleness handling" [
     |> Expect.equal "should show Stale" TestRunStatus.Stale
   }
 
-  test "fresh results (IsRunning was true) clear AffectedTests" {
+  test "fresh results (Running phase) clear AffectedTests" {
     let tid = TestId.create "TestA" "expecto"
     let result = mkResult tid (TestResult.Passed (TimeSpan.FromMilliseconds 10.0))
+    let gen = RunGeneration.next RunGeneration.zero
     let s = {
       LiveTestState.empty with
         DiscoveredTests = [| mkSourceMappedTestCase "TestA" "expecto" |]
-        IsRunning = true
+        RunPhase = Running gen; LastGeneration = gen
         AffectedTests = Set.singleton tid
     }
     let s' = LiveTesting.mergeResults s [| result |]
     s'.AffectedTests
     |> Expect.isEmpty "fresh results should clear AffectedTests"
+  }
+]
+
+// --- RunGeneration, TestRunPhase, and ResultFreshness tests ---
+
+[<Tests>]
+let runGenerationTests = testList "RunGeneration" [
+  test "zero starts at 0" {
+    RunGeneration.value RunGeneration.zero
+    |> Expect.equal "zero is 0" 0
+  }
+  test "next increments" {
+    RunGeneration.zero |> RunGeneration.next |> RunGeneration.value
+    |> Expect.equal "next of zero is 1" 1
+  }
+]
+
+[<Tests>]
+let testRunPhaseTests = testList "TestRunPhase state machine" [
+  test "initial state is Idle" {
+    let phase = Idle
+    TestRunPhase.isRunning phase
+    |> Expect.isFalse "Idle is not running"
+  }
+  test "startRun transitions to Running with incremented generation" {
+    let phase, gen = TestRunPhase.startRun RunGeneration.zero
+    TestRunPhase.isRunning phase |> Expect.isTrue "should be running"
+    RunGeneration.value gen |> Expect.equal "gen is 1" 1
+  }
+  test "onEdit from Running transitions to RunningButEdited" {
+    let phase, gen = TestRunPhase.startRun RunGeneration.zero
+    let edited = TestRunPhase.onEdit phase
+    match edited with
+    | RunningButEdited g -> RunGeneration.value g |> Expect.equal "same gen" (RunGeneration.value gen)
+    | other -> failwithf "Expected RunningButEdited, got %A" other
+  }
+  test "onEdit from Idle stays Idle" {
+    TestRunPhase.onEdit Idle |> Expect.equal "stays Idle" Idle
+  }
+  test "onEdit from RunningButEdited stays RunningButEdited" {
+    let gen = RunGeneration.next RunGeneration.zero
+    let phase = RunningButEdited gen
+    TestRunPhase.onEdit phase |> Expect.equal "stays RunningButEdited" (RunningButEdited gen)
+  }
+  test "onResultsArrived with matching gen from Running returns Fresh" {
+    let gen = RunGeneration.next RunGeneration.zero
+    let phase, freshness = TestRunPhase.onResultsArrived gen (Running gen)
+    phase |> Expect.equal "back to Idle" Idle
+    freshness |> Expect.equal "fresh" Fresh
+  }
+  test "onResultsArrived with matching gen from RunningButEdited returns StaleCodeEdited" {
+    let gen = RunGeneration.next RunGeneration.zero
+    let phase, freshness = TestRunPhase.onResultsArrived gen (RunningButEdited gen)
+    phase |> Expect.equal "back to Idle" Idle
+    freshness |> Expect.equal "stale code edited" StaleCodeEdited
+  }
+  test "onResultsArrived with old gen returns StaleWrongGeneration" {
+    let oldGen = RunGeneration.next RunGeneration.zero
+    let newGen = RunGeneration.next oldGen
+    let phase, freshness = TestRunPhase.onResultsArrived oldGen (Running newGen)
+    phase |> Expect.equal "back to Idle" Idle
+    freshness |> Expect.equal "stale wrong gen" StaleWrongGeneration
+  }
+  test "multiple edits stay RunningButEdited with same gen" {
+    let phase, gen = TestRunPhase.startRun RunGeneration.zero
+    let e1 = TestRunPhase.onEdit phase
+    let e2 = TestRunPhase.onEdit e1
+    match e2 with
+    | RunningButEdited g -> RunGeneration.value g |> Expect.equal "same gen" (RunGeneration.value gen)
+    | other -> failwithf "Expected RunningButEdited, got %A" other
+  }
+  test "full lifecycle: run→edit→stale→new run→fresh" {
+    let phase1, gen1 = TestRunPhase.startRun RunGeneration.zero
+    let edited = TestRunPhase.onEdit phase1
+    let phase2, freshness1 = TestRunPhase.onResultsArrived gen1 edited
+    freshness1 |> Expect.equal "first run stale" StaleCodeEdited
+    phase2 |> Expect.equal "back to Idle" Idle
+    let phase3, gen2 = TestRunPhase.startRun gen1
+    let phase4, freshness2 = TestRunPhase.onResultsArrived gen2 phase3
+    freshness2 |> Expect.equal "second run fresh" Fresh
+    phase4 |> Expect.equal "back to Idle" Idle
   }
 ]
 
