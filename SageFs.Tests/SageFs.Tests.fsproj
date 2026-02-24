@@ -75,6 +75,7 @@
         <Compile Include="WarmupContextTests.fs" />
         <Compile Include="VscodeExtensionTests.fs" />
         <Compile Include="LiveTestingTests.fs" />
+        <Compile Include="LiveTestingExecutorTests.fs" />
         <Compile Include="Program.fs" />
     </ItemGroup>
 
