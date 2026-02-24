@@ -364,12 +364,20 @@ module SageFsUpdate =
 
       // ── Live testing events ──
       | SageFsEvent.TestLocationsDetected locations ->
-        let lt = recomputeStatuses model.LiveTesting (fun s -> { s with SourceLocations = locations })
+        let lt = recomputeStatuses model.LiveTesting (fun s ->
+          let merged =
+            if Array.isEmpty s.DiscoveredTests then s.DiscoveredTests
+            else Features.LiveTesting.SourceMapping.mergeSourceLocations locations s.DiscoveredTests
+          { s with SourceLocations = locations; DiscoveredTests = merged })
         { model with LiveTesting = lt }, []
 
       | SageFsEvent.TestsDiscovered tests ->
         let lt = recomputeStatuses model.LiveTesting (fun s ->
-          { s with DiscoveredTests = Features.LiveTesting.LiveTesting.mergeDiscoveredTests s.DiscoveredTests tests })
+          let disc = Features.LiveTesting.LiveTesting.mergeDiscoveredTests s.DiscoveredTests tests
+          let merged =
+            if Array.isEmpty s.SourceLocations then disc
+            else Features.LiveTesting.SourceMapping.mergeSourceLocations s.SourceLocations disc
+          { s with DiscoveredTests = merged })
         { model with LiveTesting = lt }, []
 
       | SageFsEvent.TestRunStarted testIds ->
