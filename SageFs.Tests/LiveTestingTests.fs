@@ -1408,3 +1408,666 @@ let policyFilterTests = testList "PolicyFilter" [
     explicit.Length |> Expect.equal "unit + integration on explicit" 2
   }
 ]
+
+// ============================================================
+// Staleness Tests
+// ============================================================
+
+[<Tests>]
+let stalenessTests = testList "Staleness" [
+  let test1 =
+    { Id = TestId.create "Module.Tests.test1" "expecto"; FullName = "Module.Tests.test1"
+      DisplayName = "test1"; Origin = TestOrigin.ReflectionOnly
+      Labels = []; Framework = "expecto"; Category = TestCategory.Unit }
+  let test2 =
+    { Id = TestId.create "Module.Tests.test2" "expecto"; FullName = "Module.Tests.test2"
+      DisplayName = "test2"; Origin = TestOrigin.ReflectionOnly
+      Labels = []; Framework = "expecto"; Category = TestCategory.Unit }
+  let mkResult tid res =
+    { TestId = tid; TestName = ""; Result = res; Timestamp = DateTimeOffset.UtcNow }
+  let depGraph = {
+    SymbolToTests = Map.ofList [
+      "Module.add", [| test1.Id |]
+      "Module.validate", [| test1.Id; test2.Id |]
+    ]
+    TransitiveCoverage = Map.empty; SourceVersion = 1
+  }
+  let baseState = {
+    LiveTestState.empty with
+      DiscoveredTests = [| test1; test2 |]
+      LastResults = Map.ofList [
+        test1.Id, mkResult test1.Id (TestResult.Passed (TimeSpan.FromMilliseconds 5.0))
+        test2.Id, mkResult test2.Id (TestResult.Passed (TimeSpan.FromMilliseconds 3.0))
+      ]
+      Enabled = true
+  }
+
+  test "markStale marks affected tests as NotRun" {
+    let result = Staleness.markStale depGraph [ "Module.add" ] baseState
+    let r = Map.find test1.Id result.LastResults
+    r.Result |> Expect.equal "not run" TestResult.NotRun
+    let r2 = Map.find test2.Id result.LastResults
+    match r2.Result with
+    | TestResult.Passed _ -> ()
+    | other -> failwithf "Expected Passed, got %A" other
+  }
+
+  test "markStale sets affected tests in state" {
+    let result = Staleness.markStale depGraph [ "Module.add" ] baseState
+    result.AffectedTests |> Expect.contains "test1 affected" test1.Id
+  }
+
+  test "markStale with shared symbol affects multiple tests" {
+    let result = Staleness.markStale depGraph [ "Module.validate" ] baseState
+    result.AffectedTests.Count |> Expect.equal "2 affected" 2
+  }
+
+  test "markStale with unknown symbol changes nothing" {
+    let result = Staleness.markStale depGraph [ "Unknown.func" ] baseState
+    result.AffectedTests |> Expect.isEmpty "no affected"
+  }
+]
+
+// ============================================================
+// Pipeline Orchestrator Tests
+// ============================================================
+
+[<Tests>]
+let orchestratorTests = testList "PipelineOrchestrator" [
+  let test1 =
+    { Id = TestId.create "Module.Tests.test1" "expecto"; FullName = "Module.Tests.test1"
+      DisplayName = "test1"; Origin = TestOrigin.ReflectionOnly
+      Labels = []; Framework = "expecto"; Category = TestCategory.Unit }
+  let test2 =
+    { Id = TestId.create "Module.Tests.test2" "expecto"; FullName = "Module.Tests.test2"
+      DisplayName = "test2"; Origin = TestOrigin.ReflectionOnly
+      Labels = []; Framework = "expecto"; Category = TestCategory.Unit }
+  let intTest =
+    { Id = TestId.create "Module.Tests.intTest" "expecto"; FullName = "Module.Tests.intTest"
+      DisplayName = "intTest"; Origin = TestOrigin.ReflectionOnly
+      Labels = []; Framework = "expecto"; Category = TestCategory.Integration }
+  let depGraph = {
+    SymbolToTests = Map.ofList [
+      "Module.add", [| test1.Id |]
+      "Module.validate", [| test1.Id; test2.Id |]
+      "Module.dbCall", [| intTest.Id |]
+    ]
+    TransitiveCoverage = Map.empty; SourceVersion = 1
+  }
+  let baseState = {
+    LiveTestState.empty with
+      DiscoveredTests = [| test1; test2; intTest |]
+      Enabled = true
+  }
+
+  test "decide skips when disabled" {
+    let state = { baseState with Enabled = false }
+    let d = PipelineOrchestrator.decide state RunTrigger.Keystroke [ "Module.add" ] depGraph
+    match d with
+    | PipelineDecision.Skip _ -> ()
+    | other -> failwithf "Expected Skip, got %A" other
+  }
+
+  test "decide skips when already running" {
+    let state = { baseState with IsRunning = true }
+    let d = PipelineOrchestrator.decide state RunTrigger.Keystroke [ "Module.add" ] depGraph
+    match d with
+    | PipelineDecision.Skip _ -> ()
+    | other -> failwithf "Expected Skip, got %A" other
+  }
+
+  test "decide returns TreeSitterOnly when no tests discovered" {
+    let state = { baseState with DiscoveredTests = [||] }
+    let d = PipelineOrchestrator.decide state RunTrigger.Keystroke [ "Module.add" ] depGraph
+    d |> Expect.equal "tree sitter only" PipelineDecision.TreeSitterOnly
+  }
+
+  test "decide returns FullPipeline with affected unit tests on Keystroke" {
+    let d = PipelineOrchestrator.decide baseState RunTrigger.Keystroke [ "Module.add" ] depGraph
+    match d with
+    | PipelineDecision.FullPipeline ids ->
+      ids.Length |> Expect.equal "1 affected" 1
+      ids.[0] |> Expect.equal "test1" test1.Id
+    | other -> failwithf "Expected FullPipeline, got %A" other
+  }
+
+  test "decide filters integration tests on Keystroke" {
+    let d = PipelineOrchestrator.decide baseState RunTrigger.Keystroke [ "Module.dbCall" ] depGraph
+    match d with
+    | PipelineDecision.TreeSitterOnly -> ()
+    | other -> failwithf "Expected TreeSitterOnly (integration filtered), got %A" other
+  }
+
+  test "decide returns TreeSitterOnly when all affected tests filtered by policy" {
+    let state = {
+      baseState with
+        RunPolicies = Map.ofList [ TestCategory.Unit, RunPolicy.OnDemand ]
+    }
+    let d = PipelineOrchestrator.decide state RunTrigger.Keystroke [ "Module.add" ] depGraph
+    match d with
+    | PipelineDecision.TreeSitterOnly -> ()
+    | other -> failwithf "Expected TreeSitterOnly, got %A" other
+  }
+
+  test "decide includes integration tests on ExplicitRun" {
+    let d = PipelineOrchestrator.decide baseState RunTrigger.ExplicitRun [ "Module.dbCall" ] depGraph
+    match d with
+    | PipelineDecision.FullPipeline ids ->
+      ids.Length |> Expect.equal "1 integration" 1
+      ids.[0] |> Expect.equal "intTest" intTest.Id
+    | other -> failwithf "Expected FullPipeline, got %A" other
+  }
+
+  test "buildRunBatch returns matching test cases" {
+    let batch = PipelineOrchestrator.buildRunBatch baseState [| test1.Id |]
+    batch.Length |> Expect.equal "1 test" 1
+    batch.[0].FullName |> Expect.equal "test1" "Module.Tests.test1"
+  }
+
+  test "buildRunBatch filters out unknown IDs" {
+    let unknownId = TestId.create "Unknown.test" "xunit"
+    let batch = PipelineOrchestrator.buildRunBatch baseState [| unknownId |]
+    batch |> Expect.isEmpty "no matches"
+  }
+]
+
+// ============================================================
+// Pipeline Status Bar Tests
+// ============================================================
+
+[<Tests>]
+let pipelineStatusBarTests = testList "Pipeline Status Bar" [
+  test "full pipeline timing formats correctly" {
+    let timing = {
+      Depth = PipelineDepth.ThroughExecution (
+        TimeSpan.FromMilliseconds 0.8,
+        TimeSpan.FromMilliseconds 142.0,
+        TimeSpan.FromMilliseconds 87.0)
+      TotalTests = 100; AffectedTests = 12
+      Trigger = RunTrigger.Keystroke
+      Timestamp = DateTimeOffset.UtcNow
+    }
+    let bar = PipelineTiming.toStatusBar timing
+    bar |> Expect.stringContains "TS" "TS:"
+    bar |> Expect.stringContains "FCS" "FCS:"
+    bar |> Expect.stringContains "Run" "Run:"
+    bar |> Expect.stringContains "tests" "12"
+  }
+
+  test "tree-sitter only timing shows partial" {
+    let timing = {
+      Depth = PipelineDepth.TreeSitterOnly (TimeSpan.FromMilliseconds 0.5)
+      TotalTests = 100; AffectedTests = 0
+      Trigger = RunTrigger.Keystroke; Timestamp = DateTimeOffset.UtcNow
+    }
+    let bar = PipelineTiming.toStatusBar timing
+    bar |> Expect.stringContains "TS" "TS:"
+    Expect.isFalse "no FCS" (bar.Contains "FCS:")
+  }
+
+  test "pipeline history ring buffer tracks last N runs" {
+    let history = PipelineHistory(3)
+    for i in 1..5 do
+      let t = {
+        Depth = PipelineDepth.TreeSitterOnly (TimeSpan.FromMilliseconds (float i))
+        TotalTests = i; AffectedTests = 0
+        Trigger = RunTrigger.Keystroke; Timestamp = DateTimeOffset.UtcNow
+      }
+      history.Add(t)
+    history.Count |> Expect.equal "capped at 3" 3
+    let latest = history.Latest
+    match latest with
+    | Some t -> t.TotalTests |> Expect.equal "latest is 5" 5
+    | None -> failwith "Expected Some"
+  }
+
+  test "pipeline history latest returns most recent" {
+    let history = PipelineHistory(10)
+    let t = {
+      Depth = PipelineDepth.TreeSitterOnly (TimeSpan.FromMilliseconds 1.0)
+      TotalTests = 42; AffectedTests = 0
+      Trigger = RunTrigger.Keystroke; Timestamp = DateTimeOffset.UtcNow
+    }
+    history.Add(t)
+    let latest = history.Latest
+    match latest with
+    | Some l -> l.TotalTests |> Expect.equal "42" 42
+    | None -> failwith "Expected Some"
+  }
+]
+
+// ============================================================
+// StatusEntry Computation Integration Tests
+// ============================================================
+
+[<Tests>]
+let statusEntryTests = testList "StatusEntry Computation" [
+  let test1 =
+    { Id = TestId.create "Module.Tests.test1" "expecto"; FullName = "Module.Tests.test1"
+      DisplayName = "test1"; Origin = TestOrigin.ReflectionOnly
+      Labels = []; Framework = "expecto"; Category = TestCategory.Unit }
+  let test2 =
+    { Id = TestId.create "Module.Tests.test2" "expecto"; FullName = "Module.Tests.test2"
+      DisplayName = "test2"; Origin = TestOrigin.ReflectionOnly
+      Labels = []; Framework = "expecto"; Category = TestCategory.Unit }
+  let mkResult tid res =
+    { TestId = tid; TestName = ""; Result = res; Timestamp = DateTimeOffset.UtcNow }
+
+  test "computeStatusEntries maps Passed results correctly" {
+    let state = {
+      LiveTestState.empty with
+        DiscoveredTests = [| test1 |]
+        LastResults = Map.ofList [
+          test1.Id, mkResult test1.Id (TestResult.Passed (TimeSpan.FromMilliseconds 5.0))
+        ]
+        Enabled = true
+    }
+    let entries = LiveTesting.computeStatusEntries state
+    entries.Length |> Expect.equal "1 entry" 1
+    match entries.[0].Status with
+    | TestRunStatus.Passed dur -> dur.TotalMilliseconds |> Expect.floatClose "5ms" Accuracy.medium 5.0
+    | other -> failwithf "Expected Passed, got %A" other
+  }
+
+  test "computeStatusEntries shows Detected for tests with no results" {
+    let state = {
+      LiveTestState.empty with
+        DiscoveredTests = [| test1 |]; Enabled = true
+    }
+    let entries = LiveTesting.computeStatusEntries state
+    entries.[0].Status |> Expect.equal "detected" TestRunStatus.Detected
+  }
+
+  test "computeStatusEntries shows PolicyDisabled for disabled categories" {
+    let state = {
+      LiveTestState.empty with
+        DiscoveredTests = [| test1 |]; Enabled = true
+        RunPolicies = Map.ofList [ TestCategory.Unit, RunPolicy.Disabled ]
+    }
+    let entries = LiveTesting.computeStatusEntries state
+    entries.[0].Status |> Expect.equal "disabled" TestRunStatus.PolicyDisabled
+  }
+
+  test "computeStatusEntries shows Running for affected+running tests" {
+    let state = {
+      LiveTestState.empty with
+        DiscoveredTests = [| test1 |]; Enabled = true
+        AffectedTests = Set.ofList [ test1.Id ]
+        IsRunning = true
+    }
+    let entries = LiveTesting.computeStatusEntries state
+    entries.[0].Status |> Expect.equal "running" TestRunStatus.Running
+  }
+
+  test "computeStatusEntries shows Queued for affected but not running" {
+    let state = {
+      LiveTestState.empty with
+        DiscoveredTests = [| test1 |]; Enabled = true
+        AffectedTests = Set.ofList [ test1.Id ]
+        IsRunning = false
+    }
+    let entries = LiveTesting.computeStatusEntries state
+    entries.[0].Status |> Expect.equal "queued" TestRunStatus.Queued
+  }
+
+  test "mergeResults transitions from Running to Passed" {
+    let state = {
+      LiveTestState.empty with
+        DiscoveredTests = [| test1 |]; Enabled = true
+        AffectedTests = Set.ofList [ test1.Id ]
+        IsRunning = true
+    }
+    let newResults = [|
+      mkResult test1.Id (TestResult.Passed (TimeSpan.FromMilliseconds 10.0))
+    |]
+    let merged = LiveTesting.mergeResults state newResults
+    let entry = merged.StatusEntries |> Array.find (fun e -> e.TestId = test1.Id)
+    match entry.Status with
+    | TestRunStatus.Passed _ -> ()
+    | other -> failwithf "Expected Passed, got %A" other
+  }
+
+  test "mergeResults preserves previousStatus" {
+    let state = {
+      LiveTestState.empty with
+        DiscoveredTests = [| test1 |]; Enabled = true
+        LastResults = Map.ofList [
+          test1.Id, mkResult test1.Id (TestResult.Passed (TimeSpan.FromMilliseconds 5.0))
+        ]
+    }
+    let state = { state with StatusEntries = LiveTesting.computeStatusEntries state }
+    let newResults = [|
+      mkResult test1.Id (TestResult.Failed (TestFailure.AssertionFailed "oops", TimeSpan.FromMilliseconds 1.0))
+    |]
+    let merged = LiveTesting.mergeResults state newResults
+    let entry = merged.StatusEntries |> Array.find (fun e -> e.TestId = test1.Id)
+    match entry.PreviousStatus with
+    | TestRunStatus.Passed _ -> ()
+    | other -> failwithf "Expected previous Passed, got %A" other
+  }
+]
+
+// ============================================================
+// Gutter Annotation Tests
+// ============================================================
+
+[<Tests>]
+let annotationTests = testList "Gutter Annotations" [
+  let test1 =
+    { Id = TestId.create "Module.Tests.test1" "expecto"; FullName = "Module.Tests.test1"
+      DisplayName = "test1"; Origin = TestOrigin.SourceMapped ("test.fs", 10)
+      Labels = []; Framework = "expecto"; Category = TestCategory.Unit }
+  let mkResult tid res =
+    { TestId = tid; TestName = ""; Result = res; Timestamp = DateTimeOffset.UtcNow }
+
+  test "annotationsForFile returns tree-sitter locations when no results" {
+    let state = {
+      LiveTestState.empty with
+        SourceLocations = [|
+          { AttributeName = "Test"; FilePath = "test.fs"; Line = 10; Column = 0 }
+          { AttributeName = "Test"; FilePath = "other.fs"; Line = 5; Column = 0 }
+        |]
+        Enabled = true
+    }
+    let annotations = LiveTesting.annotationsForFile "test.fs" state
+    annotations.Length |> Expect.equal "1 annotation" 1
+    annotations.[0].Line |> Expect.equal "line 10" 10
+    annotations.[0].Icon |> Expect.equal "detected glyph" GutterIcon.TestDiscovered
+  }
+
+  test "annotationsForFile prefers result annotations over tree-sitter" {
+    let baseState = {
+      LiveTestState.empty with
+        SourceLocations = [|
+          { AttributeName = "Test"; FilePath = "test.fs"; Line = 10; Column = 0 }
+        |]
+        DiscoveredTests = [| test1 |]
+        LastResults = Map.ofList [
+          test1.Id, mkResult test1.Id (TestResult.Passed (TimeSpan.FromMilliseconds 5.0))
+        ]
+        Enabled = true
+    }
+    let state = { baseState with StatusEntries = LiveTesting.computeStatusEntries baseState }
+    let annotations = LiveTesting.annotationsForFile "test.fs" state
+    annotations.Length |> Expect.equal "1 annotation" 1
+    annotations.[0].Icon |> Expect.equal "passed glyph" GutterIcon.TestPassed
+  }
+
+  test "GutterIcon chars are correct" {
+    GutterIcon.toChar GutterIcon.TestPassed |> Expect.equal "check" '\u2713'
+    GutterIcon.toChar GutterIcon.TestFailed |> Expect.equal "cross" '\u2717'
+    GutterIcon.toChar GutterIcon.TestDiscovered |> Expect.equal "diamond" '\u25C6'
+  }
+
+  test "tooltip includes duration for passed tests" {
+    let status = TestRunStatus.Passed (TimeSpan.FromMilliseconds 12.5)
+    let tip = StatusToGutter.tooltip "test1" status
+    tip |> Expect.stringContains "check mark" "\u2713"
+    tip |> Expect.stringContains "duration" "12"
+  }
+
+  test "tooltip shows failure message" {
+    let status = TestRunStatus.Failed (TestFailure.AssertionFailed "expected 42 got 0", TimeSpan.FromMilliseconds 1.0)
+    let tip = StatusToGutter.tooltip "test1" status
+    tip |> Expect.stringContains "cross mark" "\u2717"
+    tip |> Expect.stringContains "message" "expected 42 got 0"
+  }
+]
+
+// ============================================================
+// Coverage Projection Tests
+// ============================================================
+
+[<Tests>]
+let coverageProjectionExtendedTests = testList "Coverage Projection Extended" [
+  let test1 =
+    { Id = TestId.create "Module.Tests.test1" "expecto"; FullName = "Module.Tests.test1"
+      DisplayName = "test1"; Origin = TestOrigin.ReflectionOnly
+      Labels = []; Framework = "expecto"; Category = TestCategory.Unit }
+  let test2 =
+    { Id = TestId.create "Module.Tests.test2" "expecto"; FullName = "Module.Tests.test2"
+      DisplayName = "test2"; Origin = TestOrigin.ReflectionOnly
+      Labels = []; Framework = "expecto"; Category = TestCategory.Unit }
+  let mkResult tid res =
+    { TestId = tid; TestName = ""; Result = res; Timestamp = DateTimeOffset.UtcNow }
+  let results = Map.ofList [
+    test1.Id, mkResult test1.Id (TestResult.Passed (TimeSpan.FromMilliseconds 5.0))
+    test2.Id, mkResult test2.Id (TestResult.Passed (TimeSpan.FromMilliseconds 3.0))
+  ]
+
+  test "symbolCoverage returns NotCovered for unknown symbol" {
+    let graph = { TestDependencyGraph.empty with TransitiveCoverage = Map.empty }
+    let cov = CoverageProjection.symbolCoverage graph results "Unknown.symbol"
+    cov |> Expect.equal "not covered" CoverageStatus.NotCovered
+  }
+
+  test "symbolCoverage returns Covered with all passing" {
+    let graph = {
+      TestDependencyGraph.empty with
+        TransitiveCoverage = Map.ofList [ "Module.add", [| test1.Id |] ]
+    }
+    let cov = CoverageProjection.symbolCoverage graph results "Module.add"
+    match cov with
+    | CoverageStatus.Covered (count, allPassing) ->
+      count |> Expect.equal "1 test" 1
+      allPassing |> Expect.isTrue "all passing"
+    | other -> failwithf "Expected Covered, got %A" other
+  }
+
+  test "symbolCoverage returns Covered with not all passing when test fails" {
+    let failedResults =
+      Map.add test1.Id (mkResult test1.Id (TestResult.Failed (TestFailure.AssertionFailed "bad", TimeSpan.FromMilliseconds 1.0))) results
+    let graph = {
+      TestDependencyGraph.empty with
+        TransitiveCoverage = Map.ofList [ "Module.add", [| test1.Id |] ]
+    }
+    let cov = CoverageProjection.symbolCoverage graph failedResults "Module.add"
+    match cov with
+    | CoverageStatus.Covered (_, allPassing) ->
+      allPassing |> Expect.isFalse "not all passing"
+    | other -> failwithf "Expected Covered, got %A" other
+  }
+
+  test "computeAll returns coverage for all symbols" {
+    let graph = {
+      TestDependencyGraph.empty with
+        TransitiveCoverage = Map.ofList [
+          "Module.add", [| test1.Id |]
+          "Module.validate", [| test1.Id; test2.Id |]
+          "Module.unused", [||]
+        ]
+    }
+    let all = CoverageProjection.computeAll graph results
+    all.Count |> Expect.equal "3 symbols" 3
+    match Map.find "Module.unused" all with
+    | CoverageStatus.NotCovered -> ()
+    | other -> failwithf "Expected NotCovered for unused, got %A" other
+    match Map.find "Module.validate" all with
+    | CoverageStatus.Covered (count, _) -> count |> Expect.equal "2 tests" 2
+    | other -> failwithf "Expected Covered for validate, got %A" other
+  }
+
+  test "IL line coverage computes correctly" {
+    let covState = {
+      Slots = [|
+        { File = "test.fs"; Line = 10; Column = 0; BranchId = 0 }
+        { File = "test.fs"; Line = 10; Column = 0; BranchId = 1 }
+        { File = "test.fs"; Line = 10; Column = 0; BranchId = 2 }
+        { File = "test.fs"; Line = 20; Column = 0; BranchId = 0 }
+      |]
+      Hits = [| true; true; false; false |]
+    }
+    let line10 = CoverageComputation.computeLineCoverage covState "test.fs" 10
+    match line10 with
+    | LineCoverage.PartiallyCovered (covered, total) ->
+      covered |> Expect.equal "2 covered" 2
+      total |> Expect.equal "3 total" 3
+    | other -> failwithf "Expected PartiallyCovered, got %A" other
+
+    let line20 = CoverageComputation.computeLineCoverage covState "test.fs" 20
+    line20 |> Expect.equal "line 20 not covered" LineCoverage.NotCovered
+
+    let line30 = CoverageComputation.computeLineCoverage covState "test.fs" 30
+    line30 |> Expect.equal "line 30 not covered (no slots)" LineCoverage.NotCovered
+  }
+]
+
+// ============================================================
+// Dependency Graph Tests
+// ============================================================
+
+[<Tests>]
+let depGraphBfsTests = testList "TestDependencyGraph BFS" [
+  let test1 =
+    { Id = TestId.create "Module.Tests.test1" "expecto"; FullName = "Module.Tests.test1"
+      DisplayName = "test1"; Origin = TestOrigin.ReflectionOnly
+      Labels = []; Framework = "expecto"; Category = TestCategory.Unit }
+  let test2 =
+    { Id = TestId.create "Module.Tests.test2" "expecto"; FullName = "Module.Tests.test2"
+      DisplayName = "test2"; Origin = TestOrigin.ReflectionOnly
+      Labels = []; Framework = "expecto"; Category = TestCategory.Unit }
+  let depGraph = {
+    SymbolToTests = Map.ofList [
+      "Module.add", [| test1.Id |]
+      "Module.validate", [| test1.Id; test2.Id |]
+    ]
+    TransitiveCoverage = Map.empty; SourceVersion = 1
+  }
+
+  test "findAffected returns empty for unknown symbols" {
+    let result = TestDependencyGraph.findAffected [ "Unknown" ] depGraph
+    result |> Expect.isEmpty "no affected tests"
+  }
+
+  test "findAffected returns union of affected tests for multiple symbols" {
+    let result = TestDependencyGraph.findAffected [ "Module.add"; "Module.validate" ] depGraph
+    result.Length |> Expect.equal "2 unique affected" 2
+  }
+
+  test "computeTransitiveCoverage propagates through call chain" {
+    let callGraph = Map.ofList [
+      "testFunc", [| "helperA" |]
+      "helperA", [| "helperB" |]
+    ]
+    let directSymbolToTests = Map.ofList [
+      "testFunc", [| test1.Id |]
+    ]
+    let transitive = TestDependencyGraph.computeTransitiveCoverage callGraph directSymbolToTests
+    transitive.ContainsKey "helperA" |> Expect.isTrue "helperA reachable"
+    transitive.ContainsKey "helperB" |> Expect.isTrue "helperB reachable"
+    let helperBTests = Map.find "helperB" transitive
+    helperBTests |> Expect.contains "helperB covered by test1" test1.Id
+  }
+
+  test "computeTransitiveCoverage handles diamond dependency" {
+    let callGraph = Map.ofList [
+      "test1Func", [| "A" |]
+      "test2Func", [| "B" |]
+      "A", [| "C" |]
+      "B", [| "C" |]
+    ]
+    let direct = Map.ofList [
+      "test1Func", [| test1.Id |]
+      "test2Func", [| test2.Id |]
+    ]
+    let transitive = TestDependencyGraph.computeTransitiveCoverage callGraph direct
+    let cTests = Map.find "C" transitive
+    cTests.Length |> Expect.equal "C covered by 2 tests" 2
+  }
+
+  test "computeTransitiveCoverage handles cycles without infinite loop" {
+    let callGraph = Map.ofList [
+      "A", [| "B" |]
+      "B", [| "A" |]
+    ]
+    let direct = Map.ofList [
+      "A", [| test1.Id |]
+    ]
+    let transitive = TestDependencyGraph.computeTransitiveCoverage callGraph direct
+    transitive.ContainsKey "B" |> Expect.isTrue "B reachable from A"
+    transitive.ContainsKey "A" |> Expect.isTrue "A reachable from itself"
+  }
+]
+
+// ============================================================
+// Category Detection Tests
+// ============================================================
+
+[<Tests>]
+let categoryDetectionTests = testList "CategoryDetection" [
+  test "categorizes integration by label" {
+    let cat = CategoryDetection.categorize [ "Integration" ] "MyModule.test" "expecto" [||]
+    cat |> Expect.equal "integration" TestCategory.Integration
+  }
+
+  test "categorizes browser by Playwright assembly ref" {
+    let cat = CategoryDetection.categorize [] "MyModule.test" "expecto" [| "Microsoft.Playwright" |]
+    cat |> Expect.equal "browser" TestCategory.Browser
+  }
+
+  test "categorizes benchmark by label" {
+    let cat = CategoryDetection.categorize [ "Benchmark" ] "MyModule.test" "expecto" [||]
+    cat |> Expect.equal "benchmark" TestCategory.Benchmark
+  }
+
+  test "categorizes by namespace containing 'integration'" {
+    let cat = CategoryDetection.categorize [] "MyApp.Integration.Tests.myTest" "xunit" [||]
+    cat |> Expect.equal "integration by name" TestCategory.Integration
+  }
+
+  test "defaults to Unit" {
+    let cat = CategoryDetection.categorize [] "MyModule.test" "expecto" [||]
+    cat |> Expect.equal "unit by default" TestCategory.Unit
+  }
+]
+
+// ============================================================
+// Test Summary Tests
+// ============================================================
+
+[<Tests>]
+let testSummaryDetailTests = testList "TestSummary" [
+  test "fromStatuses counts correctly" {
+    let statuses = [|
+      TestRunStatus.Passed (TimeSpan.FromMilliseconds 5.0)
+      TestRunStatus.Passed (TimeSpan.FromMilliseconds 3.0)
+      TestRunStatus.Failed (TestFailure.AssertionFailed "x", TimeSpan.FromMilliseconds 1.0)
+      TestRunStatus.Stale
+      TestRunStatus.Running
+      TestRunStatus.PolicyDisabled
+      TestRunStatus.Detected
+    |]
+    let summary = TestSummary.fromStatuses statuses
+    summary.Total |> Expect.equal "total" 7
+    summary.Passed |> Expect.equal "passed" 2
+    summary.Failed |> Expect.equal "failed" 1
+    summary.Stale |> Expect.equal "stale" 1
+    summary.Running |> Expect.equal "running" 1
+    summary.Disabled |> Expect.equal "disabled" 1
+  }
+
+  test "toStatusBar shows all passing" {
+    let s = { TestSummary.empty with Total = 10; Passed = 10 }
+    let bar = TestSummary.toStatusBar s
+    bar |> Expect.stringContains "check" "\u2713"
+    bar |> Expect.stringContains "count" "10/10"
+  }
+
+  test "toStatusBar shows failures" {
+    let s = { TestSummary.empty with Total = 10; Passed = 8; Failed = 2 }
+    let bar = TestSummary.toStatusBar s
+    bar |> Expect.stringContains "cross" "\u2717"
+    bar |> Expect.stringContains "fail count" "2"
+  }
+
+  test "toStatusBar shows running" {
+    let s = { TestSummary.empty with Total = 10; Passed = 5; Running = 3 }
+    let bar = TestSummary.toStatusBar s
+    bar |> Expect.stringContains "spinner" "\u27F3"
+  }
+
+  test "toStatusBar shows none when empty" {
+    let bar = TestSummary.toStatusBar TestSummary.empty
+    bar |> Expect.equal "none text" "Tests: none"
+  }
+]

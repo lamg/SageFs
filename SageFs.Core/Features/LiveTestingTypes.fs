@@ -932,3 +932,63 @@ module PolicyFilter =
         |> Map.tryFind tc.Category
         |> Option.defaultValue RunPolicy.OnEveryChange
       shouldRun policy trigger)
+
+// --- Staleness Tracking ---
+
+module Staleness =
+  let markStale
+    (graph: TestDependencyGraph)
+    (changedSymbols: string list)
+    (state: LiveTestState)
+    : LiveTestState =
+    let affected = TestDependencyGraph.findAffected changedSymbols graph |> Set.ofArray
+    if Set.isEmpty affected then state
+    else
+      let updatedResults =
+        state.LastResults
+        |> Map.map (fun testId result ->
+          if Set.contains testId affected then
+            { result with Result = TestResult.NotRun; Timestamp = DateTimeOffset.UtcNow }
+          else result)
+      let updatedState = { state with LastResults = updatedResults; AffectedTests = affected }
+      { updatedState with StatusEntries = LiveTesting.computeStatusEntries updatedState }
+
+// --- Pipeline Orchestrator ---
+
+[<RequireQualifiedAccess>]
+type PipelineDecision =
+  | Skip of reason: string
+  | TreeSitterOnly
+  | FullPipeline of affectedTestIds: TestId array
+
+module PipelineOrchestrator =
+  let decide
+    (state: LiveTestState)
+    (trigger: RunTrigger)
+    (changedSymbols: string list)
+    (depGraph: TestDependencyGraph)
+    : PipelineDecision =
+    if not state.Enabled then
+      PipelineDecision.Skip "Live testing disabled"
+    elif state.IsRunning then
+      PipelineDecision.Skip "Pipeline already running"
+    elif Array.isEmpty state.DiscoveredTests then
+      PipelineDecision.TreeSitterOnly
+    else
+      let affected = TestDependencyGraph.findAffected changedSymbols depGraph
+      let filtered =
+        state.DiscoveredTests
+        |> Array.filter (fun tc -> affected |> Array.contains tc.Id)
+        |> LiveTesting.filterByPolicy state.RunPolicies trigger
+      if Array.isEmpty filtered then
+        PipelineDecision.TreeSitterOnly
+      else
+        PipelineDecision.FullPipeline (filtered |> Array.map (fun tc -> tc.Id))
+
+  let buildRunBatch
+    (state: LiveTestState)
+    (testIds: TestId array)
+    : TestCase array =
+    let idSet = testIds |> Set.ofArray
+    state.DiscoveredTests
+    |> Array.filter (fun tc -> Set.contains tc.Id idSet)
