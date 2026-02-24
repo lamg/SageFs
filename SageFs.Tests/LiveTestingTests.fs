@@ -1120,3 +1120,291 @@ let affectedTestPipelineTests = testList "affected-test pipeline" [
     affected.[0] |> Expect.equal "correct test" (TestId.create "add-test" "xunit")
   }
 ]
+
+let pipelineTimingExtendedTests = testList "PipelineTiming extended" [
+  test "fcsMs returns 0 for tree-sitter only" {
+    let t = {
+      Depth = PipelineDepth.TreeSitterOnly (TimeSpan.FromMilliseconds 1.0)
+      TotalTests = 0; AffectedTests = 0
+      Trigger = RunTrigger.Keystroke; Timestamp = DateTimeOffset.UtcNow
+    }
+    PipelineTiming.fcsMs t
+    |> Expect.equal "no FCS for tree-sitter only" 0.0
+  }
+
+  test "fcsMs returns value for ThroughFcs" {
+    let t = {
+      Depth = PipelineDepth.ThroughFcs (TimeSpan.FromMilliseconds 1.0, TimeSpan.FromMilliseconds 142.0)
+      TotalTests = 10; AffectedTests = 5
+      Trigger = RunTrigger.FileSave; Timestamp = DateTimeOffset.UtcNow
+    }
+    PipelineTiming.fcsMs t
+    |> Expect.equal "fcs ms" 142.0
+  }
+
+  test "totalMs sums all stages" {
+    let t = {
+      Depth = PipelineDepth.ThroughExecution (
+        TimeSpan.FromMilliseconds 1.0, TimeSpan.FromMilliseconds 100.0, TimeSpan.FromMilliseconds 50.0)
+      TotalTests = 10; AffectedTests = 3
+      Trigger = RunTrigger.Keystroke; Timestamp = DateTimeOffset.UtcNow
+    }
+    PipelineTiming.totalMs t
+    |> Expect.equal "total" 151.0
+  }
+
+  test "toStatusBar tree-sitter only" {
+    let t = {
+      Depth = PipelineDepth.TreeSitterOnly (TimeSpan.FromMilliseconds 0.8)
+      TotalTests = 0; AffectedTests = 0
+      Trigger = RunTrigger.Keystroke; Timestamp = DateTimeOffset.UtcNow
+    }
+    PipelineTiming.toStatusBar t
+    |> Expect.equal "format" "TS:0.8ms"
+  }
+
+  test "toStatusBar full pipeline" {
+    let t = {
+      Depth = PipelineDepth.ThroughExecution (
+        TimeSpan.FromMilliseconds 0.8, TimeSpan.FromMilliseconds 142.0, TimeSpan.FromMilliseconds 87.0)
+      TotalTests = 47; AffectedTests = 12
+      Trigger = RunTrigger.Keystroke; Timestamp = DateTimeOffset.UtcNow
+    }
+    PipelineTiming.toStatusBar t
+    |> Expect.equal "format" "TS:0.8ms | FCS:142ms | Run:87ms (12)"
+  }
+]
+
+let tracedTests = testList "Traced" [
+  test "execute returns result and timing" {
+    let (result, timing) = Traced.execute PipelineStage.TreeSitter (fun () -> 42)
+    result |> Expect.equal "result" 42
+    timing.Stage |> Expect.equal "stage" PipelineStage.TreeSitter
+    Expect.isTrue "duration >= 0" (timing.Duration >= TimeSpan.Zero)
+  }
+
+  test "execute captures realistic duration" {
+    let (_, timing) = Traced.execute PipelineStage.FcsTypeCheck (fun () ->
+      Threading.Thread.Sleep 30
+      "done")
+    Expect.isTrue "duration > 25ms" (timing.Duration > TimeSpan.FromMilliseconds 25.0)
+  }
+
+  testAsync "executeAsync returns result and timing" {
+    let! (result, timing) = Traced.executeAsync PipelineStage.TestExecution (fun () ->
+      async {
+        do! Async.Sleep 20
+        return "async-done"
+      })
+    result |> Expect.equal "result" "async-done"
+    timing.Stage |> Expect.equal "stage" PipelineStage.TestExecution
+    Expect.isTrue "duration > 15ms" (timing.Duration > TimeSpan.FromMilliseconds 15.0)
+  }
+]
+
+let pipelineResultTests = testList "PipelineResult" [
+  test "map transforms completed result" {
+    let pr = PipelineResult.Completed (42, [])
+    let mapped = PipelineResult.map (fun x -> x * 2) pr
+    match mapped with
+    | PipelineResult.Completed (r, _) -> r |> Expect.equal "doubled" 84
+    | PipelineResult.Cancelled -> failtest "should not be cancelled"
+  }
+
+  test "map preserves cancelled" {
+    let pr : PipelineResult<int> = PipelineResult.Cancelled
+    let mapped = PipelineResult.map (fun x -> x * 2) pr
+    match mapped with
+    | PipelineResult.Cancelled -> ()
+    | _ -> failtest "should be cancelled"
+  }
+
+  test "toPipelineTiming builds TreeSitterOnly" {
+    let timings = [
+      { Stage = PipelineStage.TreeSitter; Duration = TimeSpan.FromMilliseconds 1.5; Timestamp = DateTimeOffset.UtcNow }
+    ]
+    let pt = PipelineResult.toPipelineTiming RunTrigger.Keystroke 10 3 timings
+    match pt.Depth with
+    | PipelineDepth.TreeSitterOnly ts ->
+      ts.TotalMilliseconds |> Expect.equal "ts" 1.5
+    | _ -> failtest "expected TreeSitterOnly"
+    pt.TotalTests |> Expect.equal "total" 10
+    pt.AffectedTests |> Expect.equal "affected" 3
+  }
+
+  test "toPipelineTiming builds ThroughExecution" {
+    let timings = [
+      { Stage = PipelineStage.TreeSitter; Duration = TimeSpan.FromMilliseconds 1.0; Timestamp = DateTimeOffset.UtcNow }
+      { Stage = PipelineStage.FcsTypeCheck; Duration = TimeSpan.FromMilliseconds 100.0; Timestamp = DateTimeOffset.UtcNow }
+      { Stage = PipelineStage.TestExecution; Duration = TimeSpan.FromMilliseconds 50.0; Timestamp = DateTimeOffset.UtcNow }
+    ]
+    let pt = PipelineResult.toPipelineTiming RunTrigger.FileSave 47 12 timings
+    match pt.Depth with
+    | PipelineDepth.ThroughExecution (ts, fcs, exec) ->
+      ts.TotalMilliseconds |> Expect.equal "ts" 1.0
+      fcs.TotalMilliseconds |> Expect.equal "fcs" 100.0
+      exec.TotalMilliseconds |> Expect.equal "exec" 50.0
+    | _ -> failtest "expected ThroughExecution"
+  }
+]
+
+let debouncedPipelineTests = testList "DebouncedPipeline" [
+  testAsync "runStage completes when not cancelled" {
+    let dc = new DebounceController()
+    let token = dc.Acquire(PipelineStage.TreeSitter)
+    let! result = DebouncedPipeline.runStage PipelineStage.TreeSitter 10 token (fun () -> "parsed")
+    match result with
+    | PipelineResult.Completed (r, timings) ->
+      r |> Expect.equal "result" "parsed"
+      timings |> List.length |> Expect.equal "one timing" 1
+      timings.[0].Stage |> Expect.equal "stage" PipelineStage.TreeSitter
+    | PipelineResult.Cancelled -> failtest "should not be cancelled"
+    (dc :> IDisposable).Dispose()
+  }
+
+  testAsync "runStage cancels when token is cancelled before delay" {
+    let dc = new DebounceController()
+    let token = dc.Acquire(PipelineStage.FcsTypeCheck)
+    let _ = dc.Acquire(PipelineStage.FcsTypeCheck)
+    let! result = DebouncedPipeline.runStage PipelineStage.FcsTypeCheck 10 token (fun () -> "never")
+    match result with
+    | PipelineResult.Cancelled -> ()
+    | _ -> failtest "should be cancelled"
+    (dc :> IDisposable).Dispose()
+  }
+
+  testAsync "andThen chains stages" {
+    let dc = new DebounceController()
+    let token = dc.Acquire(PipelineStage.TreeSitter)
+    let! stage1 = DebouncedPipeline.runStage PipelineStage.TreeSitter 5 token (fun () -> 10)
+    let! stage2 = DebouncedPipeline.andThen PipelineStage.FcsTypeCheck 5 token (fun x -> x * 2) stage1
+    match stage2 with
+    | PipelineResult.Completed (r, timings) ->
+      r |> Expect.equal "chained result" 20
+      timings |> List.length |> Expect.equal "two timings" 2
+    | PipelineResult.Cancelled -> failtest "should not be cancelled"
+    (dc :> IDisposable).Dispose()
+  }
+
+  testAsync "andThen short-circuits on cancelled" {
+    let mutable ran = false
+    let dc = new DebounceController()
+    let token = dc.Acquire(PipelineStage.TreeSitter)
+    let cancelled : PipelineResult<int> = PipelineResult.Cancelled
+    let! result = DebouncedPipeline.andThen PipelineStage.FcsTypeCheck 5 token (fun x -> ran <- true; x) cancelled
+    match result with
+    | PipelineResult.Cancelled -> ()
+    | _ -> failtest "should be cancelled"
+    Expect.isFalse "f should not run" ran
+    (dc :> IDisposable).Dispose()
+  }
+]
+
+let pipelineHistoryTests = testList "PipelineHistory" [
+  test "empty history has no latest" {
+    let h = PipelineHistory(5)
+    h.Latest |> Expect.isNone "no latest"
+    h.Count |> Expect.equal "count" 0
+  }
+
+  test "add and retrieve latest" {
+    let h = PipelineHistory(5)
+    let t = {
+      Depth = PipelineDepth.TreeSitterOnly (TimeSpan.FromMilliseconds 1.0)
+      TotalTests = 10; AffectedTests = 3
+      Trigger = RunTrigger.Keystroke; Timestamp = DateTimeOffset.UtcNow
+    }
+    h.Add(t)
+    h.Latest |> Expect.isSome "has latest"
+    h.Count |> Expect.equal "count" 1
+  }
+
+  test "ring buffer wraps at capacity" {
+    let h = PipelineHistory(3)
+    for i in 1..5 do
+      h.Add {
+        Depth = PipelineDepth.TreeSitterOnly (TimeSpan.FromMilliseconds (float i))
+        TotalTests = i; AffectedTests = 0
+        Trigger = RunTrigger.Keystroke; Timestamp = DateTimeOffset.UtcNow
+      }
+    h.Count |> Expect.equal "capped at 3" 3
+    let arr = h.ToArray()
+    arr.Length |> Expect.equal "3 items" 3
+    arr.[0].TotalTests |> Expect.equal "first" 3
+    arr.[1].TotalTests |> Expect.equal "second" 4
+    arr.[2].TotalTests |> Expect.equal "third" 5
+  }
+
+  test "latest returns most recent after wrap" {
+    let h = PipelineHistory(2)
+    for i in 1..4 do
+      h.Add {
+        Depth = PipelineDepth.TreeSitterOnly (TimeSpan.FromMilliseconds (float i))
+        TotalTests = i; AffectedTests = 0
+        Trigger = RunTrigger.Keystroke; Timestamp = DateTimeOffset.UtcNow
+      }
+    match h.Latest with
+    | Some t -> t.TotalTests |> Expect.equal "latest is 4" 4
+    | None -> failtest "should have latest"
+  }
+]
+
+let policyFilterTests = testList "PolicyFilter" [
+  test "OnEveryChange runs on all triggers" {
+    PolicyFilter.shouldRun RunPolicy.OnEveryChange RunTrigger.Keystroke
+    |> Expect.isTrue "keystroke"
+    PolicyFilter.shouldRun RunPolicy.OnEveryChange RunTrigger.FileSave
+    |> Expect.isTrue "save"
+    PolicyFilter.shouldRun RunPolicy.OnEveryChange RunTrigger.ExplicitRun
+    |> Expect.isTrue "explicit"
+  }
+
+  test "OnSaveOnly skips keystrokes" {
+    PolicyFilter.shouldRun RunPolicy.OnSaveOnly RunTrigger.Keystroke
+    |> Expect.isFalse "keystroke"
+    PolicyFilter.shouldRun RunPolicy.OnSaveOnly RunTrigger.FileSave
+    |> Expect.isTrue "save"
+    PolicyFilter.shouldRun RunPolicy.OnSaveOnly RunTrigger.ExplicitRun
+    |> Expect.isTrue "explicit"
+  }
+
+  test "OnDemand only on explicit" {
+    PolicyFilter.shouldRun RunPolicy.OnDemand RunTrigger.Keystroke
+    |> Expect.isFalse "keystroke"
+    PolicyFilter.shouldRun RunPolicy.OnDemand RunTrigger.FileSave
+    |> Expect.isFalse "save"
+    PolicyFilter.shouldRun RunPolicy.OnDemand RunTrigger.ExplicitRun
+    |> Expect.isTrue "explicit"
+  }
+
+  test "Disabled never runs" {
+    PolicyFilter.shouldRun RunPolicy.Disabled RunTrigger.Keystroke
+    |> Expect.isFalse "keystroke"
+    PolicyFilter.shouldRun RunPolicy.Disabled RunTrigger.ExplicitRun
+    |> Expect.isFalse "explicit"
+  }
+
+  test "filterTests respects category policies" {
+    let policies = Map.ofList [
+      TestCategory.Unit, RunPolicy.OnEveryChange
+      TestCategory.Integration, RunPolicy.OnDemand
+      TestCategory.Browser, RunPolicy.Disabled
+    ]
+    let tests = [|
+      { Id = TestId.create "unit1" "xunit"; FullName = "unit1"; DisplayName = "unit1"
+        Origin = TestOrigin.ReflectionOnly; Labels = []; Framework = "xunit"
+        Category = TestCategory.Unit }
+      { Id = TestId.create "int1" "xunit"; FullName = "int1"; DisplayName = "int1"
+        Origin = TestOrigin.ReflectionOnly; Labels = []; Framework = "xunit"
+        Category = TestCategory.Integration }
+      { Id = TestId.create "browser1" "xunit"; FullName = "browser1"; DisplayName = "browser1"
+        Origin = TestOrigin.ReflectionOnly; Labels = []; Framework = "xunit"
+        Category = TestCategory.Browser }
+    |]
+    let filtered = PolicyFilter.filterTests policies RunTrigger.Keystroke tests
+    filtered.Length |> Expect.equal "only unit on keystroke" 1
+    filtered.[0].FullName |> Expect.equal "unit test" "unit1"
+    let explicit = PolicyFilter.filterTests policies RunTrigger.ExplicitRun tests
+    explicit.Length |> Expect.equal "unit + integration on explicit" 2
+  }
+]
