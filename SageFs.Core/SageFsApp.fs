@@ -413,6 +413,10 @@ module SageFsUpdate =
         { model with
             LiveTesting = { lt with TestState = { lt.TestState with DetectedProviders = providers } } }, []
 
+      | SageFsEvent.PipelineTimingRecorded timing ->
+        { model with
+            LiveTesting = { model.LiveTesting with LastTiming = Some timing } }, []
+
     | SageFsMsg.CycleTheme ->
       let name, theme = ThemePresets.cycleNext model.Theme
       { model with Theme = theme; ThemeName = name }, []
@@ -856,19 +860,31 @@ module SageFsEffectHandler =
                     Features.LiveTesting.FcsTypeCheckResult.Cancelled filePath
                 dispatch (SageFsMsg.FcsTypeCheckCompleted result)
             })
-        | Features.LiveTesting.PipelineEffect.RunAffectedTests (tests, _trigger) ->
+        | Features.LiveTesting.PipelineEffect.RunAffectedTests (tests, trigger) ->
           if Array.isEmpty tests then ()
           else
             let testIds = tests |> Array.map (fun tc -> tc.Id)
             dispatch (SageFsMsg.Event (SageFsEvent.TestRunStarted testIds))
             let ct = deps.PipelineCancellation.TestRun.next()
             Async.Start(async {
+              let sw = System.Diagnostics.Stopwatch.StartNew()
               try
                 let! results =
                   Features.LiveTesting.TestOrchestrator.executeFiltered
                     Features.LiveTesting.BuiltInExecutors.builtIn 4 tests ct
+                sw.Stop()
                 dispatch (SageFsMsg.Event (SageFsEvent.TestResultsBatch results))
+                let timing : Features.LiveTesting.PipelineTiming = {
+                  Depth = Features.LiveTesting.PipelineDepth.ThroughExecution(
+                            System.TimeSpan.Zero, System.TimeSpan.Zero, sw.Elapsed)
+                  TotalTests = tests.Length
+                  AffectedTests = tests.Length
+                  Trigger = trigger
+                  Timestamp = System.DateTimeOffset.UtcNow
+                }
+                dispatch (SageFsMsg.Event (SageFsEvent.PipelineTimingRecorded timing))
               with ex ->
+                sw.Stop()
                 let errResults =
                   tests |> Array.map (fun tc ->
                     ({ TestId = tc.Id

@@ -1079,6 +1079,7 @@ type LiveTestPipelineState = {
   AnalysisCache: FileAnalysisCache
   AdaptiveDebounce: AdaptiveDebounce
   LastTrigger: RunTrigger
+  LastTiming: PipelineTiming option
 }
 
 module LiveTestPipelineState =
@@ -1092,6 +1093,7 @@ module LiveTestPipelineState =
     AnalysisCache = FileAnalysisCache.empty
     AdaptiveDebounce = AdaptiveDebounce.createDefault()
     LastTrigger = RunTrigger.Keystroke
+    LastTiming = None
   }
 
   let currentFcsDelay (s: LiveTestPipelineState) =

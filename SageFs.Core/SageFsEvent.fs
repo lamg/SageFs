@@ -62,6 +62,7 @@ type SageFsEvent =
   | CoverageUpdated of coverage: Features.LiveTesting.CoverageState
   | RunPolicyChanged of category: Features.LiveTesting.TestCategory * policy: Features.LiveTesting.RunPolicy
   | ProvidersDetected of providers: Features.LiveTesting.ProviderDescription list
+  | PipelineTimingRecorded of timing: Features.LiveTesting.PipelineTiming
 
 /// The complete view state for any SageFs frontend.
 /// Pure data — renderers read this to produce UI.

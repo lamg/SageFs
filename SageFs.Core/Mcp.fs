@@ -1272,24 +1272,25 @@ module McpTools =
     }
 
   let getPipelineTrace (ctx: McpContext) : Task<string> =
-    task {
-      match ctx.GetElmModel with
-      | None -> return "Pipeline trace not available — Elm loop not started."
-      | Some getModel ->
-        let state = (getModel ()).LiveTesting.TestState
-        let summary =
-          Features.LiveTesting.TestSummary.fromStatuses
-            (state.StatusEntries |> Array.map (fun e -> e.Status))
-        let resp = {|
-          Enabled = state.Enabled
-          IsRunning = state.IsRunning
-          History = state.History
-          Summary = summary
-          Providers = state.DetectedProviders |> List.map (fun p ->
-            match p with
-            | Features.LiveTesting.ProviderDescription.AttributeBased a -> a.Name
-            | Features.LiveTesting.ProviderDescription.Custom c -> c.Name)
-          Policies = state.RunPolicies |> Map.toList |> List.map (fun (c, p) -> sprintf "%A: %A" c p)
-        |}
-        return JsonSerializer.Serialize(resp, liveTestJsonOpts)
-    }
+    match ctx.GetElmModel with
+    | None -> Task.FromResult "Pipeline trace not available — Elm loop not started."
+    | Some getModel ->
+      let model = getModel ()
+      let state = model.LiveTesting.TestState
+      let summary =
+        Features.LiveTesting.TestSummary.fromStatuses
+          (state.StatusEntries |> Array.map (fun e -> e.Status))
+      let timing = model.LiveTesting.LastTiming
+      let resp = {|
+        Enabled = state.Enabled
+        IsRunning = state.IsRunning
+        History = state.History
+        Summary = summary
+        Timing = timing |> Option.map Features.LiveTesting.PipelineTiming.toStatusBar |> Option.defaultValue "no timing yet"
+        Providers = state.DetectedProviders |> List.map (fun p ->
+          match p with
+          | Features.LiveTesting.ProviderDescription.AttributeBased a -> a.Name
+          | Features.LiveTesting.ProviderDescription.Custom c -> c.Name)
+        Policies = state.RunPolicies |> Map.toList |> List.map (fun (c, p) -> sprintf "%A: %A" c p)
+      |}
+      Task.FromResult (JsonSerializer.Serialize(resp, liveTestJsonOpts))

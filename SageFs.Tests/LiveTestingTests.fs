@@ -3730,3 +3730,105 @@ let serializationRoundtripTests = testList "serialization roundtrip integration"
     |> Expect.equal "annotation on line 5" 5
   }
 ]
+
+[<Tests>]
+let pipelineTimingDispatchTests = testList "pipeline timing dispatch" [
+  test "PipelineTimingRecorded stores LastTiming in model" {
+    let model0 = SageFsModel.initial
+    model0.LiveTesting.LastTiming
+    |> Expect.isNone "initial model should have no timing"
+
+    let timing = {
+      Depth = PipelineDepth.ThroughExecution (
+        System.TimeSpan.FromMilliseconds 1.2,
+        System.TimeSpan.FromMilliseconds 85.0,
+        System.TimeSpan.FromMilliseconds 42.0)
+      TotalTests = 10
+      AffectedTests = 3
+      Trigger = RunTrigger.Keystroke
+      Timestamp = System.DateTimeOffset.UtcNow
+    }
+
+    let msg = SageFsMsg.Event (SageFsEvent.PipelineTimingRecorded timing)
+    let model1, effects = SageFsUpdate.update msg model0
+
+    model1.LiveTesting.LastTiming
+    |> Expect.isSome "after dispatch, model should have timing"
+
+    effects
+    |> Expect.isEmpty "PipelineTimingRecorded should produce no effects"
+  }
+
+  test "PipelineTiming.toStatusBar formats correctly for ThroughExecution" {
+    let timing = {
+      Depth = PipelineDepth.ThroughExecution (
+        System.TimeSpan.FromMilliseconds 1.2,
+        System.TimeSpan.FromMilliseconds 85.0,
+        System.TimeSpan.FromMilliseconds 42.0)
+      TotalTests = 10
+      AffectedTests = 3
+      Trigger = RunTrigger.Keystroke
+      Timestamp = System.DateTimeOffset.UtcNow
+    }
+    PipelineTiming.toStatusBar timing
+    |> Expect.equal "should format all three stages" "TS:1.2ms | FCS:85ms | Run:42ms (3)"
+  }
+
+  test "PipelineTiming.toStatusBar formats TreeSitterOnly" {
+    let timing = {
+      Depth = PipelineDepth.TreeSitterOnly (System.TimeSpan.FromMilliseconds 0.8)
+      TotalTests = 5
+      AffectedTests = 0
+      Trigger = RunTrigger.Keystroke
+      Timestamp = System.DateTimeOffset.UtcNow
+    }
+    PipelineTiming.toStatusBar timing
+    |> Expect.equal "should only show tree-sitter" "TS:0.8ms"
+  }
+
+  test "PipelineTiming.toStatusBar formats ThroughFcs" {
+    let timing = {
+      Depth = PipelineDepth.ThroughFcs (
+        System.TimeSpan.FromMilliseconds 1.5,
+        System.TimeSpan.FromMilliseconds 142.0)
+      TotalTests = 20
+      AffectedTests = 5
+      Trigger = RunTrigger.FileSave
+      Timestamp = System.DateTimeOffset.UtcNow
+    }
+    PipelineTiming.toStatusBar timing
+    |> Expect.equal "should show tree-sitter and FCS" "TS:1.5ms | FCS:142ms"
+  }
+
+  test "new timing replaces old timing" {
+    let timing1 = {
+      Depth = PipelineDepth.TreeSitterOnly (System.TimeSpan.FromMilliseconds 0.5)
+      TotalTests = 5
+      AffectedTests = 0
+      Trigger = RunTrigger.Keystroke
+      Timestamp = System.DateTimeOffset.UtcNow
+    }
+    let timing2 = {
+      Depth = PipelineDepth.ThroughExecution (
+        System.TimeSpan.FromMilliseconds 1.0,
+        System.TimeSpan.FromMilliseconds 100.0,
+        System.TimeSpan.FromMilliseconds 50.0)
+      TotalTests = 10
+      AffectedTests = 3
+      Trigger = RunTrigger.FileSave
+      Timestamp = System.DateTimeOffset.UtcNow
+    }
+
+    let model0 = SageFsModel.initial
+    let model1, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.PipelineTimingRecorded timing1)) model0
+    let model2, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.PipelineTimingRecorded timing2)) model1
+
+    match model2.LiveTesting.LastTiming with
+    | Some t ->
+      t.AffectedTests
+      |> Expect.equal "should have second timing's affected count" 3
+      t.TotalTests
+      |> Expect.equal "should have second timing's total count" 10
+    | None -> failtest "timing should be Some after two dispatches"
+  }
+]
