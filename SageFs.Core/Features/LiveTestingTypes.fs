@@ -5,11 +5,21 @@ open System.Reflection
 open System.Security.Cryptography
 open System.Text
 
+/// Configuration constants for the live testing pipeline.
+[<RequireQualifiedAccess>]
+module LiveTestingDefaults =
+  /// Default test module identifier for detecting test functions by namespace.
+  let [<Literal>] TestModuleIdentifier = ".Tests."
+  /// Default framework string for Expecto-based projects.
+  let [<Literal>] Framework = "expecto"
+
 // --- Stable Test Identity ---
 
 type TestId = private TestId of string
 
 module TestId =
+  /// 16 hex chars = 64 bits of entropy from SHA256. Collision probability
+  /// is negligible for projects with < 10^9 tests (birthday bound ~2^32).
   let create (fullName: string) (framework: string) =
     let input = sprintf "%s|%s" fullName framework
     let bytes = Encoding.UTF8.GetBytes(input)
@@ -179,6 +189,7 @@ type ExtractedSymbolUse = {
 type TestDependencyGraph = {
   SymbolToTests: Map<string, TestId array>
   TransitiveCoverage: Map<string, TestId array>
+  PerFileIndex: Map<string, Map<string, TestId array>>
   SourceVersion: int
 }
 
@@ -456,13 +467,26 @@ module TestDependencyGraph =
   let empty = {
     SymbolToTests = Map.empty
     TransitiveCoverage = Map.empty
+    PerFileIndex = Map.empty
     SourceVersion = 0
   }
+
+  /// Merge all per-file indexes into a single symbol→tests map,
+  /// concatenating TestId arrays for symbols referenced across multiple files.
+  let mergePerFileIndexes (perFile: Map<string, Map<string, TestId array>>) : Map<string, TestId array> =
+    perFile
+    |> Map.values
+    |> Seq.collect (fun fileIndex -> fileIndex |> Map.toSeq)
+    |> Seq.groupBy fst
+    |> Seq.map (fun (sym, entries) ->
+      sym, entries |> Seq.collect snd |> Seq.distinct |> Seq.toArray)
+    |> Map.ofSeq
 
   /// Create a graph where transitive = direct (no call graph).
   let fromDirect (symbolToTests: Map<string, TestId array>) =
     { SymbolToTests = symbolToTests
       TransitiveCoverage = symbolToTests
+      PerFileIndex = Map.empty
       SourceVersion = 1 }
 
   let findAffected (changedSymbols: string list) (graph: TestDependencyGraph) : TestId array =
@@ -553,6 +577,7 @@ module TestDependencyGraph =
       |> Map.ofArray
     { SymbolToTests = invertedIndex
       TransitiveCoverage = invertedIndex
+      PerFileIndex = Map.empty
       SourceVersion = 1 }
 
 module LiveTesting =
@@ -1116,14 +1141,13 @@ module SymbolGraphBuilder =
     graph.SymbolToTests
 
   let updateGraph (testModuleIdentifier: string) (framework: string) (newRefs: SymbolReference list) (filePath: string) (graph: TestDependencyGraph) : TestDependencyGraph =
-    let newIndex = buildIndex testModuleIdentifier framework newRefs
-    let merged =
-      (graph.SymbolToTests, newIndex)
-      ||> Map.fold (fun acc key value ->
-        Map.add key value acc)
+    let newFileIndex = buildIndex testModuleIdentifier framework newRefs
+    let updatedPerFile = Map.add filePath newFileIndex graph.PerFileIndex
+    let merged = TestDependencyGraph.mergePerFileIndexes updatedPerFile
     { graph with
         SymbolToTests = merged
         TransitiveCoverage = merged
+        PerFileIndex = updatedPerFile
         SourceVersion = graph.SourceVersion + 1 }
 
 /// Result of comparing two sets of symbols — separates added from removed.
@@ -1242,7 +1266,11 @@ module LiveTestPipelineState =
 
   let onFcsComplete (filePath: string) (refs: SymbolReference list) (s: LiveTestPipelineState) =
     let changes, newCache = FileAnalysisCache.update filePath refs s.AnalysisCache
-    let newDepGraph = SymbolGraphBuilder.updateGraph ".Tests." "expecto" refs filePath s.DepGraph
+    let newDepGraph =
+      SymbolGraphBuilder.updateGraph
+        LiveTestingDefaults.TestModuleIdentifier
+        LiveTestingDefaults.Framework
+        refs filePath s.DepGraph
     let newDebounce = AdaptiveDebounce.onFcsCompleted s.AdaptiveDebounce
     { s with
         DepGraph = newDepGraph

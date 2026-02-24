@@ -287,6 +287,7 @@ let dependencyGraphTests = testList "TestDependencyGraph" [
     let graph = {
       SymbolToTests = Map.ofList [ "MyModule.add", [| t1 |]; "MyModule.sub", [| t2 |] ]
       TransitiveCoverage = Map.ofList [ "MyModule.add", [| t1 |]; "MyModule.sub", [| t2 |] ]; SourceVersion = 1
+      PerFileIndex = Map.empty
     }
     TestDependencyGraph.findAffected ["MyModule.add"] graph
     |> Expect.hasLength "one affected test" 1
@@ -298,6 +299,7 @@ let dependencyGraphTests = testList "TestDependencyGraph" [
     let graph = {
       SymbolToTests = Map.ofList [ "A.f", [| t1 |]; "B.g", [| t2 |] ]
       TransitiveCoverage = Map.ofList [ "A.f", [| t1 |]; "B.g", [| t2 |] ]; SourceVersion = 1
+      PerFileIndex = Map.empty
     }
     TestDependencyGraph.findAffected ["A.f"; "B.g"] graph
     |> Expect.hasLength "both tests" 2
@@ -308,6 +310,7 @@ let dependencyGraphTests = testList "TestDependencyGraph" [
     let graph = {
       SymbolToTests = Map.ofList [ "A.f", [| t1 |]; "A.g", [| t1 |] ]
       TransitiveCoverage = Map.ofList [ "A.f", [| t1 |]; "A.g", [| t1 |] ]; SourceVersion = 1
+      PerFileIndex = Map.empty
     }
     TestDependencyGraph.findAffected ["A.f"; "A.g"] graph
     |> Expect.hasLength "deduplicated to one" 1
@@ -317,6 +320,7 @@ let dependencyGraphTests = testList "TestDependencyGraph" [
     let graph = {
       SymbolToTests = Map.ofList [ "A.f", [| mkTestId "t" "x" |] ]
       TransitiveCoverage = Map.ofList [ "A.f", [| mkTestId "t" "x" |] ]; SourceVersion = 1
+      PerFileIndex = Map.empty
     }
     TestDependencyGraph.findAffected ["Unknown.sym"] graph
     |> Expect.hasLength "no matches" 0
@@ -740,6 +744,7 @@ let propertyTests = testList "Property-based" [
     let graph = {
       SymbolToTests = Map.ofList [ "a", [| t1 |]; "b", [| t2 |] ]
       TransitiveCoverage = Map.ofList [ "a", [| t1 |]; "b", [| t2 |] ]; SourceVersion = 1
+      PerFileIndex = Map.empty
     }
     let affected = TestDependencyGraph.findAffected [sym] graph
     let allIds = Set.ofList [ t1; t2 ]
@@ -1188,6 +1193,7 @@ let stalenessTests = testList "Staleness" [
       "Module.add", [| test1.Id |]
       "Module.validate", [| test1.Id; test2.Id |]
     ]; SourceVersion = 1
+    PerFileIndex = Map.empty
   }
   let baseState = {
     LiveTestState.empty with
@@ -1291,6 +1297,7 @@ let orchestratorTests = testList "PipelineOrchestrator" [
       "Module.validate", [| test1.Id; test2.Id |]
       "Module.dbCall", [| intTest.Id |]
     ]; SourceVersion = 1
+    PerFileIndex = Map.empty
   }
   let baseState = {
     LiveTestState.empty with
@@ -1739,6 +1746,7 @@ let depGraphBfsTests = testList "TestDependencyGraph BFS" [
       "Module.add", [| test1.Id |]
       "Module.validate", [| test1.Id; test2.Id |]
     ]; SourceVersion = 1
+    PerFileIndex = Map.empty
   }
 
   test "findAffected returns empty for unknown symbols" {
@@ -2615,10 +2623,13 @@ let symbolGraphTests = testList "SymbolGraphBuilder" [
   }
 
   test "updateGraph merges new symbols into existing graph" {
-    let existingGraph = {
-      TestDependencyGraph.empty with
-        SymbolToTests = Map.ofList ["OldModule.fn", [|TestId.create "OldTest" "fcs"|]]
-    }
+    // Set up existing graph WITH PerFileIndex tracking (as produced by real updateGraph calls)
+    let existingGraph =
+      TestDependencyGraph.empty
+      |> SymbolGraphBuilder.updateGraph ".Tests." "fcs"
+        [ { SymbolFullName = "MyApp.Tests.OldTest"; IsFromDefinition = true; UsedInTestId = None; FilePath = "Old.fs"; Line = 1 }
+          { SymbolFullName = "OldModule.fn"; IsFromDefinition = false; UsedInTestId = None; FilePath = "Old.fs"; Line = 5 } ]
+        "Old.fs"
     let newRefs = [
       { SymbolFullName = "MyApp.Tests.test2"; IsFromDefinition = true; UsedInTestId = None; FilePath = "New.fs"; Line = 1 }
       { SymbolFullName = "NewModule.fn"; IsFromDefinition = false; UsedInTestId = None; FilePath = "New.fs"; Line = 5 }
@@ -2626,21 +2637,25 @@ let symbolGraphTests = testList "SymbolGraphBuilder" [
     let updated = SymbolGraphBuilder.updateGraph ".Tests." "fcs" newRefs "New.fs" existingGraph
     updated.SymbolToTests |> Map.containsKey "OldModule.fn" |> Expect.isTrue "old preserved"
     updated.SymbolToTests |> Map.containsKey "NewModule.fn" |> Expect.isTrue "new added"
-    updated.SourceVersion |> Expect.equal "version bumped" 1
+    updated.SourceVersion |> Expect.equal "version bumped" 2
   }
 
-  test "updateGraph overwrites existing symbol entries for same key" {
-    let existingGraph = {
-      TestDependencyGraph.empty with
-        SymbolToTests = Map.ofList ["MyModule.fn", [|TestId.create "OldTest" "fcs"|]]
-    }
+  test "updateGraph replaces same file's symbol entries on re-analysis" {
+    // First analysis: FileA maps MyModule.fn → OldTest
+    let graph1 =
+      TestDependencyGraph.empty
+      |> SymbolGraphBuilder.updateGraph ".Tests." "fcs"
+        [ { SymbolFullName = "MyApp.Tests.OldTest"; IsFromDefinition = true; UsedInTestId = None; FilePath = "F.fs"; Line = 1 }
+          { SymbolFullName = "MyModule.fn"; IsFromDefinition = false; UsedInTestId = None; FilePath = "F.fs"; Line = 5 } ]
+        "F.fs"
+    // Re-analysis: FileA now maps MyModule.fn → test2 (different test)
     let newRefs = [
       { SymbolFullName = "MyApp.Tests.test2"; IsFromDefinition = true; UsedInTestId = None; FilePath = "F.fs"; Line = 1 }
       { SymbolFullName = "MyModule.fn"; IsFromDefinition = false; UsedInTestId = None; FilePath = "F.fs"; Line = 5 }
     ]
-    let updated = SymbolGraphBuilder.updateGraph ".Tests." "fcs" newRefs "F.fs" existingGraph
+    let updated = SymbolGraphBuilder.updateGraph ".Tests." "fcs" newRefs "F.fs" graph1
     let tests = updated.SymbolToTests |> Map.find "MyModule.fn"
-    tests |> Array.length |> Expect.equal "overwritten with new" 1
+    tests |> Array.length |> Expect.equal "replaced with new test" 1
   }
 
   test "empty refs produce empty index" {
@@ -3970,7 +3985,7 @@ let pipelineBenchmarkTests = testList "Pipeline Core Benchmark" [
     let directMap =
       tests |> Array.map (fun t -> sprintf "Module.func%d" (t.Id.GetHashCode() % 50), [| t.Id |])
       |> Array.groupBy fst |> Array.map (fun (sym, pairs) -> sym, pairs |> Array.collect snd) |> Map.ofArray
-    let graph = { SymbolToTests = directMap; TransitiveCoverage = directMap; SourceVersion = 1 }
+    let graph = { SymbolToTests = directMap; TransitiveCoverage = directMap; SourceVersion = 1; PerFileIndex = Map.empty }
     let results =
       tests.[..149] |> Array.map (fun t ->
         t.Id, { TestId = t.Id; TestName = t.DisplayName
@@ -4010,7 +4025,7 @@ let pipelineBenchmarkTests = testList "Pipeline Core Benchmark" [
     let directMap =
       tests |> Array.map (fun t -> sprintf "func%d" (t.Id.GetHashCode() % 200), [| t.Id |])
       |> Array.groupBy fst |> Array.map (fun (sym, pairs) -> sym, pairs |> Array.collect snd) |> Map.ofArray
-    let graph = { SymbolToTests = directMap; TransitiveCoverage = directMap; SourceVersion = 1 }
+    let graph = { SymbolToTests = directMap; TransitiveCoverage = directMap; SourceVersion = 1; PerFileIndex = Map.empty }
     let results =
       tests.[..799] |> Array.map (fun t ->
         t.Id, { TestId = t.Id; TestName = t.DisplayName
@@ -4185,5 +4200,141 @@ let fcsGraphTests = testList "FCS dependency graph builder" [
     match CoverageProjection.symbolCoverage graph results "MyApp.Math.unused" with
     | CoverageStatus.NotCovered -> ()
     | other -> failtest (sprintf "Expected NotCovered for unused, got %A" other)
+  }
+]
+
+// --- Multi-File Merge Tests ---
+let private mkSymRef fullName line isDef : SymbolReference =
+  { SymbolFullName = fullName
+    IsFromDefinition = isDef
+    UsedInTestId = None
+    FilePath = "test.fs"
+    Line = line }
+
+[<Tests>]
+let perFileMergeTests = testList "per-file merge correctness" [
+  test "updateGraph merges TestIds across files, not overwrite" {
+    let fileARefs = [
+      mkSymRef "MyApp.Tests.test1" 10 true
+      mkSymRef "MyApp.Prod.foo" 12 false
+    ]
+    let fileBRefs = [
+      mkSymRef "MyApp.Tests.test2" 10 true
+      mkSymRef "MyApp.Prod.foo" 12 false
+    ]
+
+    let graph1 =
+      TestDependencyGraph.empty
+      |> SymbolGraphBuilder.updateGraph ".Tests." "fcs" fileARefs "FileA.fs"
+
+    let test1Id = TestId.create "MyApp.Tests.test1" "fcs"
+    TestDependencyGraph.findAffected ["MyApp.Prod.foo"] graph1
+    |> Expect.contains "FileA should map Prod.foo to test1" test1Id
+
+    let graph2 =
+      graph1
+      |> SymbolGraphBuilder.updateGraph ".Tests." "fcs" fileBRefs "FileB.fs"
+
+    let test2Id = TestId.create "MyApp.Tests.test2" "fcs"
+    let affected = TestDependencyGraph.findAffected ["MyApp.Prod.foo"] graph2
+
+    affected |> Expect.contains "Should still have test1 from FileA" test1Id
+    affected |> Expect.contains "Should have test2 from FileB" test2Id
+  }
+
+  test "re-analyzing same file replaces old entries" {
+    let refsV1 = [
+      mkSymRef "MyApp.Tests.test1" 10 true
+      mkSymRef "MyApp.Prod.foo" 12 false
+    ]
+    let refsV2 = [
+      mkSymRef "MyApp.Tests.test1" 10 true
+      mkSymRef "MyApp.Prod.bar" 12 false
+    ]
+
+    let graph1 =
+      TestDependencyGraph.empty
+      |> SymbolGraphBuilder.updateGraph ".Tests." "fcs" refsV1 "FileA.fs"
+    let graph2 =
+      graph1
+      |> SymbolGraphBuilder.updateGraph ".Tests." "fcs" refsV2 "FileA.fs"
+
+    let test1Id = TestId.create "MyApp.Tests.test1" "fcs"
+    TestDependencyGraph.findAffected ["MyApp.Prod.foo"] graph2
+    |> Expect.isEmpty "foo should be gone after FileA re-analysis"
+
+    TestDependencyGraph.findAffected ["MyApp.Prod.bar"] graph2
+    |> Expect.contains "bar should map to test1" test1Id
+  }
+
+  test "removing a file's refs clears only that file" {
+    let fileARefs = [
+      mkSymRef "MyApp.Tests.test1" 10 true
+      mkSymRef "MyApp.Prod.foo" 12 false
+    ]
+    let fileBRefs = [
+      mkSymRef "MyApp.Tests.test2" 10 true
+      mkSymRef "MyApp.Prod.foo" 12 false
+    ]
+
+    let graph =
+      TestDependencyGraph.empty
+      |> SymbolGraphBuilder.updateGraph ".Tests." "fcs" fileARefs "FileA.fs"
+      |> SymbolGraphBuilder.updateGraph ".Tests." "fcs" fileBRefs "FileB.fs"
+
+    let graphAfter =
+      graph |> SymbolGraphBuilder.updateGraph ".Tests." "fcs" [] "FileA.fs"
+
+    let test2Id = TestId.create "MyApp.Tests.test2" "fcs"
+    let affected = TestDependencyGraph.findAffected ["MyApp.Prod.foo"] graphAfter
+
+    affected |> Expect.hasLength "only FileB's test2 remains" 1
+    affected |> Expect.contains "test2 should still be there" test2Id
+  }
+
+  test "PerFileIndex tracks contributions" {
+    let fileARefs = [
+      mkSymRef "MyApp.Tests.test1" 10 true
+      mkSymRef "MyApp.Prod.foo" 12 false
+    ]
+
+    let graph =
+      TestDependencyGraph.empty
+      |> SymbolGraphBuilder.updateGraph ".Tests." "fcs" fileARefs "FileA.fs"
+
+    graph.PerFileIndex
+    |> Map.containsKey "FileA.fs"
+    |> Expect.isTrue "PerFileIndex should contain FileA.fs"
+  }
+
+  test "multiple symbols across multiple files" {
+    let fileARefs = [
+      mkSymRef "MyApp.Tests.testA" 10 true
+      mkSymRef "MyApp.Prod.foo" 12 false
+      mkSymRef "MyApp.Prod.bar" 14 false
+    ]
+    let fileBRefs = [
+      mkSymRef "MyApp.Tests.testB" 10 true
+      mkSymRef "MyApp.Prod.bar" 12 false
+      mkSymRef "MyApp.Prod.baz" 14 false
+    ]
+
+    let graph =
+      TestDependencyGraph.empty
+      |> SymbolGraphBuilder.updateGraph ".Tests." "fcs" fileARefs "FileA.fs"
+      |> SymbolGraphBuilder.updateGraph ".Tests." "fcs" fileBRefs "FileB.fs"
+
+    let testAId = TestId.create "MyApp.Tests.testA" "fcs"
+    let testBId = TestId.create "MyApp.Tests.testB" "fcs"
+
+    TestDependencyGraph.findAffected ["MyApp.Prod.foo"] graph
+    |> Expect.equal "foo maps to testA only" [| testAId |]
+
+    let barAffected = TestDependencyGraph.findAffected ["MyApp.Prod.bar"] graph
+    barAffected |> Expect.contains "bar maps to testA" testAId
+    barAffected |> Expect.contains "bar maps to testB" testBId
+
+    TestDependencyGraph.findAffected ["MyApp.Prod.baz"] graph
+    |> Expect.equal "baz maps to testB only" [| testBId |]
   }
 ]
