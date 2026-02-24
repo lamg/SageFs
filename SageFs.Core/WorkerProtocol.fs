@@ -106,10 +106,19 @@ module WorkerProtocol =
 
   module WorkerSymbolRef =
     let fromDomain (sr: Features.LiveTesting.SymbolReference) : WorkerSymbolRef =
-      { SymbolFullName = sr.SymbolFullName; IsFromDefinition = sr.IsFromDefinition; FilePath = sr.FilePath; Line = sr.Line }
+      { SymbolFullName = sr.SymbolFullName
+        IsFromDefinition = sr.UseKind = Features.LiveTesting.SymbolUseKind.Definition
+        FilePath = sr.FilePath
+        Line = sr.Line }
 
     let toDomain (ws: WorkerSymbolRef) : Features.LiveTesting.SymbolReference =
-      { SymbolFullName = ws.SymbolFullName; IsFromDefinition = ws.IsFromDefinition; UsedInTestId = None; FilePath = ws.FilePath; Line = ws.Line }
+      { SymbolFullName = ws.SymbolFullName
+        UseKind =
+          if ws.IsFromDefinition then Features.LiveTesting.SymbolUseKind.Definition
+          else Features.LiveTesting.SymbolUseKind.Reference
+        UsedInTestId = None
+        FilePath = ws.FilePath
+        Line = ws.Line }
 
   [<RequireQualifiedAccess>]
   type WorkerResponse =

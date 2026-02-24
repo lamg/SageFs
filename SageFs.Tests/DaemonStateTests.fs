@@ -63,7 +63,7 @@ let tests =
         let respondTask = async {
           let! ctx = listener.GetContextAsync() |> Async.AwaitTask
           let response = ctx.Response
-          let body = """{"pid":99999,"port":39995,"version":"test"}"""B
+          let body = System.Text.Encoding.UTF8.GetBytes("""{"pid":99999,"port":39995,"version":"test"}""")
           response.ContentType <- "application/json"
           response.ContentLength64 <- int64 body.Length
           response.OutputStream.Write(body, 0, body.Length)

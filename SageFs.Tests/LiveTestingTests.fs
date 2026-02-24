@@ -389,8 +389,8 @@ let coverageProjectionTests = testList "CoverageProjection" [
     }
     let results = Map.ofList [ tid, mkResult tid (TestResult.Passed (ts 5.0)) ]
     match CoverageProjection.symbolCoverage graph results "MyModule.add" with
-    | CoverageStatus.Covered (1, true) -> ()
-    | other -> failtestf "expected Covered(1,true), got %A" other
+    | CoverageStatus.Covered (1, CoverageHealth.AllPassing) -> ()
+    | other -> failtestf "expected Covered(1,AllPassing), got %A" other
   }
 
   test "symbol reachable by failing test is Covered with allPassing=false" {
@@ -402,8 +402,8 @@ let coverageProjectionTests = testList "CoverageProjection" [
     let failure = TestFailure.AssertionFailed "nope"
     let results = Map.ofList [ tid, mkResult tid (TestResult.Failed (failure, ts 3.0)) ]
     match CoverageProjection.symbolCoverage graph results "MyModule.add" with
-    | CoverageStatus.Covered (1, false) -> ()
-    | other -> failtestf "expected Covered(1,false), got %A" other
+    | CoverageStatus.Covered (1, CoverageHealth.SomeFailing) -> ()
+    | other -> failtestf "expected Covered(1,SomeFailing), got %A" other
   }
 
   test "symbol reachable by mixed results has allPassing=false" {
@@ -419,8 +419,8 @@ let coverageProjectionTests = testList "CoverageProjection" [
       t2, mkResult t2 (TestResult.Failed (failure, ts 3.0))
     ]
     match CoverageProjection.symbolCoverage graph results "MyModule.add" with
-    | CoverageStatus.Covered (2, false) -> ()
-    | other -> failtestf "expected Covered(2,false), got %A" other
+    | CoverageStatus.Covered (2, CoverageHealth.SomeFailing) -> ()
+    | other -> failtestf "expected Covered(2,SomeFailing), got %A" other
   }
 
   test "symbol reachable by tests with no results yet has allPassing=false" {
@@ -430,8 +430,8 @@ let coverageProjectionTests = testList "CoverageProjection" [
         TransitiveCoverage = Map.ofList [ "MyModule.add", [| tid |] ]
     }
     match CoverageProjection.symbolCoverage graph Map.empty "MyModule.add" with
-    | CoverageStatus.Covered (1, false) -> ()
-    | other -> failtestf "expected Covered(1,false), got %A" other
+    | CoverageStatus.Covered (1, CoverageHealth.SomeFailing) -> ()
+    | other -> failtestf "expected Covered(1,SomeFailing), got %A" other
   }
 
   test "computeAll produces coverage for every symbol in graph" {
@@ -666,13 +666,13 @@ let liveTestStateEmptyTests = testList "LiveTestState.empty" [
   }
 
   test "starts enabled" {
-    LiveTestState.empty.Enabled
-    |> Expect.isTrue "enabled by default"
+    LiveTestState.empty.Activation
+    |> Expect.equal "enabled by default" LiveTestingActivation.Active
   }
 
   test "starts with coverage shown" {
-    LiveTestState.empty.ShowCoverage
-    |> Expect.isTrue "coverage shown by default"
+    LiveTestState.empty.CoverageDisplay
+    |> Expect.equal "coverage shown by default" CoverageVisibility.Shown
   }
 
   test "starts not running" {
@@ -797,8 +797,8 @@ let elmIntegrationTests = testList "LiveTesting Elm Integration" [
       |> Expect.equal "no discovered tests" Array.empty
       TestRunPhase.isRunning model.LiveTesting.TestState.RunPhase
       |> Expect.isFalse "not running"
-      model.LiveTesting.TestState.Enabled
-      |> Expect.isTrue "enabled"
+      model.LiveTesting.TestState.Activation
+      |> Expect.equal "enabled" LiveTestingActivation.Active
     }
   ]
 
@@ -861,13 +861,13 @@ let elmIntegrationTests = testList "LiveTesting Elm Integration" [
       Map.containsKey tid model'.LiveTesting.TestState.LastResults
       |> Expect.isTrue "should have result"
     }
-    test "LiveTestingToggled updates Enabled" {
+    test "LiveTestingToggled updates Activation" {
       let model', _ =
         SageFsUpdate.update
           (SageFsMsg.Event (SageFsEvent.LiveTestingToggled false))
           SageFsModel.initial
-      model'.LiveTesting.TestState.Enabled
-      |> Expect.isFalse "should be disabled"
+      model'.LiveTesting.TestState.Activation
+      |> Expect.equal "should be disabled" LiveTestingActivation.Inactive
     }
     test "AffectedTestsComputed sets AffectedTests" {
       let t1 = mkTestId "t1" "x"
@@ -1230,7 +1230,7 @@ let stalenessTests = testList "Staleness" [
         test1.Id, mkResult test1.Id (TestResult.Passed (TimeSpan.FromMilliseconds 5.0))
         test2.Id, mkResult test2.Id (TestResult.Passed (TimeSpan.FromMilliseconds 3.0))
       ]
-      Enabled = true
+      Activation = LiveTestingActivation.Active
   }
 
   test "markStale preserves original result for affected tests" {
@@ -1278,7 +1278,7 @@ let stalenessTests = testList "Staleness" [
     let stateNoPrior = {
       LiveTestState.empty with
         DiscoveredTests = [| tc3 |]
-        Enabled = true
+        Activation = LiveTestingActivation.Active
     }
     let result = Staleness.markStale graph2 [ "Module.add" ] stateNoPrior
     let entry = result.StatusEntries |> Array.find (fun e -> e.TestId = tc3.Id)
@@ -1330,11 +1330,11 @@ let orchestratorTests = testList "PipelineOrchestrator" [
   let baseState = {
     LiveTestState.empty with
       DiscoveredTests = [| test1; test2; intTest |]
-      Enabled = true
+      Activation = LiveTestingActivation.Active
   }
 
   test "decide skips when disabled" {
-    let state = { baseState with Enabled = false }
+    let state = { baseState with Activation = LiveTestingActivation.Inactive }
     let d = PipelineOrchestrator.decide state RunTrigger.Keystroke [ "Module.add" ] depGraph
     match d with
     | PipelineDecision.Skip _ -> ()
@@ -1465,7 +1465,7 @@ let statusEntryTests = testList "StatusEntry Computation" [
         LastResults = Map.ofList [
           test1.Id, mkResult test1.Id (TestResult.Passed (TimeSpan.FromMilliseconds 5.0))
         ]
-        Enabled = true
+        Activation = LiveTestingActivation.Active
     }
     let entries = LiveTesting.computeStatusEntries state
     entries.Length |> Expect.equal "1 entry" 1
@@ -1477,7 +1477,7 @@ let statusEntryTests = testList "StatusEntry Computation" [
   test "computeStatusEntries shows Detected for tests with no results" {
     let state = {
       LiveTestState.empty with
-        DiscoveredTests = [| test1 |]; Enabled = true
+        DiscoveredTests = [| test1 |]; Activation = LiveTestingActivation.Active
     }
     let entries = LiveTesting.computeStatusEntries state
     entries.[0].Status |> Expect.equal "detected" TestRunStatus.Detected
@@ -1486,7 +1486,7 @@ let statusEntryTests = testList "StatusEntry Computation" [
   test "computeStatusEntries shows PolicyDisabled for disabled categories" {
     let state = {
       LiveTestState.empty with
-        DiscoveredTests = [| test1 |]; Enabled = true
+        DiscoveredTests = [| test1 |]; Activation = LiveTestingActivation.Active
         RunPolicies = Map.ofList [ TestCategory.Unit, RunPolicy.Disabled ]
     }
     let entries = LiveTesting.computeStatusEntries state
@@ -1497,7 +1497,7 @@ let statusEntryTests = testList "StatusEntry Computation" [
     let gen = RunGeneration.next RunGeneration.zero
     let state = {
       LiveTestState.empty with
-        DiscoveredTests = [| test1 |]; Enabled = true
+        DiscoveredTests = [| test1 |]; Activation = LiveTestingActivation.Active
         AffectedTests = Set.ofList [ test1.Id ]
         RunPhase = Running gen; LastGeneration = gen
     }
@@ -1508,7 +1508,7 @@ let statusEntryTests = testList "StatusEntry Computation" [
   test "computeStatusEntries shows Queued for affected but not running" {
     let state = {
       LiveTestState.empty with
-        DiscoveredTests = [| test1 |]; Enabled = true
+        DiscoveredTests = [| test1 |]; Activation = LiveTestingActivation.Active
         AffectedTests = Set.ofList [ test1.Id ]
     }
     let entries = LiveTesting.computeStatusEntries state
@@ -1519,7 +1519,7 @@ let statusEntryTests = testList "StatusEntry Computation" [
     let gen = RunGeneration.next RunGeneration.zero
     let state = {
       LiveTestState.empty with
-        DiscoveredTests = [| test1 |]; Enabled = true
+        DiscoveredTests = [| test1 |]; Activation = LiveTestingActivation.Active
         AffectedTests = Set.ofList [ test1.Id ]
         RunPhase = Running gen; LastGeneration = gen
     }
@@ -1536,7 +1536,7 @@ let statusEntryTests = testList "StatusEntry Computation" [
   test "mergeResults preserves previousStatus" {
     let state = {
       LiveTestState.empty with
-        DiscoveredTests = [| test1 |]; Enabled = true
+        DiscoveredTests = [| test1 |]; Activation = LiveTestingActivation.Active
         LastResults = Map.ofList [
           test1.Id, mkResult test1.Id (TestResult.Passed (TimeSpan.FromMilliseconds 5.0))
         ]
@@ -1680,7 +1680,7 @@ let annotationTests = testList "Gutter Annotations" [
           { AttributeName = "Test"; FunctionName = "test1"; FilePath = "test.fs"; Line = 10; Column = 0 }
           { AttributeName = "Test"; FunctionName = "test2"; FilePath = "other.fs"; Line = 5; Column = 0 }
         |]
-        Enabled = true
+        Activation = LiveTestingActivation.Active
     }
     let annotations = LiveTesting.annotationsForFile "test.fs" state
     annotations.Length |> Expect.equal "1 annotation" 1
@@ -1698,7 +1698,7 @@ let annotationTests = testList "Gutter Annotations" [
         LastResults = Map.ofList [
           test1.Id, mkResult test1.Id (TestResult.Passed (TimeSpan.FromMilliseconds 5.0))
         ]
-        Enabled = true
+        Activation = LiveTestingActivation.Active
     }
     let state = { baseState with StatusEntries = LiveTesting.computeStatusEntries baseState }
     let annotations = LiveTesting.annotationsForFile "test.fs" state
@@ -1740,7 +1740,7 @@ let annotationTests = testList "Gutter Annotations" [
   test "recomputeEditorAnnotations returns empty when disabled" {
     let filePath = "Tests.fs"
     let state = { LiveTestState.empty with
-                    Enabled = false
+                    Activation = LiveTestingActivation.Inactive
                     SourceLocations = [|
                       { AttributeName = "Fact"; FunctionName = "test1"; FilePath = filePath; Line = 5; Column = 0 }
                     |] }
@@ -1808,9 +1808,9 @@ let coverageProjectionExtendedTests = testList "Coverage Projection Extended" [
     }
     let cov = CoverageProjection.symbolCoverage graph results "Module.add"
     match cov with
-    | CoverageStatus.Covered (count, allPassing) ->
+    | CoverageStatus.Covered (count, health) ->
       count |> Expect.equal "1 test" 1
-      allPassing |> Expect.isTrue "all passing"
+      health |> Expect.equal "all passing" CoverageHealth.AllPassing
     | other -> failwithf "Expected Covered, got %A" other
   }
 
@@ -1823,8 +1823,8 @@ let coverageProjectionExtendedTests = testList "Coverage Projection Extended" [
     }
     let cov = CoverageProjection.symbolCoverage graph failedResults "Module.add"
     match cov with
-    | CoverageStatus.Covered (_, allPassing) ->
-      allPassing |> Expect.isFalse "not all passing"
+    | CoverageStatus.Covered (_, health) ->
+      health |> Expect.equal "not all passing" CoverageHealth.SomeFailing
     | other -> failwithf "Expected Covered, got %A" other
   }
 
@@ -2217,7 +2217,7 @@ let pipelineEffectsTests = testList "PipelineEffects" [
     let tc1 = { Id = TestId.create "test1" "xunit"; FullName = "test1"; DisplayName = "test1"
                 Origin = TestOrigin.ReflectionOnly; Labels = []; Framework = "xunit"
                 Category = TestCategory.Unit }
-    let state = { LiveTestState.empty with DiscoveredTests = [| tc1 |]; Enabled = true }
+    let state = { LiveTestState.empty with DiscoveredTests = [| tc1 |]; Activation = LiveTestingActivation.Active }
     let graph = {
       TestDependencyGraph.empty with
         SymbolToTests = Map.ofList [ "Module.add", [| tc1.Id |] ]
@@ -2231,14 +2231,14 @@ let pipelineEffectsTests = testList "PipelineEffects" [
   }
 
   test "afterTypeCheck with no affected tests returns None" {
-    let state = { LiveTestState.empty with DiscoveredTests = [||]; Enabled = true }
+    let state = { LiveTestState.empty with DiscoveredTests = [||]; Activation = LiveTestingActivation.Active }
     let graph = TestDependencyGraph.empty
     PipelineEffects.afterTypeCheck ["unknown.symbol"] RunTrigger.Keystroke graph state None
     |> Expect.isNone "no affected tests"
   }
 
   test "afterTypeCheck when disabled returns None" {
-    let state = { LiveTestState.empty with Enabled = false }
+    let state = { LiveTestState.empty with Activation = LiveTestingActivation.Inactive }
     let graph = TestDependencyGraph.empty
     PipelineEffects.afterTypeCheck ["Module.add"] RunTrigger.Keystroke graph state None
     |> Expect.isNone "disabled"
@@ -2254,7 +2254,7 @@ let pipelineEffectsTests = testList "PipelineEffects" [
     let state = {
       LiveTestState.empty with
         DiscoveredTests = [| tc1; tc2 |]
-        Enabled = true
+        Activation = LiveTestingActivation.Active
     }
     let graph = {
       TestDependencyGraph.empty with
@@ -2416,7 +2416,7 @@ let pipelineStateTests = testList "LiveTestPipelineState" [
       LiveTestPipelineState.empty with
         DepGraph = depGraph
         ChangedSymbols = ["mySymbol"]
-        TestState = { LiveTestState.empty with DiscoveredTests = [|tc|]; Enabled = true }
+        TestState = { LiveTestState.empty with DiscoveredTests = [|tc|]; Activation = LiveTestingActivation.Active }
     }
     let s = state |> LiveTestPipelineState.onKeystroke "let x = 1" "File.fs" t0
     let effects, _ = s |> LiveTestPipelineState.tick t301
@@ -2545,7 +2545,7 @@ let endToEndPipelineTests = testList "End-to-end Pipeline" [
       LiveTestPipelineState.empty with
         DepGraph = depGraph
         ChangedSymbols = ["changedFn"]
-        TestState = { LiveTestState.empty with DiscoveredTests = [|tc|]; Enabled = true }
+        TestState = { LiveTestState.empty with DiscoveredTests = [|tc|]; Activation = LiveTestingActivation.Active }
     }
     let s = state |> LiveTestPipelineState.onKeystroke "let x = 1" "File.fs" t0
     // Phase 1: tick fires TS + FCS
@@ -2578,7 +2578,7 @@ let endToEndPipelineTests = testList "End-to-end Pipeline" [
       LiveTestPipelineState.empty with
         DepGraph = depGraph
         ChangedSymbols = ["sym"]
-        TestState = { LiveTestState.empty with DiscoveredTests = [|tc|]; Enabled = false }
+        TestState = { LiveTestState.empty with DiscoveredTests = [|tc|]; Activation = LiveTestingActivation.Inactive }
     }
     let s = state |> LiveTestPipelineState.onKeystroke "let x = 1" "File.fs" t0
     let effects, _ = s |> LiveTestPipelineState.tick (t0.AddMilliseconds(301.0))
@@ -2600,7 +2600,7 @@ let endToEndPipelineTests = testList "End-to-end Pipeline" [
       LiveTestPipelineState.empty with
         DepGraph = depGraph
         ChangedSymbols = ["sym"]
-        TestState = { LiveTestState.empty with DiscoveredTests = [|tc|]; Enabled = true }
+        TestState = { LiveTestState.empty with DiscoveredTests = [|tc|]; Activation = LiveTestingActivation.Active }
     }
     let s = state |> LiveTestPipelineState.onKeystroke "let x = 1" "File.fs" t0
     let effects, _ = s |> LiveTestPipelineState.tick (t0.AddMilliseconds(301.0))
@@ -2742,11 +2742,11 @@ let adaptiveDebounceTests = testList "AdaptiveDebounce" [
 let symbolGraphTests = testList "SymbolGraphBuilder" [
   test "buildIndex maps production symbols to test functions via line-range heuristic" {
     let refs = [
-      { SymbolFullName = "MyApp.Tests.test1"; IsFromDefinition = true; UsedInTestId = None; FilePath = "F.fs"; Line = 1 }
-      { SymbolFullName = "MyModule.parse"; IsFromDefinition = false; UsedInTestId = None; FilePath = "F.fs"; Line = 5 }
-      { SymbolFullName = "MyModule.format"; IsFromDefinition = false; UsedInTestId = None; FilePath = "F.fs"; Line = 8 }
-      { SymbolFullName = "MyApp.Tests.test2"; IsFromDefinition = true; UsedInTestId = None; FilePath = "F.fs"; Line = 20 }
-      { SymbolFullName = "MyModule.parse"; IsFromDefinition = false; UsedInTestId = None; FilePath = "F.fs"; Line = 25 }
+      { SymbolFullName = "MyApp.Tests.test1"; UseKind = SymbolUseKind.Definition; UsedInTestId = None; FilePath = "F.fs"; Line = 1 }
+      { SymbolFullName = "MyModule.parse"; UseKind = SymbolUseKind.Reference; UsedInTestId = None; FilePath = "F.fs"; Line = 5 }
+      { SymbolFullName = "MyModule.format"; UseKind = SymbolUseKind.Reference; UsedInTestId = None; FilePath = "F.fs"; Line = 8 }
+      { SymbolFullName = "MyApp.Tests.test2"; UseKind = SymbolUseKind.Definition; UsedInTestId = None; FilePath = "F.fs"; Line = 20 }
+      { SymbolFullName = "MyModule.parse"; UseKind = SymbolUseKind.Reference; UsedInTestId = None; FilePath = "F.fs"; Line = 25 }
     ]
     let index = SymbolGraphBuilder.buildIndex ".Tests." "fcs" refs
     index |> Map.find "MyModule.parse" |> Array.length |> Expect.equal "parse has 2 tests" 2
@@ -2755,7 +2755,7 @@ let symbolGraphTests = testList "SymbolGraphBuilder" [
 
   test "buildIndex produces empty graph when no test definitions present" {
     let refs = [
-      { SymbolFullName = "MyModule.helper"; IsFromDefinition = false; UsedInTestId = None; FilePath = "F.fs"; Line = 5 }
+      { SymbolFullName = "MyModule.helper"; UseKind = SymbolUseKind.Reference; UsedInTestId = None; FilePath = "F.fs"; Line = 5 }
     ]
     let index = SymbolGraphBuilder.buildIndex ".Tests." "fcs" refs
     index |> Map.isEmpty |> Expect.isTrue "no test context means no entries"
@@ -2763,9 +2763,9 @@ let symbolGraphTests = testList "SymbolGraphBuilder" [
 
   test "buildIndex deduplicates test entries for same symbol" {
     let refs = [
-      { SymbolFullName = "MyApp.Tests.test1"; IsFromDefinition = true; UsedInTestId = None; FilePath = "F.fs"; Line = 1 }
-      { SymbolFullName = "MyModule.parse"; IsFromDefinition = false; UsedInTestId = None; FilePath = "F.fs"; Line = 5 }
-      { SymbolFullName = "MyModule.parse"; IsFromDefinition = false; UsedInTestId = None; FilePath = "F.fs"; Line = 8 }
+      { SymbolFullName = "MyApp.Tests.test1"; UseKind = SymbolUseKind.Definition; UsedInTestId = None; FilePath = "F.fs"; Line = 1 }
+      { SymbolFullName = "MyModule.parse"; UseKind = SymbolUseKind.Reference; UsedInTestId = None; FilePath = "F.fs"; Line = 5 }
+      { SymbolFullName = "MyModule.parse"; UseKind = SymbolUseKind.Reference; UsedInTestId = None; FilePath = "F.fs"; Line = 8 }
     ]
     let index = SymbolGraphBuilder.buildIndex ".Tests." "fcs" refs
     index |> Map.find "MyModule.parse" |> Array.length |> Expect.equal "deduped" 1
@@ -2776,12 +2776,12 @@ let symbolGraphTests = testList "SymbolGraphBuilder" [
     let existingGraph =
       TestDependencyGraph.empty
       |> SymbolGraphBuilder.updateGraph ".Tests." "fcs"
-        [ { SymbolFullName = "MyApp.Tests.OldTest"; IsFromDefinition = true; UsedInTestId = None; FilePath = "Old.fs"; Line = 1 }
-          { SymbolFullName = "OldModule.fn"; IsFromDefinition = false; UsedInTestId = None; FilePath = "Old.fs"; Line = 5 } ]
+        [ { SymbolFullName = "MyApp.Tests.OldTest"; UseKind = SymbolUseKind.Definition; UsedInTestId = None; FilePath = "Old.fs"; Line = 1 }
+          { SymbolFullName = "OldModule.fn"; UseKind = SymbolUseKind.Reference; UsedInTestId = None; FilePath = "Old.fs"; Line = 5 } ]
         "Old.fs"
     let newRefs = [
-      { SymbolFullName = "MyApp.Tests.test2"; IsFromDefinition = true; UsedInTestId = None; FilePath = "New.fs"; Line = 1 }
-      { SymbolFullName = "NewModule.fn"; IsFromDefinition = false; UsedInTestId = None; FilePath = "New.fs"; Line = 5 }
+      { SymbolFullName = "MyApp.Tests.test2"; UseKind = SymbolUseKind.Definition; UsedInTestId = None; FilePath = "New.fs"; Line = 1 }
+      { SymbolFullName = "NewModule.fn"; UseKind = SymbolUseKind.Reference; UsedInTestId = None; FilePath = "New.fs"; Line = 5 }
     ]
     let updated = SymbolGraphBuilder.updateGraph ".Tests." "fcs" newRefs "New.fs" existingGraph
     updated.SymbolToTests |> Map.containsKey "OldModule.fn" |> Expect.isTrue "old preserved"
@@ -2794,13 +2794,13 @@ let symbolGraphTests = testList "SymbolGraphBuilder" [
     let graph1 =
       TestDependencyGraph.empty
       |> SymbolGraphBuilder.updateGraph ".Tests." "fcs"
-        [ { SymbolFullName = "MyApp.Tests.OldTest"; IsFromDefinition = true; UsedInTestId = None; FilePath = "F.fs"; Line = 1 }
-          { SymbolFullName = "MyModule.fn"; IsFromDefinition = false; UsedInTestId = None; FilePath = "F.fs"; Line = 5 } ]
+        [ { SymbolFullName = "MyApp.Tests.OldTest"; UseKind = SymbolUseKind.Definition; UsedInTestId = None; FilePath = "F.fs"; Line = 1 }
+          { SymbolFullName = "MyModule.fn"; UseKind = SymbolUseKind.Reference; UsedInTestId = None; FilePath = "F.fs"; Line = 5 } ]
         "F.fs"
     // Re-analysis: FileA now maps MyModule.fn → test2 (different test)
     let newRefs = [
-      { SymbolFullName = "MyApp.Tests.test2"; IsFromDefinition = true; UsedInTestId = None; FilePath = "F.fs"; Line = 1 }
-      { SymbolFullName = "MyModule.fn"; IsFromDefinition = false; UsedInTestId = None; FilePath = "F.fs"; Line = 5 }
+      { SymbolFullName = "MyApp.Tests.test2"; UseKind = SymbolUseKind.Definition; UsedInTestId = None; FilePath = "F.fs"; Line = 1 }
+      { SymbolFullName = "MyModule.fn"; UseKind = SymbolUseKind.Reference; UsedInTestId = None; FilePath = "F.fs"; Line = 5 }
     ]
     let updated = SymbolGraphBuilder.updateGraph ".Tests." "fcs" newRefs "F.fs" graph1
     let tests = updated.SymbolToTests |> Map.find "MyModule.fn"
@@ -2847,12 +2847,12 @@ let symbolDiffTests = testList "SymbolDiff" [
   test "fromRefs computes diff from reference lists" {
     let t1 = TestId.create "t1" "expecto"
     let prev = [
-      { SymbolFullName = "A.fn"; IsFromDefinition = false; UsedInTestId = Some t1; FilePath = "F.fs"; Line = 1 }
-      { SymbolFullName = "B.fn"; IsFromDefinition = false; UsedInTestId = Some t1; FilePath = "F.fs"; Line = 2 }
+      { SymbolFullName = "A.fn"; UseKind = SymbolUseKind.Reference; UsedInTestId = Some t1; FilePath = "F.fs"; Line = 1 }
+      { SymbolFullName = "B.fn"; UseKind = SymbolUseKind.Reference; UsedInTestId = Some t1; FilePath = "F.fs"; Line = 2 }
     ]
     let curr = [
-      { SymbolFullName = "A.fn"; IsFromDefinition = false; UsedInTestId = Some t1; FilePath = "F.fs"; Line = 1 }
-      { SymbolFullName = "C.fn"; IsFromDefinition = false; UsedInTestId = Some t1; FilePath = "F.fs"; Line = 3 }
+      { SymbolFullName = "A.fn"; UseKind = SymbolUseKind.Reference; UsedInTestId = Some t1; FilePath = "F.fs"; Line = 1 }
+      { SymbolFullName = "C.fn"; UseKind = SymbolUseKind.Reference; UsedInTestId = Some t1; FilePath = "F.fs"; Line = 3 }
     ]
     let sc = SymbolDiff.fromRefs prev curr
     sc.Added |> Expect.hasLength "one added" 1
@@ -2879,7 +2879,7 @@ let fileAnalysisCacheTests = testList "FileAnalysisCache" [
   test "empty cache returns all symbols as added" {
     let t1 = TestId.create "t1" "expecto"
     let refs = [
-      { SymbolFullName = "A.fn"; IsFromDefinition = false; UsedInTestId = Some t1; FilePath = "F.fs"; Line = 1 }
+      { SymbolFullName = "A.fn"; UseKind = SymbolUseKind.Reference; UsedInTestId = Some t1; FilePath = "F.fs"; Line = 1 }
     ]
     let changes, _ = FileAnalysisCache.empty |> FileAnalysisCache.update "F.fs" refs
     changes.Added |> Expect.hasLength "one added" 1
@@ -2889,7 +2889,7 @@ let fileAnalysisCacheTests = testList "FileAnalysisCache" [
   test "second update with same symbols returns no changes" {
     let t1 = TestId.create "t1" "expecto"
     let refs = [
-      { SymbolFullName = "A.fn"; IsFromDefinition = false; UsedInTestId = Some t1; FilePath = "F.fs"; Line = 1 }
+      { SymbolFullName = "A.fn"; UseKind = SymbolUseKind.Reference; UsedInTestId = Some t1; FilePath = "F.fs"; Line = 1 }
     ]
     let _, cache1 = FileAnalysisCache.empty |> FileAnalysisCache.update "F.fs" refs
     let changes, _ = cache1 |> FileAnalysisCache.update "F.fs" refs
@@ -2898,8 +2898,8 @@ let fileAnalysisCacheTests = testList "FileAnalysisCache" [
 
   test "different file doesn't affect existing file's cache" {
     let t1 = TestId.create "t1" "expecto"
-    let refs1 = [{ SymbolFullName = "A.fn"; IsFromDefinition = false; UsedInTestId = Some t1; FilePath = "F1.fs"; Line = 1 }]
-    let refs2 = [{ SymbolFullName = "B.fn"; IsFromDefinition = false; UsedInTestId = Some t1; FilePath = "F2.fs"; Line = 1 }]
+    let refs1 = [{ SymbolFullName = "A.fn"; UseKind = SymbolUseKind.Reference; UsedInTestId = Some t1; FilePath = "F1.fs"; Line = 1 }]
+    let refs2 = [{ SymbolFullName = "B.fn"; UseKind = SymbolUseKind.Reference; UsedInTestId = Some t1; FilePath = "F2.fs"; Line = 1 }]
     let _, cache1 = FileAnalysisCache.empty |> FileAnalysisCache.update "F1.fs" refs1
     let _, cache2 = cache1 |> FileAnalysisCache.update "F2.fs" refs2
     cache2 |> FileAnalysisCache.getFileSymbols "F1.fs" |> Expect.hasLength "F1 preserved" 1
@@ -2909,12 +2909,12 @@ let fileAnalysisCacheTests = testList "FileAnalysisCache" [
   test "modified file separates added and removed" {
     let t1 = TestId.create "t1" "expecto"
     let refs1 = [
-      { SymbolFullName = "A.fn"; IsFromDefinition = false; UsedInTestId = Some t1; FilePath = "F.fs"; Line = 1 }
-      { SymbolFullName = "B.fn"; IsFromDefinition = false; UsedInTestId = Some t1; FilePath = "F.fs"; Line = 2 }
+      { SymbolFullName = "A.fn"; UseKind = SymbolUseKind.Reference; UsedInTestId = Some t1; FilePath = "F.fs"; Line = 1 }
+      { SymbolFullName = "B.fn"; UseKind = SymbolUseKind.Reference; UsedInTestId = Some t1; FilePath = "F.fs"; Line = 2 }
     ]
     let refs2 = [
-      { SymbolFullName = "A.fn"; IsFromDefinition = false; UsedInTestId = Some t1; FilePath = "F.fs"; Line = 1 }
-      { SymbolFullName = "C.fn"; IsFromDefinition = false; UsedInTestId = Some t1; FilePath = "F.fs"; Line = 3 }
+      { SymbolFullName = "A.fn"; UseKind = SymbolUseKind.Reference; UsedInTestId = Some t1; FilePath = "F.fs"; Line = 1 }
+      { SymbolFullName = "C.fn"; UseKind = SymbolUseKind.Reference; UsedInTestId = Some t1; FilePath = "F.fs"; Line = 3 }
     ]
     let _, cache1 = FileAnalysisCache.empty |> FileAnalysisCache.update "F.fs" refs1
     let changes, _ = cache1 |> FileAnalysisCache.update "F.fs" refs2
@@ -2932,9 +2932,9 @@ let fileAnalysisCacheTests = testList "FileAnalysisCache" [
 let compositionTests = testList "compositionTests" [
   test "no-op edit with same symbols produces no affected tests" {
     let refs = [
-      { SymbolFullName = "MyApp.Tests.test1"; IsFromDefinition = true; UsedInTestId = None; FilePath = "Lib.fs"; Line = 1 }
-      { SymbolFullName = "Lib.add"; IsFromDefinition = false; UsedInTestId = None; FilePath = "Lib.fs"; Line = 5 }
-      { SymbolFullName = "Lib.sub"; IsFromDefinition = false; UsedInTestId = None; FilePath = "Lib.fs"; Line = 8 }
+      { SymbolFullName = "MyApp.Tests.test1"; UseKind = SymbolUseKind.Definition; UsedInTestId = None; FilePath = "Lib.fs"; Line = 1 }
+      { SymbolFullName = "Lib.add"; UseKind = SymbolUseKind.Reference; UsedInTestId = None; FilePath = "Lib.fs"; Line = 5 }
+      { SymbolFullName = "Lib.sub"; UseKind = SymbolUseKind.Reference; UsedInTestId = None; FilePath = "Lib.fs"; Line = 8 }
     ]
     let _, cache1 = FileAnalysisCache.empty |> FileAnalysisCache.update "Lib.fs" refs
     let changes, _ = cache1 |> FileAnalysisCache.update "Lib.fs" refs
@@ -2952,12 +2952,12 @@ let compositionTests = testList "compositionTests" [
     let tc = mkTestCase "MyApp.Tests.test1" "expecto" TestCategory.Unit
     let t0 = DateTimeOffset(2025, 1, 1, 0, 0, 0, TimeSpan.Zero)
     let refs = [
-      { SymbolFullName = "MyApp.Tests.test1"; IsFromDefinition = true; UsedInTestId = None; FilePath = "Lib.fs"; Line = 1 }
-      { SymbolFullName = "Lib.add"; IsFromDefinition = false; UsedInTestId = None; FilePath = "Lib.fs"; Line = 5 }
+      { SymbolFullName = "MyApp.Tests.test1"; UseKind = SymbolUseKind.Definition; UsedInTestId = None; FilePath = "Lib.fs"; Line = 1 }
+      { SymbolFullName = "Lib.add"; UseKind = SymbolUseKind.Reference; UsedInTestId = None; FilePath = "Lib.fs"; Line = 5 }
     ]
     let state = {
       LiveTestPipelineState.empty with
-        TestState = { LiveTestState.empty with DiscoveredTests = [|tc|]; Enabled = true }
+        TestState = { LiveTestState.empty with DiscoveredTests = [|tc|]; Activation = LiveTestingActivation.Active }
     }
     let s1 = state |> LiveTestPipelineState.onKeystroke "let x = 1" "File.fs" t0
     let effects30, s30 = s1 |> LiveTestPipelineState.tick (t0.AddMilliseconds(30.0))
@@ -3014,14 +3014,14 @@ let compositionTests = testList "compositionTests" [
 
   test "symbol rename: cache detects removal+addition, graph finds affected" {
     let refsV1 = [
-      { SymbolFullName = "MyApp.Tests.test1"; IsFromDefinition = true; UsedInTestId = None; FilePath = "Lib.fs"; Line = 1 }
-      { SymbolFullName = "Lib.add"; IsFromDefinition = false; UsedInTestId = None; FilePath = "Lib.fs"; Line = 5 }
-      { SymbolFullName = "Lib.oldFn"; IsFromDefinition = false; UsedInTestId = None; FilePath = "Lib.fs"; Line = 8 }
+      { SymbolFullName = "MyApp.Tests.test1"; UseKind = SymbolUseKind.Definition; UsedInTestId = None; FilePath = "Lib.fs"; Line = 1 }
+      { SymbolFullName = "Lib.add"; UseKind = SymbolUseKind.Reference; UsedInTestId = None; FilePath = "Lib.fs"; Line = 5 }
+      { SymbolFullName = "Lib.oldFn"; UseKind = SymbolUseKind.Reference; UsedInTestId = None; FilePath = "Lib.fs"; Line = 8 }
     ]
     let refsV2 = [
-      { SymbolFullName = "MyApp.Tests.test1"; IsFromDefinition = true; UsedInTestId = None; FilePath = "Lib.fs"; Line = 1 }
-      { SymbolFullName = "Lib.add"; IsFromDefinition = false; UsedInTestId = None; FilePath = "Lib.fs"; Line = 5 }
-      { SymbolFullName = "Lib.newFn"; IsFromDefinition = false; UsedInTestId = None; FilePath = "Lib.fs"; Line = 8 }
+      { SymbolFullName = "MyApp.Tests.test1"; UseKind = SymbolUseKind.Definition; UsedInTestId = None; FilePath = "Lib.fs"; Line = 1 }
+      { SymbolFullName = "Lib.add"; UseKind = SymbolUseKind.Reference; UsedInTestId = None; FilePath = "Lib.fs"; Line = 5 }
+      { SymbolFullName = "Lib.newFn"; UseKind = SymbolUseKind.Reference; UsedInTestId = None; FilePath = "Lib.fs"; Line = 8 }
     ]
     let _, cache1 = FileAnalysisCache.empty |> FileAnalysisCache.update "Lib.fs" refsV1
     let graph1 = TestDependencyGraph.empty |> SymbolGraphBuilder.updateGraph ".Tests." "fcs" refsV1 "Lib.fs"
@@ -3062,7 +3062,7 @@ let compositionTests = testList "compositionTests" [
       LiveTestState.empty with
         DiscoveredTests = [|tc1; tc2|]
         LastResults = Map.ofList [tc1.Id, passedResult]
-        Enabled = true
+        Activation = LiveTestingActivation.Active
     }
     let depGraph = {
       TestDependencyGraph.empty with
@@ -3183,7 +3183,7 @@ let elmWiringBehavioralTests = testList "Elm Wiring Behavioral Scenarios" [
           TestState =
             { LiveTestState.empty with
                 DiscoveredTests = [|tc|]
-                Enabled = true } }
+                Activation = LiveTestingActivation.Active } }
     let s1 = state |> LiveTestPipelineState.onKeystroke "let x = 1" "File.fs" t0
     let effects301, _ = s1 |> LiveTestPipelineState.tick (t0.AddMilliseconds(301.0))
     effects301
@@ -3226,7 +3226,7 @@ let elmWiringBehavioralTests = testList "Elm Wiring Behavioral Scenarios" [
     let state =
       { LiveTestState.empty with
           DiscoveredTests = [|tc|]
-          Enabled = true }
+          Activation = LiveTestingActivation.Active }
     let result : TestRunResult =
       { TestId = tc.Id
         TestName = tc.FullName
@@ -3257,7 +3257,7 @@ let elmWiringBehavioralTests = testList "Elm Wiring Behavioral Scenarios" [
     let state =
       { LiveTestState.empty with
           DiscoveredTests = [|tc|]
-          Enabled = true
+          Activation = LiveTestingActivation.Active
           LastResults = Map.ofList [tc.Id, result] }
     let depGraph =
       { TestDependencyGraph.empty with
@@ -3291,7 +3291,7 @@ let elmWiringBehavioralTests = testList "Elm Wiring Behavioral Scenarios" [
     let state =
       { LiveTestState.empty with
           DiscoveredTests = [|tc|]
-          Enabled = true
+          Activation = LiveTestingActivation.Active
           RunPolicies = Map.ofList [TestCategory.Unit, RunPolicy.Disabled] }
     let entries = LiveTesting.computeStatusEntries state
     entries |> Array.exists (fun e -> match e.Status with TestRunStatus.PolicyDisabled -> true | _ -> false)
@@ -3304,7 +3304,7 @@ let elmWiringBehavioralTests = testList "Elm Wiring Behavioral Scenarios" [
 [<Tests>]
 let fileContentChangedTests = testList "FileContentChanged" [
   test "feeds content to pipeline debounce when enabled" {
-    let model = { SageFsModel.initial with LiveTesting = { LiveTestPipelineState.empty with TestState = { LiveTestState.empty with Enabled = true } } }
+    let model = { SageFsModel.initial with LiveTesting = { LiveTestPipelineState.empty with TestState = { LiveTestState.empty with Activation = LiveTestingActivation.Active } } }
     let newModel, _effects = SageFsUpdate.update (SageFsMsg.FileContentChanged("src/MyModule.fs", "let x = 1")) model
     newModel.LiveTesting.ActiveFile
     |> Expect.equal "active file set" (Some "src/MyModule.fs")
@@ -3315,14 +3315,14 @@ let fileContentChangedTests = testList "FileContentChanged" [
   }
 
   test "is no-op when live testing is disabled" {
-    let model = { SageFsModel.initial with LiveTesting = { LiveTestPipelineState.empty with TestState = { LiveTestState.empty with Enabled = false } } }
+    let model = { SageFsModel.initial with LiveTesting = { LiveTestPipelineState.empty with TestState = { LiveTestState.empty with Activation = LiveTestingActivation.Inactive } } }
     let newModel, _effects = SageFsUpdate.update (SageFsMsg.FileContentChanged("src/MyModule.fs", "let x = 1")) model
     newModel.LiveTesting.ActiveFile
     |> Expect.equal "active file unchanged" model.LiveTesting.ActiveFile
   }
 
   test "pipeline tick after debounce fires tree-sitter effect" {
-    let model = { SageFsModel.initial with LiveTesting = { LiveTestPipelineState.empty with TestState = { LiveTestState.empty with Enabled = true } } }
+    let model = { SageFsModel.initial with LiveTesting = { LiveTestPipelineState.empty with TestState = { LiveTestState.empty with Activation = LiveTestingActivation.Active } } }
     let afterKeystroke, _ = SageFsUpdate.update (SageFsMsg.FileContentChanged("src/MyModule.fs", "let x = 1")) model
     let pipeline = afterKeystroke.LiveTesting
     let t51 = DateTimeOffset.UtcNow.AddMilliseconds(51.0)
@@ -3336,7 +3336,7 @@ let fileContentChangedTests = testList "FileContentChanged" [
   }
 
   test "multiple file changes supersede earlier ones" {
-    let model = { SageFsModel.initial with LiveTesting = { LiveTestPipelineState.empty with TestState = { LiveTestState.empty with Enabled = true } } }
+    let model = { SageFsModel.initial with LiveTesting = { LiveTestPipelineState.empty with TestState = { LiveTestState.empty with Activation = LiveTestingActivation.Active } } }
     let after1, _ = SageFsUpdate.update (SageFsMsg.FileContentChanged("src/First.fs", "let a = 1")) model
     let after2, _ = SageFsUpdate.update (SageFsMsg.FileContentChanged("src/Second.fs", "let b = 2")) after1
     after2.LiveTesting.ActiveFile
@@ -3350,15 +3350,15 @@ let fcsTypeCheckResultTests = testList "FcsTypeCheckResult" [
     let tc = mkTestCase "MyApp.Tests.testAdd" "expecto" TestCategory.Unit
     let refs = [
       { SymbolReference.SymbolFullName = "MyApp.Tests.testAdd"
-        IsFromDefinition = true; UsedInTestId = None
+        UseKind = SymbolUseKind.Definition; UsedInTestId = None
         FilePath = "Test.fs"; Line = 1 }
       { SymbolReference.SymbolFullName = "Lib.add"
-        IsFromDefinition = false; UsedInTestId = None
+        UseKind = SymbolUseKind.Reference; UsedInTestId = None
         FilePath = "Test.fs"; Line = 5 }
     ]
     let state = {
       LiveTestPipelineState.empty with
-        TestState = { LiveTestState.empty with DiscoveredTests = [|tc|]; Enabled = true }
+        TestState = { LiveTestState.empty with DiscoveredTests = [|tc|]; Activation = LiveTestingActivation.Active }
     }
     let result = FcsTypeCheckResult.Success ("Test.fs", refs)
     let _effects, s1 = LiveTestPipelineState.handleFcsResult result state
@@ -3371,15 +3371,15 @@ let fcsTypeCheckResultTests = testList "FcsTypeCheckResult" [
     let tc = mkTestCase "MyApp.Tests.testAdd" "expecto" TestCategory.Unit
     let refs = [
       { SymbolReference.SymbolFullName = "MyApp.Tests.testAdd"
-        IsFromDefinition = true; UsedInTestId = None
+        UseKind = SymbolUseKind.Definition; UsedInTestId = None
         FilePath = "Test.fs"; Line = 1 }
       { SymbolReference.SymbolFullName = "Lib.add"
-        IsFromDefinition = false; UsedInTestId = None
+        UseKind = SymbolUseKind.Reference; UsedInTestId = None
         FilePath = "Test.fs"; Line = 5 }
     ]
     let state = {
       LiveTestPipelineState.empty with
-        TestState = { LiveTestState.empty with DiscoveredTests = [|tc|]; Enabled = true }
+        TestState = { LiveTestState.empty with DiscoveredTests = [|tc|]; Activation = LiveTestingActivation.Active }
     }
     let result = FcsTypeCheckResult.Success ("Test.fs", refs)
     let effects, _ = LiveTestPipelineState.handleFcsResult result state
@@ -3447,15 +3447,15 @@ let fcsTypeCheckResultTests = testList "FcsTypeCheckResult" [
     let tc = mkTestCase "MyApp.Tests.testAdd" "expecto" TestCategory.Unit
     let refs = [
       { SymbolReference.SymbolFullName = "MyApp.Tests.testAdd"
-        IsFromDefinition = true; UsedInTestId = None; FilePath = "Test.fs"; Line = 1 }
+        UseKind = SymbolUseKind.Definition; UsedInTestId = None; FilePath = "Test.fs"; Line = 1 }
       { SymbolReference.SymbolFullName = "Lib.add"
-        IsFromDefinition = false; UsedInTestId = None; FilePath = "Test.fs"; Line = 5 }
+        UseKind = SymbolUseKind.Reference; UsedInTestId = None; FilePath = "Test.fs"; Line = 5 }
     ]
     let model = {
       SageFsModel.initial with
         LiveTesting = {
           LiveTestPipelineState.empty with
-            TestState = { LiveTestState.empty with DiscoveredTests = [|tc|]; Enabled = true }
+            TestState = { LiveTestState.empty with DiscoveredTests = [|tc|]; Activation = LiveTestingActivation.Active }
         }
     }
     let msg = SageFsMsg.FcsTypeCheckCompleted (FcsTypeCheckResult.Success ("Test.fs", refs))
@@ -3498,10 +3498,10 @@ let triggerWiringTests = testList "RunTrigger wiring" [
     let tc = mkTestCase "MyApp.Tests.archTest" "expecto" TestCategory.Architecture
     let refs = [
       { SymbolReference.SymbolFullName = "MyApp.Tests.archTest"
-        IsFromDefinition = true; UsedInTestId = None
+        UseKind = SymbolUseKind.Definition; UsedInTestId = None
         FilePath = "Test.fs"; Line = 1 }
       { SymbolReference.SymbolFullName = "Lib.check"
-        IsFromDefinition = false; UsedInTestId = None
+        UseKind = SymbolUseKind.Reference; UsedInTestId = None
         FilePath = "Test.fs"; Line = 5 }
     ]
     let now = DateTimeOffset.UtcNow
@@ -3523,10 +3523,10 @@ let triggerWiringTests = testList "RunTrigger wiring" [
     let tc = mkTestCase "MyApp.Tests.archTest" "expecto" TestCategory.Architecture
     let refs = [
       { SymbolReference.SymbolFullName = "MyApp.Tests.archTest"
-        IsFromDefinition = true; UsedInTestId = None
+        UseKind = SymbolUseKind.Definition; UsedInTestId = None
         FilePath = "Test.fs"; Line = 1 }
       { SymbolReference.SymbolFullName = "Lib.check"
-        IsFromDefinition = false; UsedInTestId = None
+        UseKind = SymbolUseKind.Reference; UsedInTestId = None
         FilePath = "Test.fs"; Line = 5 }
     ]
     let now = DateTimeOffset.UtcNow
@@ -3844,6 +3844,333 @@ let testRunPhaseTests = testList "TestRunPhase state machine" [
   }
 ]
 
+// --- TestResultsBatchPayload tests ---
+
+[<Tests>]
+let batchPayloadTests = testList "TestResultsBatchPayload" [
+  test "create with fresh results computes summary" {
+    let tid = TestId.create "Tests.payload_fresh" "expecto"
+    let entry = {
+      TestId = tid; DisplayName = "payload_fresh"; FullName = "Tests.payload_fresh"
+      Origin = TestOrigin.ReflectionOnly; Framework = "expecto"
+      Category = TestCategory.Unit; CurrentPolicy = RunPolicy.OnEveryChange
+      Status = TestRunStatus.Passed (System.TimeSpan.FromMilliseconds 5.0)
+      PreviousStatus = TestRunStatus.Detected }
+    let gen = RunGeneration.next RunGeneration.zero
+    let batch = TestResultsBatchPayload.create gen ResultFreshness.Fresh [| entry |]
+    batch.Summary.Passed |> Expect.equal "one passed" 1
+    batch.Summary.Total |> Expect.equal "one total" 1
+    batch.Freshness |> Expect.equal "fresh" ResultFreshness.Fresh
+    batch.Generation |> Expect.equal "gen matches" gen
+  }
+
+  test "create with stale results carries StaleCodeEdited" {
+    let gen = RunGeneration.next RunGeneration.zero
+    let batch = TestResultsBatchPayload.create gen ResultFreshness.StaleCodeEdited [||]
+    batch.Freshness |> Expect.equal "stale edited" ResultFreshness.StaleCodeEdited
+  }
+
+  test "create with wrong generation carries StaleWrongGeneration" {
+    let gen = RunGeneration.next RunGeneration.zero
+    let batch = TestResultsBatchPayload.create gen ResultFreshness.StaleWrongGeneration [||]
+    batch.Freshness |> Expect.equal "wrong gen" ResultFreshness.StaleWrongGeneration
+  }
+
+  test "isEmpty returns true for empty entries" {
+    let gen = RunGeneration.zero
+    let batch = TestResultsBatchPayload.create gen ResultFreshness.Fresh [||]
+    TestResultsBatchPayload.isEmpty batch |> Expect.isTrue "should be empty"
+  }
+
+  test "isEmpty returns false for non-empty entries" {
+    let tid = TestId.create "Tests.not_empty" "expecto"
+    let entry = {
+      TestId = tid; DisplayName = "not_empty"; FullName = "Tests.not_empty"
+      Origin = TestOrigin.ReflectionOnly; Framework = "expecto"
+      Category = TestCategory.Unit; CurrentPolicy = RunPolicy.OnEveryChange
+      Status = TestRunStatus.Detected; PreviousStatus = TestRunStatus.Detected }
+    let gen = RunGeneration.zero
+    let batch = TestResultsBatchPayload.create gen ResultFreshness.Fresh [| entry |]
+    TestResultsBatchPayload.isEmpty batch |> Expect.isFalse "should not be empty"
+  }
+]
+
+// --- Symbol graph wiring integration tests ---
+
+[<Tests>]
+let symbolGraphWiringTests = testList "symbol graph wiring integration" [
+  test "afterTypeCheck with affected symbol produces RunAffectedTests effect" {
+    let tid = TestId.create "Tests.affected_by_add" "expecto"
+    let testCase = {
+      Id = tid; FullName = "Tests.affected_by_add"; DisplayName = "affected_by_add"
+      Origin = TestOrigin.ReflectionOnly; Framework = "expecto"
+      Category = TestCategory.Unit; Labels = [] }
+    let graph = {
+      TestDependencyGraph.empty with
+        SymbolToTests = Map.ofList [ "MyModule.add", [| tid |] ]
+        TransitiveCoverage = Map.ofList [ "MyModule.add", [| tid |] ] }
+    let ltState = {
+      LiveTestState.empty with
+        Activation = LiveTestingActivation.Active
+        DiscoveredTests = [| testCase |]
+        RunPolicies = RunPolicyDefaults.defaults }
+    let effect =
+      PipelineEffects.afterTypeCheck
+        [ "MyModule.add" ] RunTrigger.Keystroke graph ltState None
+    match effect with
+    | Some (PipelineEffect.RunAffectedTests (tests, _, _, _)) ->
+      tests |> Array.exists (fun t -> t.Id = tid)
+      |> Expect.isTrue "should contain affected test"
+    | other -> failtestf "expected Some RunAffectedTests, got %A" other
+  }
+
+  test "handleFcsResult updates dep graph via onFcsComplete" {
+    let tid = TestId.create "Tests.t1" "expecto"
+    let testCase = {
+      Id = tid; FullName = "Tests.t1"; DisplayName = "t1"
+      Origin = TestOrigin.ReflectionOnly; Framework = "expecto"
+      Category = TestCategory.Unit; Labels = [] }
+    let pipeState = {
+      LiveTestPipelineState.empty with
+        TestState = { LiveTestState.empty with
+                        Activation = LiveTestingActivation.Active
+                        DiscoveredTests = [| testCase |]
+                        RunPolicies = RunPolicyDefaults.defaults } }
+    let refs = [
+      { SymbolFullName = "MyModule.add"; UseKind = SymbolUseKind.Reference
+        UsedInTestId = Some tid; FilePath = "test.fs"; Line = 5 } ]
+    let fcsResult = FcsTypeCheckResult.Success ("test.fs", refs)
+    let _effects, updated = LiveTestPipelineState.handleFcsResult fcsResult pipeState
+    updated.DepGraph.SourceVersion
+    |> fun v -> Expect.isGreaterThan "should increment version" (v, pipeState.DepGraph.SourceVersion)
+  }
+
+  test "triggerExecutionForAffected fallback path" {
+    let tid = TestId.create "Tests.fallback" "expecto"
+    let testCase = {
+      Id = tid; FullName = "Tests.fallback"; DisplayName = "fallback"
+      Origin = TestOrigin.ReflectionOnly; Framework = "expecto"
+      Category = TestCategory.Unit; Labels = [] }
+    let pipeState = {
+      LiveTestPipelineState.empty with
+        TestState = { LiveTestState.empty with
+                        Activation = LiveTestingActivation.Active
+                        DiscoveredTests = [| testCase |]
+                        RunPolicies = RunPolicyDefaults.defaults } }
+    let effects =
+      LiveTestPipelineState.triggerExecutionForAffected
+        [| tid |] RunTrigger.FileSave pipeState
+    effects
+    |> List.exists (fun e ->
+      match e with
+      | PipelineEffect.RunAffectedTests (tests, _, _, _) ->
+        tests |> Array.exists (fun t -> t.Id = tid)
+      | _ -> false)
+    |> Expect.isTrue "should produce RunAffectedTests via fallback"
+  }
+
+  test "no effects when testing disabled" {
+    let tid = TestId.create "Tests.disabled" "expecto"
+    let testCase = {
+      Id = tid; FullName = "Tests.disabled"; DisplayName = "disabled"
+      Origin = TestOrigin.ReflectionOnly; Framework = "expecto"
+      Category = TestCategory.Unit; Labels = [] }
+    let graph = {
+      TestDependencyGraph.empty with
+        SymbolToTests = Map.ofList [ "M.func", [| tid |] ] }
+    let ltState = {
+      LiveTestState.empty with
+        Activation = LiveTestingActivation.Inactive
+        DiscoveredTests = [| testCase |]
+        RunPolicies = RunPolicyDefaults.defaults }
+    PipelineEffects.afterTypeCheck [ "M.func" ] RunTrigger.Keystroke graph ltState None
+    |> Expect.isNone "no effect when disabled"
+  }
+
+  test "no effects when no symbols changed" {
+    let tid = TestId.create "Tests.no_change" "expecto"
+    let testCase = {
+      Id = tid; FullName = "Tests.no_change"; DisplayName = "no_change"
+      Origin = TestOrigin.ReflectionOnly; Framework = "expecto"
+      Category = TestCategory.Unit; Labels = [] }
+    let graph = {
+      TestDependencyGraph.empty with
+        SymbolToTests = Map.ofList [ "M.func", [| tid |] ] }
+    let ltState = {
+      LiveTestState.empty with
+        Activation = LiveTestingActivation.Active
+        DiscoveredTests = [| testCase |]
+        RunPolicies = RunPolicyDefaults.defaults }
+    PipelineEffects.afterTypeCheck [] RunTrigger.Keystroke graph ltState None
+    |> Expect.isNone "no effect when no symbols"
+  }
+]
+
+// --- Optimistic gutter transition tests ---
+
+[<Tests>]
+let optimisticGutterTests = testList "optimistic gutter transitions" [
+  test "TestRunStarted marks affected tests as Running via status entries" {
+    let tid = TestId.create "Tests.optimistic_run" "expecto"
+    let tests = [|
+      { Id = tid; FullName = "Tests.optimistic_run"; DisplayName = "optimistic_run"
+        Origin = TestOrigin.SourceMapped ("editor", 5)
+        Labels = []; Framework = "expecto"; Category = TestCategory.Unit }
+    |]
+    let model0 = SageFsModel.initial
+    let model1 = { model0 with
+                    LiveTesting = { model0.LiveTesting with
+                                      TestState = { model0.LiveTesting.TestState with
+                                                      Activation = LiveTestingActivation.Active
+                                                      DiscoveredTests = tests } } }
+    let model2, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestRunStarted [| tid |])) model1
+    let entry =
+      model2.LiveTesting.TestState.StatusEntries
+      |> Array.tryFind (fun e -> e.TestId = tid)
+    match entry with
+    | Some e -> e.Status |> Expect.equal "should be Running" TestRunStatus.Running
+    | None -> failtest "expected status entry for affected test"
+  }
+
+  test "non-affected tests stay Detected while others run" {
+    let tidA = TestId.create "Tests.affected" "expecto"
+    let tidB = TestId.create "Tests.unaffected" "expecto"
+    let tests = [|
+      { Id = tidA; FullName = "Tests.affected"; DisplayName = "affected"
+        Origin = TestOrigin.SourceMapped ("editor", 5)
+        Labels = []; Framework = "expecto"; Category = TestCategory.Unit }
+      { Id = tidB; FullName = "Tests.unaffected"; DisplayName = "unaffected"
+        Origin = TestOrigin.SourceMapped ("editor", 10)
+        Labels = []; Framework = "expecto"; Category = TestCategory.Unit }
+    |]
+    let model0 = SageFsModel.initial
+    let model1 = { model0 with
+                    LiveTesting = { model0.LiveTesting with
+                                      TestState = { model0.LiveTesting.TestState with
+                                                      Activation = LiveTestingActivation.Active
+                                                      DiscoveredTests = tests } } }
+    let model2, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestRunStarted [| tidA |])) model1
+    let entryB =
+      model2.LiveTesting.TestState.StatusEntries
+      |> Array.tryFind (fun e -> e.TestId = tidB)
+    match entryB with
+    | Some e -> e.Status |> Expect.equal "should still be Detected" TestRunStatus.Detected
+    | None -> failtest "expected status entry for unaffected test"
+  }
+
+  test "TestRunStarted transitions previous Passed to Running with correct PreviousStatus" {
+    let tid = TestId.create "Tests.prev_passed" "expecto"
+    let tests = [|
+      { Id = tid; FullName = "Tests.prev_passed"; DisplayName = "prev_passed"
+        Origin = TestOrigin.SourceMapped ("editor", 5)
+        Labels = []; Framework = "expecto"; Category = TestCategory.Unit }
+    |]
+    let dur = System.TimeSpan.FromMilliseconds 10.0
+    let result = {
+      TestId = tid; TestName = "Tests.prev_passed"
+      Result = TestResult.Passed dur; Timestamp = System.DateTimeOffset.UtcNow }
+    let model0 = SageFsModel.initial
+    let model1 = { model0 with
+                    LiveTesting = { model0.LiveTesting with
+                                      TestState = { model0.LiveTesting.TestState with
+                                                      Activation = LiveTestingActivation.Active
+                                                      DiscoveredTests = tests
+                                                      LastResults = Map.ofList [ tid, result ] } } }
+    let model2, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestsDiscovered tests)) model1
+    let model3, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestRunStarted [| tid |])) model2
+    let entry =
+      model3.LiveTesting.TestState.StatusEntries
+      |> Array.tryFind (fun e -> e.TestId = tid)
+    match entry with
+    | Some e ->
+      e.Status |> Expect.equal "should be Running" TestRunStatus.Running
+      match e.PreviousStatus with
+      | TestRunStatus.Passed _ -> ()
+      | other -> failtestf "expected previous Passed, got %A" other
+    | None -> failtest "expected status entry"
+  }
+
+  test "effect handler dispatches TestRunStarted before async execution" {
+    let tid = TestId.create "Tests.sync_dispatch" "expecto"
+    let tests = [|
+      { Id = tid; FullName = "Tests.sync_dispatch"; DisplayName = "sync_dispatch"
+        Origin = TestOrigin.ReflectionOnly; Framework = "expecto"
+        Category = TestCategory.Unit; Labels = [] }
+    |]
+    let model0 = SageFsModel.initial
+    let model1 = { model0 with
+                    LiveTesting = { model0.LiveTesting with
+                                      TestState = { model0.LiveTesting.TestState with
+                                                      Activation = LiveTestingActivation.Active
+                                                      DiscoveredTests = tests } } }
+    let model2, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestRunStarted [| tid |])) model1
+    TestRunPhase.isRunning model2.LiveTesting.TestState.RunPhase
+    |> Expect.isTrue "phase should be Running after TestRunStarted dispatch"
+  }
+]
+
+// --- SSE enrichment round-trip tests ---
+
+[<Tests>]
+let sseEnrichmentTests = testList "SSE enrichment round-trip" [
+  test "after mergeResults, compute enriched batch from state" {
+    let tid = TestId.create "Tests.round_trip" "expecto"
+    let testCase = {
+      Id = tid; FullName = "Tests.round_trip"; DisplayName = "round_trip"
+      Origin = TestOrigin.ReflectionOnly; Framework = "expecto"
+      Category = TestCategory.Unit; Labels = [] }
+    let dur = System.TimeSpan.FromMilliseconds 42.0
+    let result = {
+      TestId = tid; TestName = "Tests.round_trip"
+      Result = TestResult.Passed dur; Timestamp = System.DateTimeOffset.UtcNow }
+    let phase, gen = TestRunPhase.startRun RunGeneration.zero
+    let state = {
+      LiveTestState.empty with
+        Activation = LiveTestingActivation.Active
+        DiscoveredTests = [| testCase |]
+        RunPhase = phase
+        LastGeneration = gen
+        AffectedTests = Set.ofList [tid] }
+    let merged = LiveTesting.mergeResults state [| result |]
+    let entries = LiveTesting.computeStatusEntries merged
+    let _newPhase, freshness = TestRunPhase.onResultsArrived gen merged.RunPhase
+    let batch = TestResultsBatchPayload.create gen freshness entries
+    batch.Generation |> Expect.equal "generation matches" gen
+    batch.Freshness |> Expect.equal "fresh results" ResultFreshness.Fresh
+    batch.Entries.Length |> Expect.equal "one entry" 1
+    match batch.Entries.[0].Status with
+    | TestRunStatus.Passed d -> d |> Expect.equal "correct duration" dur
+    | other -> failtestf "expected Passed, got %A" other
+    batch.Summary.Passed |> Expect.equal "summary shows passed" 1
+  }
+
+  test "stale results after edit produce StaleCodeEdited" {
+    let tid = TestId.create "Tests.stale_edit" "expecto"
+    let testCase = {
+      Id = tid; FullName = "Tests.stale_edit"; DisplayName = "stale_edit"
+      Origin = TestOrigin.ReflectionOnly; Framework = "expecto"
+      Category = TestCategory.Unit; Labels = [] }
+    let phase, gen = TestRunPhase.startRun RunGeneration.zero
+    let editedPhase = TestRunPhase.onEdit phase
+    let state = {
+      LiveTestState.empty with
+        Activation = LiveTestingActivation.Active
+        DiscoveredTests = [| testCase |]
+        RunPhase = editedPhase
+        LastGeneration = gen
+        AffectedTests = Set.ofList [tid] }
+    let result = {
+      TestId = tid; TestName = "Tests.stale_edit"
+      Result = TestResult.Passed (System.TimeSpan.FromMilliseconds 10.0)
+      Timestamp = System.DateTimeOffset.UtcNow }
+    let merged = LiveTesting.mergeResults state [| result |]
+    let entries = LiveTesting.computeStatusEntries merged
+    let _newPhase, freshness = TestRunPhase.onResultsArrived gen editedPhase
+    let batch = TestResultsBatchPayload.create gen freshness entries
+    batch.Freshness |> Expect.equal "stale code edited" ResultFreshness.StaleCodeEdited
+  }
+]
+
 [<Tests>]
 let elmUpdateStatusRecomputationTests = testList "Elm update StatusEntries recomputation" [
   test "TestsDiscovered recomputes StatusEntries" {
@@ -3855,7 +4182,7 @@ let elmUpdateStatusRecomputationTests = testList "Elm update StatusEntries recom
     |]
 
     let model0 = SageFsModel.initial
-    let model1 = { model0 with LiveTesting = { model0.LiveTesting with TestState = { model0.LiveTesting.TestState with Enabled = true } } }
+    let model1 = { model0 with LiveTesting = { model0.LiveTesting with TestState = { model0.LiveTesting.TestState with Activation = LiveTestingActivation.Active } } }
     let model2, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestsDiscovered tests)) model1
 
     model2.LiveTesting.TestState.StatusEntries
@@ -3872,7 +4199,7 @@ let elmUpdateStatusRecomputationTests = testList "Elm update StatusEntries recom
     |]
 
     let model0 = SageFsModel.initial
-    let stateWithTests = { model0.LiveTesting.TestState with Enabled = true; DiscoveredTests = tests }
+    let stateWithTests = { model0.LiveTesting.TestState with Activation = LiveTestingActivation.Active; DiscoveredTests = tests }
     let stateRecomputed = { stateWithTests with StatusEntries = LiveTesting.computeStatusEntries stateWithTests }
     let model1 = { model0 with LiveTesting = { model0.LiveTesting with TestState = stateRecomputed } }
 
@@ -3893,7 +4220,7 @@ let elmUpdateStatusRecomputationTests = testList "Elm update StatusEntries recom
     |]
 
     let model0 = SageFsModel.initial
-    let model1 = { model0 with LiveTesting = { model0.LiveTesting with TestState = { model0.LiveTesting.TestState with Enabled = true } } }
+    let model1 = { model0 with LiveTesting = { model0.LiveTesting with TestState = { model0.LiveTesting.TestState with Activation = LiveTestingActivation.Active } } }
     let model2, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestsDiscovered tests)) model1
 
     let annotations = LiveTesting.annotationsForFile "editor" model2.LiveTesting.TestState
@@ -3911,7 +4238,7 @@ let elmUpdateStatusRecomputationTests = testList "Elm update StatusEntries recom
     |]
 
     let model0 = SageFsModel.initial
-    let model1, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestsDiscovered tests)) { model0 with LiveTesting = { model0.LiveTesting with TestState = { model0.LiveTesting.TestState with Enabled = true } } }
+    let model1, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestsDiscovered tests)) { model0 with LiveTesting = { model0.LiveTesting with TestState = { model0.LiveTesting.TestState with Activation = LiveTestingActivation.Active } } }
     let model2, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestRunStarted [| tid |])) model1
 
     model2.LiveTesting.TestState.StatusEntries
@@ -3929,7 +4256,7 @@ let elmUpdateStatusRecomputationTests = testList "Elm update StatusEntries recom
     |]
 
     let model0 = SageFsModel.initial
-    let model1, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestsDiscovered tests)) { model0 with LiveTesting = { model0.LiveTesting with TestState = { model0.LiveTesting.TestState with Enabled = true } } }
+    let model1, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestsDiscovered tests)) { model0 with LiveTesting = { model0.LiveTesting with TestState = { model0.LiveTesting.TestState with Activation = LiveTestingActivation.Active } } }
     let model2, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.RunPolicyChanged (TestCategory.Unit, RunPolicy.Disabled))) model1
 
     model2.LiveTesting.TestState.StatusEntries
@@ -3959,7 +4286,7 @@ let elmUpdateStatusRecomputationTests = testList "Elm update StatusEntries recom
     |]
 
     let model0 = SageFsModel.initial
-    let m1, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestsDiscovered tests)) { model0 with LiveTesting = { model0.LiveTesting with TestState = { model0.LiveTesting.TestState with Enabled = true } } }
+    let m1, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestsDiscovered tests)) { model0 with LiveTesting = { model0.LiveTesting with TestState = { model0.LiveTesting.TestState with Activation = LiveTestingActivation.Active } } }
     let m2, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestRunStarted [| tid1; tid2 |])) m1
     let m3, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestResultsBatch results)) m2
 
@@ -4302,12 +4629,12 @@ let fcsGraphTests = testList "FCS dependency graph builder" [
 
   test "builds inverted index from symbol uses" {
     let uses = [|
-      { FullName = "MyApp.Math.add"; DisplayName = "add"; IsFromDefinition = true; StartLine = 2; EndLine = 2 }
-      { FullName = "MyApp.Math.multiply"; DisplayName = "multiply"; IsFromDefinition = true; StartLine = 3; EndLine = 3 }
-      { FullName = "MyApp.Tests.addTest"; DisplayName = "addTest"; IsFromDefinition = true; StartLine = 5; EndLine = 5 }
-      { FullName = "MyApp.Tests.mulTest"; DisplayName = "mulTest"; IsFromDefinition = true; StartLine = 7; EndLine = 7 }
-      { FullName = "MyApp.Math.add"; DisplayName = "add"; IsFromDefinition = false; StartLine = 5; EndLine = 5 }
-      { FullName = "MyApp.Math.multiply"; DisplayName = "multiply"; IsFromDefinition = false; StartLine = 7; EndLine = 7 }
+      { FullName = "MyApp.Math.add"; DisplayName = "add"; UseKind = SymbolUseKind.Definition; StartLine = 2; EndLine = 2 }
+      { FullName = "MyApp.Math.multiply"; DisplayName = "multiply"; UseKind = SymbolUseKind.Definition; StartLine = 3; EndLine = 3 }
+      { FullName = "MyApp.Tests.addTest"; DisplayName = "addTest"; UseKind = SymbolUseKind.Definition; StartLine = 5; EndLine = 5 }
+      { FullName = "MyApp.Tests.mulTest"; DisplayName = "mulTest"; UseKind = SymbolUseKind.Definition; StartLine = 7; EndLine = 7 }
+      { FullName = "MyApp.Math.add"; DisplayName = "add"; UseKind = SymbolUseKind.Reference; StartLine = 5; EndLine = 5 }
+      { FullName = "MyApp.Math.multiply"; DisplayName = "multiply"; UseKind = SymbolUseKind.Reference; StartLine = 7; EndLine = 7 }
     |]
     let graph = TestDependencyGraph.buildFromSymbolUses ".Tests." "fcs" uses
     graph.SymbolToTests.Count
@@ -4322,11 +4649,11 @@ let fcsGraphTests = testList "FCS dependency graph builder" [
 
   test "test calling multiple production functions maps to all" {
     let uses = [|
-      { FullName = "MyApp.Math.add"; DisplayName = "add"; IsFromDefinition = true; StartLine = 2; EndLine = 2 }
-      { FullName = "MyApp.Math.multiply"; DisplayName = "multiply"; IsFromDefinition = true; StartLine = 3; EndLine = 3 }
-      { FullName = "MyApp.Tests.combinedTest"; DisplayName = "combinedTest"; IsFromDefinition = true; StartLine = 5; EndLine = 5 }
-      { FullName = "MyApp.Math.add"; DisplayName = "add"; IsFromDefinition = false; StartLine = 6; EndLine = 6 }
-      { FullName = "MyApp.Math.multiply"; DisplayName = "multiply"; IsFromDefinition = false; StartLine = 7; EndLine = 7 }
+      { FullName = "MyApp.Math.add"; DisplayName = "add"; UseKind = SymbolUseKind.Definition; StartLine = 2; EndLine = 2 }
+      { FullName = "MyApp.Math.multiply"; DisplayName = "multiply"; UseKind = SymbolUseKind.Definition; StartLine = 3; EndLine = 3 }
+      { FullName = "MyApp.Tests.combinedTest"; DisplayName = "combinedTest"; UseKind = SymbolUseKind.Definition; StartLine = 5; EndLine = 5 }
+      { FullName = "MyApp.Math.add"; DisplayName = "add"; UseKind = SymbolUseKind.Reference; StartLine = 6; EndLine = 6 }
+      { FullName = "MyApp.Math.multiply"; DisplayName = "multiply"; UseKind = SymbolUseKind.Reference; StartLine = 7; EndLine = 7 }
     |]
     let graph = TestDependencyGraph.buildFromSymbolUses ".Tests." "fcs" uses
     let combinedId = TestId.create "MyApp.Tests.combinedTest" "fcs"
@@ -4340,8 +4667,8 @@ let fcsGraphTests = testList "FCS dependency graph builder" [
 
   test "unused production symbol has no affected tests" {
     let uses = [|
-      { FullName = "MyApp.Math.unused"; DisplayName = "unused"; IsFromDefinition = true; StartLine = 2; EndLine = 2 }
-      { FullName = "MyApp.Tests.someTest"; DisplayName = "someTest"; IsFromDefinition = true; StartLine = 5; EndLine = 5 }
+      { FullName = "MyApp.Math.unused"; DisplayName = "unused"; UseKind = SymbolUseKind.Definition; StartLine = 2; EndLine = 2 }
+      { FullName = "MyApp.Tests.someTest"; DisplayName = "someTest"; UseKind = SymbolUseKind.Definition; StartLine = 5; EndLine = 5 }
     |]
     let graph = TestDependencyGraph.buildFromSymbolUses ".Tests." "fcs" uses
     TestDependencyGraph.findAffected ["MyApp.Math.unused"] graph
@@ -4351,12 +4678,12 @@ let fcsGraphTests = testList "FCS dependency graph builder" [
 
   test "multiple changed symbols finds union of affected tests" {
     let uses = [|
-      { FullName = "MyApp.Math.add"; DisplayName = "add"; IsFromDefinition = true; StartLine = 2; EndLine = 2 }
-      { FullName = "MyApp.Math.sub"; DisplayName = "sub"; IsFromDefinition = true; StartLine = 3; EndLine = 3 }
-      { FullName = "MyApp.Tests.addTest"; DisplayName = "addTest"; IsFromDefinition = true; StartLine = 5; EndLine = 5 }
-      { FullName = "MyApp.Tests.subTest"; DisplayName = "subTest"; IsFromDefinition = true; StartLine = 8; EndLine = 8 }
-      { FullName = "MyApp.Math.add"; DisplayName = "add"; IsFromDefinition = false; StartLine = 6; EndLine = 6 }
-      { FullName = "MyApp.Math.sub"; DisplayName = "sub"; IsFromDefinition = false; StartLine = 9; EndLine = 9 }
+      { FullName = "MyApp.Math.add"; DisplayName = "add"; UseKind = SymbolUseKind.Definition; StartLine = 2; EndLine = 2 }
+      { FullName = "MyApp.Math.sub"; DisplayName = "sub"; UseKind = SymbolUseKind.Definition; StartLine = 3; EndLine = 3 }
+      { FullName = "MyApp.Tests.addTest"; DisplayName = "addTest"; UseKind = SymbolUseKind.Definition; StartLine = 5; EndLine = 5 }
+      { FullName = "MyApp.Tests.subTest"; DisplayName = "subTest"; UseKind = SymbolUseKind.Definition; StartLine = 8; EndLine = 8 }
+      { FullName = "MyApp.Math.add"; DisplayName = "add"; UseKind = SymbolUseKind.Reference; StartLine = 6; EndLine = 6 }
+      { FullName = "MyApp.Math.sub"; DisplayName = "sub"; UseKind = SymbolUseKind.Reference; StartLine = 9; EndLine = 9 }
     |]
     let graph = TestDependencyGraph.buildFromSymbolUses ".Tests." "fcs" uses
     TestDependencyGraph.findAffected ["MyApp.Math.add"; "MyApp.Math.sub"] graph
@@ -4372,9 +4699,9 @@ let fcsGraphTests = testList "FCS dependency graph builder" [
 
   test "FSharp stdlib uses are excluded from graph" {
     let uses = [|
-      { FullName = "MyApp.Tests.test1"; DisplayName = "test1"; IsFromDefinition = true; StartLine = 1; EndLine = 1 }
-      { FullName = "Microsoft.FSharp.Core.ExtraTopLevelOperators.printfn"; DisplayName = "printfn"; IsFromDefinition = false; StartLine = 2; EndLine = 2 }
-      { FullName = "MyApp.Logic.doThing"; DisplayName = "doThing"; IsFromDefinition = false; StartLine = 3; EndLine = 3 }
+      { FullName = "MyApp.Tests.test1"; DisplayName = "test1"; UseKind = SymbolUseKind.Definition; StartLine = 1; EndLine = 1 }
+      { FullName = "Microsoft.FSharp.Core.ExtraTopLevelOperators.printfn"; DisplayName = "printfn"; UseKind = SymbolUseKind.Reference; StartLine = 2; EndLine = 2 }
+      { FullName = "MyApp.Logic.doThing"; DisplayName = "doThing"; UseKind = SymbolUseKind.Reference; StartLine = 3; EndLine = 3 }
     |]
     let graph = TestDependencyGraph.buildFromSymbolUses ".Tests." "fcs" uses
     graph.SymbolToTests.Count
@@ -4385,10 +4712,10 @@ let fcsGraphTests = testList "FCS dependency graph builder" [
 
   test "orchestrator uses FCS graph for affected test selection" {
     let uses = [|
-      { FullName = "MyApp.Math.add"; DisplayName = "add"; IsFromDefinition = true; StartLine = 2; EndLine = 2 }
-      { FullName = "MyApp.Tests.addTest"; DisplayName = "addTest"; IsFromDefinition = true; StartLine = 5; EndLine = 5 }
-      { FullName = "MyApp.Tests.otherTest"; DisplayName = "otherTest"; IsFromDefinition = true; StartLine = 8; EndLine = 8 }
-      { FullName = "MyApp.Math.add"; DisplayName = "add"; IsFromDefinition = false; StartLine = 6; EndLine = 6 }
+      { FullName = "MyApp.Math.add"; DisplayName = "add"; UseKind = SymbolUseKind.Definition; StartLine = 2; EndLine = 2 }
+      { FullName = "MyApp.Tests.addTest"; DisplayName = "addTest"; UseKind = SymbolUseKind.Definition; StartLine = 5; EndLine = 5 }
+      { FullName = "MyApp.Tests.otherTest"; DisplayName = "otherTest"; UseKind = SymbolUseKind.Definition; StartLine = 8; EndLine = 8 }
+      { FullName = "MyApp.Math.add"; DisplayName = "add"; UseKind = SymbolUseKind.Reference; StartLine = 6; EndLine = 6 }
     |]
     let graph = TestDependencyGraph.buildFromSymbolUses ".Tests." "fcs" uses
     let addTestCase = {
@@ -4405,7 +4732,7 @@ let fcsGraphTests = testList "FCS dependency graph builder" [
     }
     let state = { LiveTestState.empty with
                     DiscoveredTests = [| addTestCase; otherTestCase |]
-                    Enabled = true }
+                    Activation = LiveTestingActivation.Active }
     let stateWithEntries = { state with StatusEntries = LiveTesting.computeStatusEntries state }
     match PipelineOrchestrator.decide stateWithEntries RunTrigger.Keystroke ["MyApp.Math.add"] graph with
     | PipelineDecision.FullPipeline testIds ->
@@ -4418,10 +4745,10 @@ let fcsGraphTests = testList "FCS dependency graph builder" [
 
   test "coverage projection with built graph" {
     let uses = [|
-      { FullName = "MyApp.Math.add"; DisplayName = "add"; IsFromDefinition = true; StartLine = 2; EndLine = 2 }
-      { FullName = "MyApp.Math.unused"; DisplayName = "unused"; IsFromDefinition = true; StartLine = 3; EndLine = 3 }
-      { FullName = "MyApp.Tests.addTest"; DisplayName = "addTest"; IsFromDefinition = true; StartLine = 5; EndLine = 5 }
-      { FullName = "MyApp.Math.add"; DisplayName = "add"; IsFromDefinition = false; StartLine = 6; EndLine = 6 }
+      { FullName = "MyApp.Math.add"; DisplayName = "add"; UseKind = SymbolUseKind.Definition; StartLine = 2; EndLine = 2 }
+      { FullName = "MyApp.Math.unused"; DisplayName = "unused"; UseKind = SymbolUseKind.Definition; StartLine = 3; EndLine = 3 }
+      { FullName = "MyApp.Tests.addTest"; DisplayName = "addTest"; UseKind = SymbolUseKind.Definition; StartLine = 5; EndLine = 5 }
+      { FullName = "MyApp.Math.add"; DisplayName = "add"; UseKind = SymbolUseKind.Reference; StartLine = 6; EndLine = 6 }
     |]
     let graph = TestDependencyGraph.buildFromSymbolUses ".Tests." "fcs" uses
     let addTestId = TestId.create "MyApp.Tests.addTest" "fcs"
@@ -4433,9 +4760,9 @@ let fcsGraphTests = testList "FCS dependency graph builder" [
       }
     ]
     match CoverageProjection.symbolCoverage graph results "MyApp.Math.add" with
-    | CoverageStatus.Covered (count, allPassing) ->
+    | CoverageStatus.Covered (count, health) ->
       count |> Expect.equal "add covered by 1 test" 1
-      allPassing |> Expect.isTrue "addTest passes"
+      health |> Expect.equal "addTest passes" CoverageHealth.AllPassing
     | other -> failtest (sprintf "Expected Covered for add, got %A" other)
     match CoverageProjection.symbolCoverage graph results "MyApp.Math.unused" with
     | CoverageStatus.NotCovered -> ()
@@ -4446,7 +4773,7 @@ let fcsGraphTests = testList "FCS dependency graph builder" [
 // --- Multi-File Merge Tests ---
 let private mkSymRef fullName line isDef : SymbolReference =
   { SymbolFullName = fullName
-    IsFromDefinition = isDef
+    UseKind = if isDef then SymbolUseKind.Definition else SymbolUseKind.Reference
     UsedInTestId = None
     FilePath = "test.fs"
     Line = line }
@@ -4712,7 +5039,7 @@ let affectedExecutionTriggerTests = testList "AffectedTestsComputed execution tr
   let mkState tests =
     { LiveTestState.empty with
         DiscoveredTests = tests
-        Enabled = true
+        Activation = LiveTestingActivation.Active
         RunPolicies = RunPolicyDefaults.defaults }
   let mkPipelineState tests =
     { LiveTestPipelineState.empty with
@@ -4777,7 +5104,7 @@ let affectedExecutionTriggerTests = testList "AffectedTestsComputed execution tr
 
   test "disabled live testing produces no effects" {
     let ps = { mkPipelineState [| tc1; tc2 |] with
-                 TestState = { (mkState [| tc1; tc2 |]) with Enabled = false } }
+                 TestState = { (mkState [| tc1; tc2 |]) with Activation = LiveTestingActivation.Inactive } }
     let effects = LiveTestPipelineState.triggerExecutionForAffected [| tc1.Id |] RunTrigger.FileSave ps
     effects
     |> Expect.isEmpty "should produce no effects when disabled"

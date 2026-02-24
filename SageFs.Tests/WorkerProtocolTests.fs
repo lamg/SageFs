@@ -273,7 +273,7 @@ let workerProtocolTests =
       <| fun _ ->
         let domainRef: SageFs.Features.LiveTesting.SymbolReference = {
           SymbolFullName = "Helpers.parseInput"
-          IsFromDefinition = false
+          UseKind = SageFs.Features.LiveTesting.SymbolUseKind.Reference
           UsedInTestId = Some (SageFs.Features.LiveTesting.TestId.create "parseTests.should_parse" "expecto")
           FilePath = "Helpers.fs"
           Line = 42
@@ -289,7 +289,7 @@ let workerProtocolTests =
         let wireRef = { WorkerSymbolRef.SymbolFullName = "M.f"; IsFromDefinition = true; FilePath = "M.fs"; Line = 10 }
         let backRef = WorkerSymbolRef.toDomain wireRef
         backRef.SymbolFullName |> Expect.equal "full name back" "M.f"
-        backRef.IsFromDefinition |> Expect.isTrue "IsFromDefinition preserved"
+        backRef.UseKind |> Expect.equal "UseKind preserved" SageFs.Features.LiveTesting.SymbolUseKind.Definition
         backRef.UsedInTestId |> Expect.isNone "UsedInTestId should be None"
         backRef.FilePath |> Expect.equal "file path back" "M.fs"
         backRef.Line |> Expect.equal "line back" 10

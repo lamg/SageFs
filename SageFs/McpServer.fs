@@ -42,8 +42,8 @@ type PushEvent =
   | WarmupCompleted
   /// Test summary changed — carries summary record.
   | TestSummaryChanged of summary: SageFs.Features.LiveTesting.TestSummary
-  /// Test results batch — carries count of results.
-  | TestResultsBatch of count: int
+  /// Test results batch — carries enriched payload with generation, freshness, entries, summary.
+  | TestResultsBatch of payload: SageFs.Features.LiveTesting.TestResultsBatchPayload
 
 /// Whether an event REPLACES the previous instance of the same kind
 /// (state/set semantics) or ACCUMULATES alongside it (delta/list semantics).
@@ -96,8 +96,8 @@ module PushEvent =
       "✓ warmup complete"
     | PushEvent.TestSummaryChanged s ->
       sprintf "🧪 tests: %d total, %d passed, %d failed, %d stale, %d running" s.Total s.Passed s.Failed s.Stale s.Running
-    | PushEvent.TestResultsBatch count ->
-      sprintf "🧪 %d test result(s) received" count
+    | PushEvent.TestResultsBatch payload ->
+      sprintf "🧪 %d test result(s) received (%A)" payload.Entries.Length payload.Freshness
 
 type AccumulatedEvent = {
   Timestamp: DateTimeOffset
@@ -725,6 +725,17 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                                   (lt.StatusEntries |> Array.map (fun e -> e.Status))
                         serverTracker.AccumulateEvent(
                           PushEvent.TestSummaryChanged s)
+                        // Push enriched test results batch
+                        let freshness =
+                          match lt.RunPhase with
+                          | SageFs.Features.LiveTesting.TestRunPhase.RunningButEdited _ ->
+                            SageFs.Features.LiveTesting.ResultFreshness.StaleCodeEdited
+                          | _ -> SageFs.Features.LiveTesting.ResultFreshness.Fresh
+                        let payload =
+                          SageFs.Features.LiveTesting.TestResultsBatchPayload.create
+                            lt.LastGeneration freshness lt.StatusEntries
+                        serverTracker.AccumulateEvent(
+                          PushEvent.TestResultsBatch payload)
                     | None -> ()
 
                     if serverTracker.Count > 0 then

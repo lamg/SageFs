@@ -393,7 +393,8 @@ module SageFsUpdate =
         { model with LiveTesting = lt }, []
 
       | SageFsEvent.LiveTestingToggled enabled ->
-        let lt = recomputeStatuses model.LiveTesting (fun s -> { s with Enabled = enabled })
+        let activation = if enabled then Features.LiveTesting.LiveTestingActivation.Active else Features.LiveTesting.LiveTestingActivation.Inactive
+        let lt = recomputeStatuses model.LiveTesting (fun s -> { s with Activation = activation })
         { model with LiveTesting = lt }, []
 
       | SageFsEvent.AffectedTestsComputed testIds ->
@@ -410,7 +411,7 @@ module SageFsUpdate =
           let phase, gen = TestRunPhase.startRun s.LastGeneration
           { s with RunPhase = phase; LastGeneration = gen; AffectedTests = Set.ofArray testIds })
         let effects =
-          if Array.isEmpty tests || not lt.TestState.Enabled then []
+          if Array.isEmpty tests || lt.TestState.Activation = Features.LiveTesting.LiveTestingActivation.Inactive then []
           else
             [ Features.LiveTesting.PipelineEffect.RunAffectedTests(
                 tests, Features.LiveTesting.RunTrigger.ExplicitRun,
@@ -425,7 +426,7 @@ module SageFsUpdate =
           |> Array.mapi (fun i slot ->
             let status =
               if coverage.Hits.[i] then
-                Features.LiveTesting.CoverageStatus.Covered (1, true)
+                Features.LiveTesting.CoverageStatus.Covered (1, Features.LiveTesting.CoverageHealth.AllPassing)
               else
                 Features.LiveTesting.CoverageStatus.NotCovered
             { Symbol = sprintf "%s:%d" slot.File slot.Line
@@ -453,7 +454,11 @@ module SageFsUpdate =
       { model with Theme = theme; ThemeName = name }, []
 
     | SageFsMsg.ToggleLiveTesting ->
-      let lt = recomputeStatuses model.LiveTesting (fun s -> { s with Enabled = not s.Enabled })
+      let toggleActivation =
+        match model.LiveTesting.TestState.Activation with
+        | Features.LiveTesting.LiveTestingActivation.Active -> Features.LiveTesting.LiveTestingActivation.Inactive
+        | Features.LiveTesting.LiveTestingActivation.Inactive -> Features.LiveTesting.LiveTestingActivation.Active
+      let lt = recomputeStatuses model.LiveTesting (fun s -> { s with Activation = toggleActivation })
       { model with LiveTesting = lt }, []
 
     | SageFsMsg.CycleRunPolicy ->
@@ -474,8 +479,12 @@ module SageFsUpdate =
 
     | SageFsMsg.ToggleCoverage ->
       let lt = model.LiveTesting
-      { model with
-          LiveTesting = { lt with TestState = { lt.TestState with ShowCoverage = not lt.TestState.ShowCoverage } } }, []
+      let newDisplay =
+        match lt.TestState.CoverageDisplay with
+        | Features.LiveTesting.CoverageVisibility.Shown -> Features.LiveTesting.CoverageVisibility.Hidden
+        | Features.LiveTesting.CoverageVisibility.Hidden -> Features.LiveTesting.CoverageVisibility.Shown
+      let ts = { lt.TestState with CoverageDisplay = newDisplay }
+      { model with LiveTesting = { lt with TestState = ts } }, []
 
     | SageFsMsg.PipelineTick now ->
       let effects, pipeline' = model.LiveTesting |> Features.LiveTesting.LiveTestPipelineState.tick now
@@ -483,7 +492,7 @@ module SageFsUpdate =
       { model with LiveTesting = pipeline' }, mappedEffects
 
     | SageFsMsg.FileContentChanged (filePath, content) ->
-      if model.LiveTesting.TestState.Enabled then
+      if model.LiveTesting.TestState.Activation = Features.LiveTesting.LiveTestingActivation.Active then
         let now = DateTimeOffset.UtcNow
         let pipeline' =
           model.LiveTesting

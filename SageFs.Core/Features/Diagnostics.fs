@@ -86,7 +86,7 @@ let extractSymbolReferences
     else
       Some {
         SymbolFullName = su.Symbol.FullName
-        IsFromDefinition = su.IsFromDefinition
+        UseKind = if su.IsFromDefinition then SymbolUseKind.Definition else SymbolUseKind.Reference
         UsedInTestId = None
         FilePath = filePath
         Line = su.Range.StartLine

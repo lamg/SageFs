@@ -1,5 +1,7 @@
 namespace SageFs
 
+#nowarn "3511"
+
 open System
 open System.IO
 open System.Text.Json
@@ -1226,9 +1228,10 @@ module McpTools =
             |> Some
           | None -> None
         let resp =
+          let enabled = state.Activation = Features.LiveTesting.LiveTestingActivation.Active
           match tests with
-          | Some t -> {| Enabled = state.Enabled; Summary = summary; Tests = t |} |> box
-          | None -> {| Enabled = state.Enabled; Summary = summary |} |> box
+          | Some t -> {| Enabled = enabled; Summary = summary; Tests = t |} |> box
+          | None -> {| Enabled = enabled; Summary = summary |} |> box
         return JsonSerializer.Serialize(resp, liveTestJsonOpts)
     }
 
@@ -1241,7 +1244,11 @@ module McpTools =
         match ctx.GetElmModel with
         | Some getModel ->
           let state = (getModel ()).LiveTesting.TestState
-          return sprintf "Live testing %s." (if state.Enabled then "enabled" else "disabled")
+          let activationLabel =
+            match state.Activation with
+            | Features.LiveTesting.LiveTestingActivation.Active -> "enabled"
+            | Features.LiveTesting.LiveTestingActivation.Inactive -> "disabled"
+          return sprintf "Live testing %s." activationLabel
         | None ->
           return "Toggled. State unavailable."
     }
@@ -1286,7 +1293,7 @@ module McpTools =
           (state.StatusEntries |> Array.map (fun e -> e.Status))
       let timing = model.LiveTesting.LastTiming
       let resp = {|
-        Enabled = state.Enabled
+        Enabled = state.Activation = Features.LiveTesting.LiveTestingActivation.Active
         IsRunning = Features.LiveTesting.TestRunPhase.isRunning state.RunPhase
         History = state.History
         Summary = summary
@@ -1310,7 +1317,7 @@ module McpTools =
     | Some getModel, Some dispatch ->
       let model = getModel ()
       let state = model.LiveTesting.TestState
-      if not state.Enabled then
+      if state.Activation = Features.LiveTesting.LiveTestingActivation.Inactive then
         Task.FromResult "Live testing is disabled. Toggle it on first."
       else
         let category =

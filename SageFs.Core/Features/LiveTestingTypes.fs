@@ -175,12 +175,18 @@ type ProviderDescription =
 
 // --- FCS Symbol Extraction (IO boundary) ---
 
+/// How a symbol appears in source — definition site or reference site.
+[<RequireQualifiedAccess>]
+type SymbolUseKind =
+  | Definition
+  | Reference
+
 /// Extracted symbol use — pure data, no FCS dependency.
 /// This is the bridge between FCS (IO) and the pure dependency graph builder.
 type ExtractedSymbolUse = {
   FullName: string
   DisplayName: string
-  IsFromDefinition: bool
+  UseKind: SymbolUseKind
   StartLine: int
   EndLine: int
 }
@@ -196,9 +202,15 @@ type TestDependencyGraph = {
 
 // --- Coverage ---
 
+/// Whether all tests covering a symbol are passing.
+[<RequireQualifiedAccess>]
+type CoverageHealth =
+  | AllPassing
+  | SomeFailing
+
 [<RequireQualifiedAccess>]
 type CoverageStatus =
-  | Covered of testCount: int * allPassing: bool
+  | Covered of testCount: int * health: CoverageHealth
   | NotCovered
   | Pending
 
@@ -327,6 +339,18 @@ module TestRunPhase =
 
 // --- Live Test State (Elm model aggregate) ---
 
+/// Whether live testing is active or inactive.
+[<RequireQualifiedAccess>]
+type LiveTestingActivation =
+  | Active
+  | Inactive
+
+/// Whether coverage gutter annotations are shown or hidden.
+[<RequireQualifiedAccess>]
+type CoverageVisibility =
+  | Shown
+  | Hidden
+
 type LiveTestState = {
   SourceLocations: SourceTestLocation array
   DiscoveredTests: TestCase array
@@ -337,8 +361,8 @@ type LiveTestState = {
   LastGeneration: RunGeneration
   History: RunHistory
   AffectedTests: Set<TestId>
-  Enabled: bool
-  ShowCoverage: bool
+  Activation: LiveTestingActivation
+  CoverageDisplay: CoverageVisibility
   RunPolicies: Map<TestCategory, RunPolicy>
   DetectedProviders: ProviderDescription list
   CachedEditorAnnotations: LineAnnotation array
@@ -355,8 +379,8 @@ module LiveTestState =
     LastGeneration = RunGeneration.zero
     History = RunHistory.NeverRun
     AffectedTests = Set.empty
-    Enabled = true
-    ShowCoverage = true
+    Activation = LiveTestingActivation.Active
+    CoverageDisplay = CoverageVisibility.Shown
     RunPolicies = RunPolicyDefaults.defaults
     DetectedProviders = []
     CachedEditorAnnotations = Array.empty
@@ -416,8 +440,8 @@ module StatusToGutter =
 
   let fromCoverageStatus (status: CoverageStatus) : GutterIcon =
     match status with
-    | CoverageStatus.Covered (_, true) -> GutterIcon.Covered
-    | CoverageStatus.Covered (_, false) -> GutterIcon.NotCovered
+    | CoverageStatus.Covered (_, CoverageHealth.AllPassing) -> GutterIcon.Covered
+    | CoverageStatus.Covered (_, CoverageHealth.SomeFailing) -> GutterIcon.NotCovered
     | CoverageStatus.NotCovered -> GutterIcon.NotCovered
     | CoverageStatus.Pending -> GutterIcon.TestDiscovered
 
@@ -444,8 +468,8 @@ module StatusToGutter =
   let coverageAnnotation (line: int) (symbol: string) (status: CoverageStatus) : LineAnnotation =
     let tip =
       match status with
-      | CoverageStatus.Covered (n, true) -> sprintf "%s: covered by %d test(s), all passing" symbol n
-      | CoverageStatus.Covered (n, false) -> sprintf "%s: covered by %d test(s), some failing" symbol n
+      | CoverageStatus.Covered (n, CoverageHealth.AllPassing) -> sprintf "%s: covered by %d test(s), all passing" symbol n
+      | CoverageStatus.Covered (n, CoverageHealth.SomeFailing) -> sprintf "%s: covered by %d test(s), some failing" symbol n
       | CoverageStatus.NotCovered -> sprintf "%s: not covered by any test" symbol
       | CoverageStatus.Pending -> sprintf "%s: coverage pending" symbol
     { Line = line; Icon = fromCoverageStatus status; Tooltip = tip }
@@ -484,6 +508,33 @@ module TestSummary =
       sprintf "Tests: %d/%d \u25CF%d" s.Passed s.Total s.Stale
     else
       sprintf "Tests: %d/%d \u2713" s.Passed s.Total
+
+// --- Enriched SSE Batch Payload ---
+
+type TestResultsBatchPayload = {
+  Generation: RunGeneration
+  Freshness: ResultFreshness
+  Entries: TestStatusEntry array
+  Summary: TestSummary
+}
+
+module TestResultsBatchPayload =
+  let create
+    (generation: RunGeneration)
+    (freshness: ResultFreshness)
+    (entries: TestStatusEntry array)
+    : TestResultsBatchPayload =
+    let summary =
+      entries
+      |> Array.map (fun e -> e.Status)
+      |> TestSummary.fromStatuses
+    { Generation = generation
+      Freshness = freshness
+      Entries = entries
+      Summary = summary }
+
+  let isEmpty (p: TestResultsBatchPayload) =
+    Array.isEmpty p.Entries
 
 module CategoryDetection =
   let categorize
@@ -598,7 +649,7 @@ module TestDependencyGraph =
     let testDefs =
       uses
       |> Array.filter (fun u ->
-        u.IsFromDefinition
+        u.UseKind = SymbolUseKind.Definition
         && u.FullName.Contains(testModuleIdentifier)
         && not (u.FullName.EndsWith(testModuleIdentifier)))
       |> Array.sortBy (fun t -> t.StartLine)
@@ -611,7 +662,7 @@ module TestDependencyGraph =
     let nonDefUses =
       uses
       |> Array.filter (fun u ->
-        not u.IsFromDefinition
+        u.UseKind = SymbolUseKind.Reference
         && not (u.FullName.StartsWith("Microsoft.FSharp"))
         && u.FullName.Contains("."))
     let invertedIndex =
@@ -780,7 +831,7 @@ module LiveTesting =
   /// Recompute cached editor annotations. Call in update path, not render path.
   let recomputeEditorAnnotations (activeFile: string option) (state: LiveTestState) : LineAnnotation array =
     match activeFile with
-    | Some f when state.Enabled -> annotationsForFile f state
+    | Some f when state.Activation = LiveTestingActivation.Active -> annotationsForFile f state
     | _ -> [||]
 
 module SourceMapping =
@@ -854,15 +905,17 @@ module CoverageProjection =
     | None -> CoverageStatus.NotCovered
     | Some tests when Array.isEmpty tests -> CoverageStatus.NotCovered
     | Some tests ->
-      let allPassing =
-        tests |> Array.forall (fun tid ->
-          match Map.tryFind tid results with
-          | Some r ->
-            match r.Result with
-            | TestResult.Passed _ -> true
-            | _ -> false
-          | None -> false)
-      CoverageStatus.Covered (tests.Length, allPassing)
+      let health =
+        let allPass =
+          tests |> Array.forall (fun tid ->
+            match Map.tryFind tid results with
+            | Some r ->
+              match r.Result with
+              | TestResult.Passed _ -> true
+              | _ -> false
+            | None -> false)
+        if allPass then CoverageHealth.AllPassing else CoverageHealth.SomeFailing
+      CoverageStatus.Covered (tests.Length, health)
 
   let computeAll
     (graph: TestDependencyGraph)
@@ -872,15 +925,17 @@ module CoverageProjection =
     |> Map.map (fun symbol tests ->
       if Array.isEmpty tests then CoverageStatus.NotCovered
       else
-        let allPassing =
-          tests |> Array.forall (fun tid ->
-            match Map.tryFind tid results with
-            | Some r ->
-              match r.Result with
-              | TestResult.Passed _ -> true
-              | _ -> false
-            | None -> false)
-        CoverageStatus.Covered (tests.Length, allPassing))
+        let health =
+          let allPass =
+            tests |> Array.forall (fun tid ->
+              match Map.tryFind tid results with
+              | Some r ->
+                match r.Result with
+                | TestResult.Passed _ -> true
+                | _ -> false
+              | None -> false)
+          if allPass then CoverageHealth.AllPassing else CoverageHealth.SomeFailing
+        CoverageStatus.Covered (tests.Length, health))
 
 module CoverageComputation =
   let computeLineCoverage (state: CoverageState) (file: string) (line: int) : LineCoverage =
@@ -1047,7 +1102,7 @@ module PipelineOrchestrator =
     (changedSymbols: string list)
     (depGraph: TestDependencyGraph)
     : PipelineDecision =
-    if not state.Enabled then
+    if state.Activation = LiveTestingActivation.Inactive then
       PipelineDecision.Skip "Live testing disabled"
     elif TestRunPhase.isRunning state.RunPhase then
       PipelineDecision.Skip "Pipeline already running"
@@ -1173,7 +1228,7 @@ module PipelineEffects =
     (state: LiveTestState)
     (lastTiming: PipelineTiming option)
     : PipelineEffect option =
-    if not state.Enabled then None
+    if state.Activation = LiveTestingActivation.Inactive then None
     else
       let affected = TestDependencyGraph.findAffected changedSymbols depGraph
       if Array.isEmpty affected then None
@@ -1252,7 +1307,7 @@ module AdaptiveDebounce =
 /// Represents a resolved symbol reference from FCS.
 type SymbolReference = {
   SymbolFullName: string
-  IsFromDefinition: bool
+  UseKind: SymbolUseKind
   UsedInTestId: TestId option
   FilePath: string
   Line: int
@@ -1266,7 +1321,7 @@ module SymbolGraphBuilder =
     let displayName = if parts.Length > 0 then parts[parts.Length - 1] else sr.SymbolFullName
     { FullName = sr.SymbolFullName
       DisplayName = displayName
-      IsFromDefinition = sr.IsFromDefinition
+      UseKind = sr.UseKind
       StartLine = sr.Line
       EndLine = sr.Line }
 
@@ -1457,7 +1512,7 @@ module LiveTestPipelineState =
     (trigger: RunTrigger)
     (s: LiveTestPipelineState)
     : PipelineEffect list =
-    if Array.isEmpty affectedIds || not s.TestState.Enabled then []
+    if Array.isEmpty affectedIds || s.TestState.Activation = LiveTestingActivation.Inactive then []
     else
       let affectedIdSet = Set.ofArray affectedIds
       let affectedTests =
