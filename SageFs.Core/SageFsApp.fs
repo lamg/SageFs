@@ -827,8 +827,27 @@ module SageFsEffectHandler =
         | Features.LiveTesting.PipelineEffect.ParseTreeSitter (content, filePath) ->
           let locations = Features.LiveTesting.TestTreeSitter.discover filePath content
           dispatch (SageFsMsg.Event (SageFsEvent.TestLocationsDetected locations))
-        | Features.LiveTesting.PipelineEffect.RequestFcsTypeCheck _filePath ->
-          () // FCS type-check — handled by existing FCS infrastructure
+        | Features.LiveTesting.PipelineEffect.RequestFcsTypeCheck filePath ->
+          do! withSession deps dispatch None (fun _sid proxy ->
+            async {
+              let code =
+                try System.IO.File.ReadAllText(filePath)
+                with _ -> ""
+              if code <> "" then
+                let replyId = newReplyId ()
+                let! resp = proxy (WorkerMessage.TypeCheckWithSymbols(code, filePath, replyId))
+                let result =
+                  match resp with
+                  | WorkerResponse.TypeCheckWithSymbolsResult(_rid, hasErrors, _diags, symRefs) ->
+                    if hasErrors then
+                      Features.LiveTesting.FcsTypeCheckResult.Failed(filePath, [])
+                    else
+                      let refs = symRefs |> List.map WorkerProtocol.WorkerSymbolRef.toDomain
+                      Features.LiveTesting.FcsTypeCheckResult.Success(filePath, refs)
+                  | _ ->
+                    Features.LiveTesting.FcsTypeCheckResult.Cancelled filePath
+                dispatch (SageFsMsg.FcsTypeCheckCompleted result)
+            })
         | Features.LiveTesting.PipelineEffect.RunAffectedTests (_testIds, _trigger) ->
           () // Test execution — handled by existing hot reload hook
       }

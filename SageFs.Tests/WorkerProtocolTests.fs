@@ -68,6 +68,12 @@ let workerProtocolTests =
       <| fun _ ->
         let _, result = roundTrip<WorkerMessage> WorkerMessage.Shutdown
         result |> Expect.equal "should round-trip" WorkerMessage.Shutdown
+
+      testCase "TypeCheckWithSymbols round-trips"
+      <| fun _ ->
+        let msg = WorkerMessage.TypeCheckWithSymbols("let x = 42", "test.fsx", "r-tc1")
+        let _, result = roundTrip<WorkerMessage> msg
+        result |> Expect.equal "should round-trip" msg
     ]
 
     testList "WorkerResponse round-trip" [
@@ -171,6 +177,26 @@ let workerProtocolTests =
         let resp = WorkerResponse.WorkerError (SageFsError.EvalFailed "something went wrong")
         let _, result = roundTrip<WorkerResponse> resp
         result |> Expect.equal "should round-trip" resp
+
+      testCase "TypeCheckWithSymbolsResult empty round-trips"
+      <| fun _ ->
+        let resp = WorkerResponse.TypeCheckWithSymbolsResult("r-tc2", false, [], [])
+        let _, result = roundTrip<WorkerResponse> resp
+        result |> Expect.equal "should round-trip" resp
+
+      testCase "TypeCheckWithSymbolsResult with data round-trips"
+      <| fun _ ->
+        let diag = {
+          Severity = SageFs.Features.Diagnostics.DiagnosticSeverity.Warning
+          Message = "unused variable"
+          StartLine = 1; StartColumn = 4
+          EndLine = 1; EndColumn = 5
+        }
+        let sym1 = { WorkerSymbolRef.SymbolFullName = "MyModule.add"; FilePath = "MyModule.fs"; Line = 10 }
+        let sym2 = { WorkerSymbolRef.SymbolFullName = "MyModule.validate"; FilePath = "MyModule.fs"; Line = 20 }
+        let resp = WorkerResponse.TypeCheckWithSymbolsResult("r-tc3", true, [diag], [sym1; sym2])
+        let _, result = roundTrip<WorkerResponse> resp
+        result |> Expect.equal "should round-trip" resp
     ]
 
     testList "SessionInfo" [
@@ -239,5 +265,44 @@ let workerProtocolTests =
         }
         let _, result = roundTrip<SessionInfo> info
         result |> Expect.equal "should round-trip" info
+    ]
+
+    testList "WorkerSymbolRef conversions" [
+
+      testCase "fromDomain preserves fields"
+      <| fun _ ->
+        let domainRef: SageFs.Features.LiveTesting.SymbolReference = {
+          SymbolFullName = "Helpers.parseInput"
+          UsedInTestId = Some (SageFs.Features.LiveTesting.TestId.create "parseTests.should_parse" "expecto")
+          FilePath = "Helpers.fs"
+          Line = 42
+        }
+        let wireRef = WorkerSymbolRef.fromDomain domainRef
+        wireRef.SymbolFullName |> Expect.equal "full name preserved" "Helpers.parseInput"
+        wireRef.FilePath |> Expect.equal "file path preserved" "Helpers.fs"
+        wireRef.Line |> Expect.equal "line preserved" 42
+
+      testCase "toDomain sets UsedInTestId to None"
+      <| fun _ ->
+        let wireRef = { WorkerSymbolRef.SymbolFullName = "M.f"; FilePath = "M.fs"; Line = 10 }
+        let backRef = WorkerSymbolRef.toDomain wireRef
+        backRef.SymbolFullName |> Expect.equal "full name back" "M.f"
+        backRef.UsedInTestId |> Expect.isNone "UsedInTestId should be None"
+        backRef.FilePath |> Expect.equal "file path back" "M.fs"
+        backRef.Line |> Expect.equal "line back" 10
+    ]
+
+    testList "HTTP route mapping" [
+
+      testCase "TypeCheckWithSymbols maps to POST /typecheck-symbols"
+      <| fun _ ->
+        let method, path, body =
+          HttpWorkerClient.toRoute (WorkerMessage.TypeCheckWithSymbols("let x = 1", "file.fsx", "r1"))
+        method |> Expect.equal "method should be POST" "POST"
+        path |> Expect.equal "path" "/typecheck-symbols"
+        body.IsSome |> Expect.isTrue "should have body"
+        body.Value |> Expect.stringContains "body contains code" "let x = 1"
+        body.Value |> Expect.stringContains "body contains filePath" "file.fsx"
+        body.Value |> Expect.stringContains "body contains replyId" "r1"
     ]
   ]

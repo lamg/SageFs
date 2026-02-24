@@ -20,6 +20,9 @@ module HttpWorkerClient =
     | WorkerMessage.CheckCode(code, rid) ->
       "POST", "/check",
       Some (Serialization.serialize {| code = code; replyId = rid |})
+    | WorkerMessage.TypeCheckWithSymbols(code, filePath, rid) ->
+      "POST", "/typecheck-symbols",
+      Some (Serialization.serialize {| code = code; filePath = filePath; replyId = rid |})
     | WorkerMessage.GetCompletions(code, cursorPos, rid) ->
       "POST", "/completions",
       Some (Serialization.serialize {| code = code; cursorPos = cursorPos; replyId = rid |})

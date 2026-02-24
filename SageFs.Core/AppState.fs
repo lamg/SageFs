@@ -117,6 +117,7 @@ type Command =
   | GetBoundValue of name: string * AsyncReplyChannel<obj Option>
   | AddMiddleware of Middleware list * AsyncReplyChannel<unit>
   | GetDiagnostics of text: string * AsyncReplyChannel<Diagnostics.Diagnostic array>
+  | GetTypeCheckWithSymbols of text: string * filePath: string * AsyncReplyChannel<Diagnostics.TypeCheckWithSymbolsResult>
   | GetAppState of AsyncReplyChannel<AppState>
   | GetSessionState of AsyncReplyChannel<SessionState>
   | GetStartupConfig of AsyncReplyChannel<StartupConfig option>
@@ -151,6 +152,7 @@ type internal QueryCommand =
   | QueryGetStatusMessage of AsyncReplyChannel<string option>
   | QueryAutocomplete of text: string * caret: int * word: string * AsyncReplyChannel<list<AutoCompletion.CompletionItem>>
   | QueryGetDiagnostics of text: string * AsyncReplyChannel<Diagnostics.Diagnostic array>
+  | QueryGetTypeCheckWithSymbols of text: string * filePath: string * AsyncReplyChannel<Diagnostics.TypeCheckWithSymbolsResult>
   | QueryGetBoundValue of name: string * AsyncReplyChannel<obj Option>
   | QueryUpdateMcpPort of int
 
@@ -529,6 +531,10 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
           Source = Events.System
         |})
         return! loop { snapshot with AppState = newAppState }
+      | QueryGetTypeCheckWithSymbols(text, filePath, reply) ->
+        let res = Diagnostics.getTypeCheckWithSymbols snapshot.AppState.Session filePath text
+        reply.Reply res
+        return! loop snapshot
       | QueryGetBoundValue(name, reply) ->
         snapshot.AppState.Session.GetBoundValues()
         |> List.tryFind (fun x -> x.Name = name)
@@ -1010,6 +1016,8 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
           queryActor.Post(QueryAutocomplete(text, caret, word, reply))
         | GetDiagnostics(text, reply) ->
           queryActor.Post(QueryGetDiagnostics(text, reply))
+        | GetTypeCheckWithSymbols(text, filePath, reply) ->
+          queryActor.Post(QueryGetTypeCheckWithSymbols(text, filePath, reply))
         | GetBoundValue(name, reply) ->
           queryActor.Post(QueryGetBoundValue(name, reply))
         | UpdateMcpPort port ->

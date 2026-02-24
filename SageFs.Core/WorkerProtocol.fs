@@ -61,6 +61,7 @@ module WorkerProtocol =
   type WorkerMessage =
     | EvalCode of code: string * replyId: string
     | CheckCode of code: string * replyId: string
+    | TypeCheckWithSymbols of code: string * filePath: string * replyId: string
     | GetCompletions of code: string * cursorPos: int * replyId: string
     | CancelEval
     | LoadScript of filePath: string * replyId: string
@@ -95,10 +96,25 @@ module WorkerProtocol =
     MaxDurationMs: int64
   }
 
+  /// Wire-friendly symbol reference for TypeCheckWithSymbols response
+  type WorkerSymbolRef = {
+    SymbolFullName: string
+    FilePath: string
+    Line: int
+  }
+
+  module WorkerSymbolRef =
+    let fromDomain (sr: Features.LiveTesting.SymbolReference) : WorkerSymbolRef =
+      { SymbolFullName = sr.SymbolFullName; FilePath = sr.FilePath; Line = sr.Line }
+
+    let toDomain (ws: WorkerSymbolRef) : Features.LiveTesting.SymbolReference =
+      { SymbolFullName = ws.SymbolFullName; UsedInTestId = None; FilePath = ws.FilePath; Line = ws.Line }
+
   [<RequireQualifiedAccess>]
   type WorkerResponse =
     | EvalResult of replyId: string * result: Result<string, SageFsError> * diagnostics: WorkerDiagnostic list * metadata: Map<string, string>
     | CheckResult of replyId: string * diagnostics: WorkerDiagnostic list
+    | TypeCheckWithSymbolsResult of replyId: string * hasErrors: bool * diagnostics: WorkerDiagnostic list * symbolRefs: WorkerSymbolRef list
     | CompletionResult of replyId: string * completions: string list
     | StatusResult of replyId: string * status: WorkerStatusSnapshot
     | EvalCancelled of wasRunning: bool

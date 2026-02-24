@@ -73,6 +73,12 @@ let handleMessage
       let workerDiags = diags |> Array.map toWorkerDiagnostic |> Array.toList
       return WorkerResponse.CheckResult(replyId, workerDiags)
 
+    | WorkerMessage.TypeCheckWithSymbols(code, filePath, replyId) ->
+      let! result = actor.PostAndAsyncReply(fun rc -> GetTypeCheckWithSymbols(code, filePath, rc))
+      let workerDiags = result.Diagnostics |> Array.map toWorkerDiagnostic |> Array.toList
+      let workerSymRefs = result.SymbolRefs |> List.map WorkerProtocol.WorkerSymbolRef.fromDomain
+      return WorkerResponse.TypeCheckWithSymbolsResult(replyId, result.HasErrors, workerDiags, workerSymRefs)
+
     | WorkerMessage.GetCompletions(code, cursorPos, replyId) ->
       let word = ""
       let! completions =

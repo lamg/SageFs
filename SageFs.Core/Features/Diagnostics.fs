@@ -4,6 +4,7 @@ open FSharp.Compiler.EditorServices
 open FSharp.Compiler.Interactive
 open FSharp.Compiler.Text
 open FSharp.Compiler.Diagnostics
+open SageFs.Features.LiveTesting
 
 type Range = {
   StartLine: int
@@ -64,3 +65,50 @@ let getDiagnostics (fsiSession: Shell.FsiEvaluationSession) text =
   |> Seq.map Diagnostic.mkDiagnostic
   |> Seq.distinct
   |> Seq.toArray
+
+/// Result of type-check with symbol extraction for the live testing pipeline.
+type TypeCheckWithSymbolsResult = {
+  Diagnostics: Diagnostic array
+  HasErrors: bool
+  SymbolRefs: SymbolReference list
+}
+
+/// Extracts symbol references from FCS typed check results.
+/// Filters to uses only (not definitions or open statements).
+let extractSymbolReferences
+  (filePath: string)
+  (checkResults: FSharp.Compiler.CodeAnalysis.FSharpCheckFileResults)
+  : SymbolReference list =
+  checkResults.GetAllUsesOfAllSymbolsInFile()
+  |> Seq.choose (fun su ->
+    if su.IsFromDefinition || su.IsFromOpenStatement then None
+    else
+      Some {
+        SymbolFullName = su.Symbol.FullName
+        UsedInTestId = None
+        FilePath = filePath
+        Line = su.Range.StartLine
+      })
+  |> Seq.toList
+
+/// Type-check with both diagnostics and symbol extraction.
+/// Used by the live testing pipeline's RequestFcsTypeCheck effect.
+let getTypeCheckWithSymbols
+  (fsiSession: Shell.FsiEvaluationSession)
+  (filePath: string)
+  (text: string)
+  : TypeCheckWithSymbolsResult =
+  let parse, typed, glob = fsiSession.ParseAndCheckInteraction text
+  let diagnostics =
+    parse.Diagnostics
+    |> Seq.append typed.Diagnostics
+    |> Seq.append glob.Diagnostics
+    |> Seq.map Diagnostic.mkDiagnostic
+    |> Seq.distinct
+    |> Seq.toArray
+  let hasErrors =
+    diagnostics |> Array.exists (fun d -> d.Severity = DiagnosticSeverity.Error)
+  let symbolRefs =
+    if hasErrors then []
+    else extractSymbolReferences filePath typed
+  { Diagnostics = diagnostics; HasErrors = hasErrors; SymbolRefs = symbolRefs }

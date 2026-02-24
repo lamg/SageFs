@@ -91,6 +91,8 @@ let testHandler (msg: WorkerMessage) : Async<WorkerResponse> = async {
     return WorkerResponse.EvalResult(rid, Ok (sprintf "val it: string = \"%s\"" code), [], Map.empty)
   | WorkerMessage.CheckCode(_, rid) ->
     return WorkerResponse.CheckResult(rid, [])
+  | WorkerMessage.TypeCheckWithSymbols(_, _, rid) ->
+    return WorkerResponse.TypeCheckWithSymbolsResult(rid, false, [], [])
   | WorkerMessage.GetCompletions(_, _, rid) ->
     return WorkerResponse.CompletionResult(rid, ["System"; "String"])
   | WorkerMessage.CancelEval ->

@@ -84,6 +84,15 @@ module WorkerHttpTransport =
         return! respond' ctx (WorkerMessage.CheckCode(code, rid))
       })) |> ignore
 
+      app.MapPost("/typecheck-symbols", Func<HttpContext, Task>(fun ctx -> task {
+        let! body = readBody ctx
+        use doc = JsonDocument.Parse(body)
+        let code = (jsonProp doc "code").GetString()
+        let filePath = (jsonProp doc "filePath").GetString()
+        let rid = (jsonProp doc "replyId").GetString()
+        return! respond' ctx (WorkerMessage.TypeCheckWithSymbols(code, filePath, rid))
+      })) |> ignore
+
       app.MapPost("/completions", Func<HttpContext, Task>(fun ctx -> task {
         let! body = readBody ctx
         use doc = JsonDocument.Parse(body)
