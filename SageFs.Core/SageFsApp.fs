@@ -16,6 +16,7 @@ type SageFsMsg =
   | ToggleCoverage
   | PipelineTick of now: DateTimeOffset
   | FileContentChanged of filePath: string * content: string
+  | FcsTypeCheckCompleted of Features.LiveTesting.FcsTypeCheckResult
 
 /// Side effects the Elm loop can request.
 /// Wraps EditorEffect and PipelineEffect for async execution.
@@ -455,6 +456,13 @@ module SageFsUpdate =
         { model with LiveTesting = pipeline' }, []
       else
         model, []
+
+    | SageFsMsg.FcsTypeCheckCompleted result ->
+      let effects, pipeline' =
+        model.LiveTesting
+        |> Features.LiveTesting.LiveTestPipelineState.handleFcsResult result
+      let mappedEffects = effects |> List.map SageFsEffect.Pipeline
+      { model with LiveTesting = pipeline' }, mappedEffects
 
 /// Pure render function: produces RenderRegion list from model.
 /// Every frontend consumes these regions — terminal, web, Neovim, etc.

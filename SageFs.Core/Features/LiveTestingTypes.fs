@@ -1050,6 +1050,15 @@ module FileAnalysisCache =
   let getFileSymbols (filePath: string) (cache: FileAnalysisCache) =
     cache.FileSymbols |> Map.tryFind filePath |> Option.defaultValue []
 
+/// Result of an FCS type-check request.
+/// Success carries the file and symbol references for dependency graph updates.
+/// Failed carries diagnostics. Cancelled means the check was superseded.
+[<RequireQualifiedAccess>]
+type FcsTypeCheckResult =
+  | Success of filePath: string * refs: SymbolReference list
+  | Failed of filePath: string * errors: string list
+  | Cancelled of filePath: string
+
 /// Wraps LiveTestState + PipelineDebounce + TestDependencyGraph + adaptive
 /// debounce + file analysis cache into a single state record for the Elm loop.
 type LiveTestPipelineState = {
@@ -1110,3 +1119,24 @@ module LiveTestPipelineState =
       let (tsPayload, fcsPayload), db = s.Debounce |> PipelineDebounce.tick now
       let effects = PipelineEffects.fromTick tsPayload fcsPayload filePath
       effects, { s with Debounce = db }
+
+  /// Handles an FCS type-check result: updates state and produces effects.
+  /// Success: updates symbol graph, analysis cache, adaptive debounce, then
+  /// calls afterTypeCheck to emit RunAffectedTests if symbols changed.
+  /// Failed: no-op (diagnostics handled elsewhere).
+  /// Cancelled: updates adaptive debounce backoff.
+  let handleFcsResult
+    (result: FcsTypeCheckResult)
+    (s: LiveTestPipelineState)
+    : PipelineEffect list * LiveTestPipelineState =
+    match result with
+    | FcsTypeCheckResult.Success (filePath, refs) ->
+      let s1 = onFcsComplete filePath refs s
+      let trigger = RunTrigger.Keystroke
+      let effect = PipelineEffects.afterTypeCheck s1.ChangedSymbols trigger s1.DepGraph s1.TestState
+      let effects = effect |> Option.toList
+      effects, s1
+    | FcsTypeCheckResult.Failed _ ->
+      [], s
+    | FcsTypeCheckResult.Cancelled _ ->
+      [], onFcsCanceled s

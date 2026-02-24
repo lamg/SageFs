@@ -2718,18 +2718,15 @@ let compositionTests = testList "compositionTests" [
     affected |> Expect.hasLength "no affected tests" 0
   }
 
-  test "full pipeline roundtrip: keystroke → debounce → effects → affected tests" {
+  test "full pipeline roundtrip: keystroke → debounce → FCS → affected tests" {
     let tc = mkTestCase "MyTest.test1" "expecto" TestCategory.Unit
     let t1 = tc.Id
     let t0 = DateTimeOffset(2025, 1, 1, 0, 0, 0, TimeSpan.Zero)
-    let depGraph = {
-      TestDependencyGraph.empty with
-        SymbolToTests = Map.ofList ["Lib.add", [|t1|]]
-    }
+    let refs = [
+      { SymbolFullName = "Lib.add"; UsedInTestId = Some t1; FilePath = "Lib.fs"; Line = 1 }
+    ]
     let state = {
       LiveTestPipelineState.empty with
-        DepGraph = depGraph
-        ChangedSymbols = ["Lib.add"]
         TestState = { LiveTestState.empty with DiscoveredTests = [|tc|]; Enabled = true }
     }
     let s1 = state |> LiveTestPipelineState.onKeystroke "let x = 1" "File.fs" t0
@@ -2738,11 +2735,14 @@ let compositionTests = testList "compositionTests" [
     let effects51, s51 = s30 |> LiveTestPipelineState.tick (t0.AddMilliseconds(51.0))
     effects51 |> List.exists (fun e -> match e with PipelineEffect.ParseTreeSitter _ -> true | _ -> false)
     |> Expect.isTrue "TS fires at 51ms"
-    let effects301, _ = s51 |> LiveTestPipelineState.tick (t0.AddMilliseconds(301.0))
+    let effects301, s301 = s51 |> LiveTestPipelineState.tick (t0.AddMilliseconds(301.0))
     effects301 |> List.exists (fun e -> match e with PipelineEffect.RequestFcsTypeCheck _ -> true | _ -> false)
-    |> Expect.isTrue "FCS fires at 301ms"
-    effects301 |> List.exists (fun e -> match e with PipelineEffect.RunAffectedTests _ -> true | _ -> false)
-    |> Expect.isTrue "affected tests triggered"
+    |> Expect.isTrue "FCS request fires at 301ms"
+    // Phase 2: FCS completes → handleFcsResult → RunAffectedTests
+    let fcsResult = FcsTypeCheckResult.Success ("File.fs", refs)
+    let fcsEffects, _ = LiveTestPipelineState.handleFcsResult fcsResult s301
+    fcsEffects |> List.exists (fun e -> match e with PipelineEffect.RunAffectedTests _ -> true | _ -> false)
+    |> Expect.isTrue "affected tests triggered after FCS"
   }
 
   test "burst typing coalesces debounce to single tree-sitter parse" {
@@ -3106,5 +3106,142 @@ let fileContentChangedTests = testList "FileContentChanged" [
     let after2, _ = SageFsUpdate.update (SageFsMsg.FileContentChanged("src/Second.fs", "let b = 2")) after1
     after2.LiveTesting.ActiveFile
     |> Expect.equal "latest file wins" (Some "src/Second.fs")
+  }
+]
+
+[<Tests>]
+let fcsTypeCheckResultTests = testList "FcsTypeCheckResult" [
+  test "Success updates symbol graph via onFcsComplete" {
+    let tc = mkTestCase "Test.add" "expecto" TestCategory.Unit
+    let refs = [
+      { SymbolReference.SymbolFullName = "Lib.add"
+        UsedInTestId = None
+        FilePath = "Lib.fs"; Line = 5 }
+      { SymbolReference.SymbolFullName = "Lib.add"
+        UsedInTestId = Some tc.Id
+        FilePath = "Test.fs"; Line = 10 }
+    ]
+    let state = {
+      LiveTestPipelineState.empty with
+        TestState = { LiveTestState.empty with DiscoveredTests = [|tc|]; Enabled = true }
+    }
+    let result = FcsTypeCheckResult.Success ("Lib.fs", refs)
+    let _effects, s1 = LiveTestPipelineState.handleFcsResult result state
+    s1.DepGraph.SymbolToTests
+    |> Map.containsKey "Lib.add"
+    |> Expect.isTrue "dep graph has Lib.add"
+  }
+
+  test "Success with changed symbols triggers RunAffectedTests" {
+    let tc = mkTestCase "Test.add" "expecto" TestCategory.Unit
+    let refs = [
+      { SymbolReference.SymbolFullName = "Lib.add"
+        UsedInTestId = None
+        FilePath = "Lib.fs"; Line = 5 }
+      { SymbolReference.SymbolFullName = "Lib.add"
+        UsedInTestId = Some tc.Id
+        FilePath = "Test.fs"; Line = 10 }
+    ]
+    let state = {
+      LiveTestPipelineState.empty with
+        TestState = { LiveTestState.empty with DiscoveredTests = [|tc|]; Enabled = true }
+    }
+    let result = FcsTypeCheckResult.Success ("Lib.fs", refs)
+    let effects, _ = LiveTestPipelineState.handleFcsResult result state
+    effects
+    |> List.exists (fun e -> match e with PipelineEffect.RunAffectedTests _ -> true | _ -> false)
+    |> Expect.isTrue "RunAffectedTests fires on new symbols"
+  }
+
+  test "Success updates adaptive debounce" {
+    let state = LiveTestPipelineState.empty
+    let result = FcsTypeCheckResult.Success ("test.fs", [])
+    let _, s1 = LiveTestPipelineState.handleFcsResult result state
+    s1.AdaptiveDebounce.ConsecutiveFcsSuccesses
+    |> Expect.equal "success count incremented" 1
+  }
+
+  test "Failed produces no effects" {
+    let state = LiveTestPipelineState.empty
+    let result = FcsTypeCheckResult.Failed ("test.fs", ["error: type mismatch"])
+    let effects, _ = LiveTestPipelineState.handleFcsResult result state
+    effects |> Expect.isEmpty "no effects on failure"
+  }
+
+  test "Failed does not change adaptive debounce" {
+    let state = LiveTestPipelineState.empty
+    let result = FcsTypeCheckResult.Failed ("test.fs", ["error"])
+    let _, s1 = LiveTestPipelineState.handleFcsResult result state
+    s1.AdaptiveDebounce.ConsecutiveFcsSuccesses
+    |> Expect.equal "unchanged success count" 0
+    s1.AdaptiveDebounce.ConsecutiveFcsCancels
+    |> Expect.equal "unchanged cancel count" 0
+  }
+
+  test "Cancelled updates adaptive debounce backoff" {
+    let state = LiveTestPipelineState.empty
+    let result = FcsTypeCheckResult.Cancelled "test.fs"
+    let effects, s1 = LiveTestPipelineState.handleFcsResult result state
+    effects |> Expect.isEmpty "no effects on cancel"
+    s1.AdaptiveDebounce.ConsecutiveFcsCancels
+    |> Expect.equal "cancel count incremented" 1
+  }
+
+  test "Cancelled increases FCS delay" {
+    let state = LiveTestPipelineState.empty
+    let baseFcsMs = state.AdaptiveDebounce.Config.BaseFcsMs
+    let result = FcsTypeCheckResult.Cancelled "test.fs"
+    let _, s1 = LiveTestPipelineState.handleFcsResult result state
+    (s1.AdaptiveDebounce.CurrentFcsDelayMs, baseFcsMs)
+    |> Expect.isGreaterThan "delay increased after cancel"
+  }
+
+  test "Multiple successes reset FCS delay to base" {
+    let state = LiveTestPipelineState.empty
+    let _, s1 = LiveTestPipelineState.handleFcsResult (FcsTypeCheckResult.Cancelled "f.fs") state
+    let resetCount = s1.AdaptiveDebounce.Config.ResetAfterSuccessCount
+    let mutable s = s1
+    for _ in 1..resetCount do
+      let _, sn = LiveTestPipelineState.handleFcsResult (FcsTypeCheckResult.Success ("f.fs", [])) s
+      s <- sn
+    s.AdaptiveDebounce.CurrentFcsDelayMs
+    |> Expect.equal "delay reset to base" state.AdaptiveDebounce.Config.BaseFcsMs
+  }
+
+  test "Elm wiring: FcsTypeCheckCompleted Success updates model and emits effects" {
+    let tc = mkTestCase "Test.add" "expecto" TestCategory.Unit
+    let refs = [
+      { SymbolReference.SymbolFullName = "Lib.add"
+        UsedInTestId = None; FilePath = "Lib.fs"; Line = 5 }
+      { SymbolReference.SymbolFullName = "Lib.add"
+        UsedInTestId = Some tc.Id; FilePath = "Test.fs"; Line = 10 }
+    ]
+    let model = {
+      SageFsModel.initial with
+        LiveTesting = {
+          LiveTestPipelineState.empty with
+            TestState = { LiveTestState.empty with DiscoveredTests = [|tc|]; Enabled = true }
+        }
+    }
+    let msg = SageFsMsg.FcsTypeCheckCompleted (FcsTypeCheckResult.Success ("Lib.fs", refs))
+    let model', effects = SageFsUpdate.update msg model
+    model'.LiveTesting.DepGraph.SymbolToTests
+    |> Map.containsKey "Lib.add"
+    |> Expect.isTrue "model dep graph updated"
+    effects
+    |> List.exists (fun e ->
+      match e with
+      | SageFsEffect.Pipeline (PipelineEffect.RunAffectedTests _) -> true
+      | _ -> false)
+    |> Expect.isTrue "Pipeline RunAffectedTests effect emitted"
+  }
+
+  test "Elm wiring: FcsTypeCheckCompleted Failed is no-op" {
+    let model = SageFsModel.initial
+    let msg = SageFsMsg.FcsTypeCheckCompleted (FcsTypeCheckResult.Failed ("test.fs", ["error"]))
+    let model', effects = SageFsUpdate.update msg model
+    effects |> Expect.isEmpty "no effects on failure"
+    model'.LiveTesting.DepGraph.SymbolToTests
+    |> Expect.isEmpty "dep graph unchanged"
   }
 ]
