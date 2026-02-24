@@ -121,7 +121,7 @@ internal class OpenDashboardCommand : Command
 
   public override Task ExecuteCommandAsync(IClientContext context, CancellationToken ct)
   {
-    Core.DaemonManager.OpenDashboard(client.DashboardPort);
+    Core.DaemonManager.openDashboard(client.DashboardPort);
     return Task.CompletedTask;
   }
 }
