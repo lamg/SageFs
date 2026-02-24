@@ -2409,6 +2409,28 @@ let pipelineStateTests = testList "LiveTestPipelineState" [
     effects |> Expect.isEmpty "no effects from empty state"
   }
 
+  test "tick with no active file produces no effects even with pending" {
+    let t0 = DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero)
+    let state = {
+      LiveTestPipelineState.empty with
+        Debounce = {
+          TreeSitter = {
+            CurrentGeneration = 1L
+            Pending = Some { Payload = "let x = 1"; RequestedAt = t0; DelayMs = 50; Generation = 1L }
+            LastCompleted = None
+          }
+          Fcs = {
+            CurrentGeneration = 1L
+            Pending = Some { Payload = "File.fs"; RequestedAt = t0; DelayMs = 300; Generation = 1L }
+            LastCompleted = None
+          }
+        }
+    }
+    let effects, s2 = state |> LiveTestPipelineState.tick (t0.AddMilliseconds(301.0))
+    effects |> Expect.isEmpty "no effects when no active file"
+    s2.ActiveFile |> Expect.isNone "active file still None"
+  }
+
   test "tick after keystroke delay fires tree-sitter parse" {
     let t0 = DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero)
     let t50 = t0.AddMilliseconds(51.0)
@@ -2568,9 +2590,8 @@ let endToEndPipelineTests = testList "End-to-end Pipeline" [
     |> Expect.isTrue "fires 50ms after last keystroke"
   }
 
-  test "full pipeline: keystroke → TS → FCS → run affected" {
+  test "full pipeline: keystroke → TS → FCS → afterTypeCheck → run affected" {
     let t0 = DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero)
-    let log = EffectDispatcher.create()
     let tc = mkTestCase "M.affectedTest" "expecto" TestCategory.Unit
     let depGraph = {
       TestDependencyGraph.empty with
@@ -2583,18 +2604,22 @@ let endToEndPipelineTests = testList "End-to-end Pipeline" [
         TestState = { LiveTestState.empty with DiscoveredTests = [|tc|]; Enabled = true }
     }
     let s = state |> LiveTestPipelineState.onKeystroke "let x = 1" "File.fs" t0
-    let effects, _ = s |> LiveTestPipelineState.tick (t0.AddMilliseconds(301.0))
-    EffectDispatcher.dispatchAll log effects
-    // Should have TS, FCS, and RunAffected
-    log.Effects
+    // Phase 1: tick fires TS + FCS
+    let effects, s2 = s |> LiveTestPipelineState.tick (t0.AddMilliseconds(301.0))
+    effects
     |> List.exists (fun e -> match e with PipelineEffect.ParseTreeSitter _ -> true | _ -> false)
     |> Expect.isTrue "has tree-sitter"
-    log.Effects
+    effects
     |> List.exists (fun e -> match e with PipelineEffect.RequestFcsTypeCheck _ -> true | _ -> false)
     |> Expect.isTrue "has fcs"
-    log.Effects
-    |> List.exists (fun e -> match e with PipelineEffect.RunAffectedTests _ -> true | _ -> false)
-    |> Expect.isTrue "has run affected"
+    // Phase 2: afterTypeCheck (after FCS completes) fires RunAffectedTests
+    let runEffect = PipelineEffects.afterTypeCheck s2.ChangedSymbols RunTrigger.Keystroke s2.DepGraph s2.TestState
+    runEffect |> Expect.isSome "afterTypeCheck produces RunAffectedTests"
+    match runEffect.Value with
+    | PipelineEffect.RunAffectedTests (ids, trigger) ->
+      ids |> Array.length |> Expect.equal "one affected test" 1
+      trigger |> Expect.equal "trigger is keystroke" RunTrigger.Keystroke
+    | _ -> failwith "expected RunAffectedTests"
   }
 
   test "disabled state produces no effects even after delay" {

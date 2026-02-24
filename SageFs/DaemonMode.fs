@@ -314,6 +314,50 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
       elmRuntime.Dispatch(SageFsMsg.PipelineTick DateTimeOffset.UtcNow)),
     null, 50, 50)
 
+  // Live testing file watcher — monitors *.fs and *.fsx changes, dispatches FileContentChanged.
+  // Uses timer-based debounce with per-path deduplication (same pattern as FileWatcher.start).
+  // File content is read in the debounced callback, NOT in the raw FSW handler.
+  let mutable liveTestPendingPaths : Set<string> = Set.empty
+  let liveTestWatcherLock = obj()
+
+  let liveTestDebounceCallback _ =
+    let paths =
+      lock liveTestWatcherLock (fun () ->
+        let ps = liveTestPendingPaths
+        liveTestPendingPaths <- Set.empty
+        ps)
+    for path in paths do
+      try
+        let fi = System.IO.FileInfo(path)
+        if fi.Exists && fi.Length < 1_048_576L then
+          let content = System.IO.File.ReadAllText(path)
+          elmRuntime.Dispatch(SageFsMsg.FileContentChanged(path, content))
+      with
+      | :? System.IO.IOException -> ()
+      | :? System.UnauthorizedAccessException -> ()
+
+  let liveTestDebounceTimer = new System.Threading.Timer(
+    System.Threading.TimerCallback(liveTestDebounceCallback), null,
+    System.Threading.Timeout.Infinite, System.Threading.Timeout.Infinite)
+
+  let handleFileChanged (e: System.IO.FileSystemEventArgs) =
+    let path = e.FullPath
+    if SageFs.FileWatcher.shouldTriggerRebuild
+        { Directories = [workingDir]; Extensions = [".fs"; ".fsx"]; ExcludePatterns = []; DebounceMs = 200 }
+        path then
+      lock liveTestWatcherLock (fun () ->
+        liveTestPendingPaths <- liveTestPendingPaths |> Set.add path
+        liveTestDebounceTimer.Change(200, System.Threading.Timeout.Infinite) |> ignore)
+
+  let liveTestWatcher = new System.IO.FileSystemWatcher(workingDir)
+  liveTestWatcher.IncludeSubdirectories <- true
+  liveTestWatcher.NotifyFilter <- System.IO.NotifyFilters.LastWrite
+  liveTestWatcher.Filters.Add("*.fs")
+  liveTestWatcher.Filters.Add("*.fsx")
+  liveTestWatcher.Changed.Add(handleFileChanged)
+  liveTestWatcher.Created.Add(handleFileChanged)
+  liveTestWatcher.EnableRaisingEvents <- true
+
   // Start dashboard web server on MCP port + 1
   let dashboardPort = mcpPort + 1
   let connectionTracker = ConnectionTracker()
@@ -754,8 +798,11 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
   with
   | :? OperationCanceledException -> ()
 
-  // Graceful shutdown: stop pipeline timer and all sessions
+  // Graceful shutdown: stop pipeline timer, file watcher, and all sessions
   pipelineTimer.Dispose()
+  liveTestDebounceTimer.Dispose()
+  liveTestWatcher.EnableRaisingEvents <- false
+  liveTestWatcher.Dispose()
   let! activeSessions =
     sessionManager.PostAndAsyncReply(fun reply ->
       SessionManager.SessionCommand.ListSessions reply)

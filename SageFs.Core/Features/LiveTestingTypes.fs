@@ -1274,7 +1274,7 @@ module LiveTestPipelineState =
 
   let onFileSave (filePath: string) (now: DateTimeOffset) (s: LiveTestPipelineState) =
     let db = s.Debounce |> PipelineDebounce.onFileSave filePath now
-    { s with Debounce = db }
+    { s with Debounce = db; ActiveFile = Some filePath }
 
   let onFcsComplete (filePath: string) (refs: SymbolReference list) (s: LiveTestPipelineState) =
     let changes, newCache = FileAnalysisCache.update filePath refs s.AnalysisCache
@@ -1297,7 +1297,9 @@ module LiveTestPipelineState =
   /// Note: afterTypeCheck is NOT called here — it runs after FCS completes,
   /// not when the FCS request is emitted (avoids stale symbol data).
   let tick (now: DateTimeOffset) (s: LiveTestPipelineState) =
-    let (tsPayload, fcsPayload), db = s.Debounce |> PipelineDebounce.tick now
-    let filePath = s.ActiveFile |> Option.defaultValue ""
-    let effects = PipelineEffects.fromTick tsPayload fcsPayload filePath
-    effects, { s with Debounce = db }
+    match s.ActiveFile with
+    | None -> [], s
+    | Some filePath ->
+      let (tsPayload, fcsPayload), db = s.Debounce |> PipelineDebounce.tick now
+      let effects = PipelineEffects.fromTick tsPayload fcsPayload filePath
+      effects, { s with Debounce = db }
