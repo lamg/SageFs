@@ -3540,3 +3540,132 @@ let mergeResultsStalenessFixTests = testList "mergeResults staleness handling" [
     |> Expect.isEmpty "fresh results should clear AffectedTests"
   }
 ]
+
+[<Tests>]
+let elmUpdateStatusRecomputationTests = testList "Elm update StatusEntries recomputation" [
+  test "TestsDiscovered recomputes StatusEntries" {
+    let tests = [|
+      { Id = TestId.create "t1" "test1"
+        FullName = "M.test1"; DisplayName = "test1"
+        Origin = TestOrigin.SourceMapped ("editor", 5)
+        Labels = []; Framework = "expecto"; Category = TestCategory.Unit }
+    |]
+
+    let model0 = SageFsModel.initial
+    let model1 = { model0 with LiveTesting = { model0.LiveTesting with TestState = { model0.LiveTesting.TestState with Enabled = true } } }
+    let model2, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestsDiscovered tests)) model1
+
+    model2.LiveTesting.TestState.StatusEntries
+    |> Array.length
+    |> Expect.equal "should have 1 status entry after TestsDiscovered" 1
+  }
+
+  test "AffectedTestsComputed recomputes StatusEntries to Queued" {
+    let tid = TestId.create "t1" "test1"
+    let tests = [|
+      { Id = tid; FullName = "M.test1"; DisplayName = "test1"
+        Origin = TestOrigin.SourceMapped ("editor", 5)
+        Labels = []; Framework = "expecto"; Category = TestCategory.Unit }
+    |]
+
+    let model0 = SageFsModel.initial
+    let stateWithTests = { model0.LiveTesting.TestState with Enabled = true; DiscoveredTests = tests }
+    let stateRecomputed = { stateWithTests with StatusEntries = LiveTesting.computeStatusEntries stateWithTests }
+    let model1 = { model0 with LiveTesting = { model0.LiveTesting with TestState = stateRecomputed } }
+
+    let model2, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.AffectedTestsComputed [| tid |])) model1
+
+    model2.LiveTesting.TestState.StatusEntries
+    |> Array.tryHead
+    |> Option.map (fun e -> e.Status)
+    |> Expect.equal "should be Queued after AffectedTestsComputed" (Some TestRunStatus.Queued)
+  }
+
+  test "annotationsForFile works after TestsDiscovered event" {
+    let tests = [|
+      { Id = TestId.create "t1" "test1"
+        FullName = "M.test1"; DisplayName = "test1"
+        Origin = TestOrigin.SourceMapped ("editor", 5)
+        Labels = []; Framework = "expecto"; Category = TestCategory.Unit }
+    |]
+
+    let model0 = SageFsModel.initial
+    let model1 = { model0 with LiveTesting = { model0.LiveTesting with TestState = { model0.LiveTesting.TestState with Enabled = true } } }
+    let model2, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestsDiscovered tests)) model1
+
+    let annotations = LiveTesting.annotationsForFile "editor" model2.LiveTesting.TestState
+    annotations
+    |> Array.length
+    |> Expect.equal "should have 1 annotation after TestsDiscovered" 1
+  }
+
+  test "TestRunStarted shows Running status" {
+    let tid = TestId.create "t1" "test1"
+    let tests = [|
+      { Id = tid; FullName = "M.test1"; DisplayName = "test1"
+        Origin = TestOrigin.SourceMapped ("editor", 5)
+        Labels = []; Framework = "expecto"; Category = TestCategory.Unit }
+    |]
+
+    let model0 = SageFsModel.initial
+    let model1, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestsDiscovered tests)) { model0 with LiveTesting = { model0.LiveTesting with TestState = { model0.LiveTesting.TestState with Enabled = true } } }
+    let model2, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestRunStarted [| tid |])) model1
+
+    model2.LiveTesting.TestState.StatusEntries
+    |> Array.tryHead
+    |> Option.map (fun e -> e.Status)
+    |> Expect.equal "should be Running after TestRunStarted" (Some TestRunStatus.Running)
+  }
+
+  test "RunPolicyChanged to Disabled shows PolicyDisabled status" {
+    let tests = [|
+      { Id = TestId.create "t1" "test1"
+        FullName = "M.test1"; DisplayName = "test1"
+        Origin = TestOrigin.SourceMapped ("editor", 5)
+        Labels = []; Framework = "expecto"; Category = TestCategory.Unit }
+    |]
+
+    let model0 = SageFsModel.initial
+    let model1, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestsDiscovered tests)) { model0 with LiveTesting = { model0.LiveTesting with TestState = { model0.LiveTesting.TestState with Enabled = true } } }
+    let model2, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.RunPolicyChanged (TestCategory.Unit, RunPolicy.Disabled))) model1
+
+    model2.LiveTesting.TestState.StatusEntries
+    |> Array.tryHead
+    |> Option.map (fun e -> e.Status)
+    |> Expect.equal "should be PolicyDisabled after RunPolicyChanged" (Some TestRunStatus.PolicyDisabled)
+  }
+
+  test "Full lifecycle: Discovered → Started → Completed shows pass/fail annotations" {
+    let tid1 = TestId.create "t1" "test1"
+    let tid2 = TestId.create "t2" "test2"
+    let tests = [|
+      { Id = tid1; FullName = "M.test1"; DisplayName = "test1"
+        Origin = TestOrigin.SourceMapped ("editor", 5)
+        Labels = []; Framework = "expecto"; Category = TestCategory.Unit }
+      { Id = tid2; FullName = "M.test2"; DisplayName = "test2"
+        Origin = TestOrigin.SourceMapped ("editor", 10)
+        Labels = []; Framework = "expecto"; Category = TestCategory.Unit }
+    |]
+    let results = [|
+      { TestId = tid1; TestName = "test1"
+        Result = TestResult.Passed (TimeSpan.FromMilliseconds 5.0)
+        Timestamp = DateTimeOffset.UtcNow }
+      { TestId = tid2; TestName = "test2"
+        Result = TestResult.Failed (TestFailure.AssertionFailed "Expected 42 got 43", TimeSpan.FromMilliseconds 12.0)
+        Timestamp = DateTimeOffset.UtcNow }
+    |]
+
+    let model0 = SageFsModel.initial
+    let m1, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestsDiscovered tests)) { model0 with LiveTesting = { model0.LiveTesting with TestState = { model0.LiveTesting.TestState with Enabled = true } } }
+    let m2, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestRunStarted [| tid1; tid2 |])) m1
+    let m3, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestResultsBatch results)) m2
+
+    let annotations = LiveTesting.annotationsForFile "editor" m3.LiveTesting.TestState
+    annotations |> Array.length |> Expect.equal "should have 2 annotations" 2
+
+    let passAnns = annotations |> Array.filter (fun a -> a.Icon = GutterIcon.TestPassed)
+    let failAnns = annotations |> Array.filter (fun a -> a.Icon = GutterIcon.TestFailed)
+    passAnns |> Array.length |> Expect.equal "should have 1 pass annotation" 1
+    failAnns |> Array.length |> Expect.equal "should have 1 fail annotation" 1
+  }
+]

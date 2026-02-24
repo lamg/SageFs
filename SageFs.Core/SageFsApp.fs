@@ -358,13 +358,25 @@ module SageFsUpdate =
 
       | SageFsEvent.TestsDiscovered tests ->
         let lt = model.LiveTesting
+        let previousStatuses =
+          lt.TestState.StatusEntries
+          |> Array.map (fun e -> e.TestId, e.Status)
+          |> Map.ofArray
+        let updated = { lt.TestState with DiscoveredTests = tests }
+        let recomputed = { updated with StatusEntries = Features.LiveTesting.LiveTesting.computeStatusEntriesWithHistory previousStatuses updated }
         { model with
-            LiveTesting = { lt with TestState = { lt.TestState with DiscoveredTests = tests } } }, []
+            LiveTesting = { lt with TestState = recomputed } }, []
 
       | SageFsEvent.TestRunStarted testIds ->
         let lt = model.LiveTesting
+        let previousStatuses =
+          lt.TestState.StatusEntries
+          |> Array.map (fun e -> e.TestId, e.Status)
+          |> Map.ofArray
+        let updated = { lt.TestState with IsRunning = true; AffectedTests = Set.ofArray testIds }
+        let recomputed = { updated with StatusEntries = Features.LiveTesting.LiveTesting.computeStatusEntriesWithHistory previousStatuses updated }
         { model with
-            LiveTesting = { lt with TestState = { lt.TestState with IsRunning = true; AffectedTests = Set.ofArray testIds } } }, []
+            LiveTesting = { lt with TestState = recomputed } }, []
 
       | SageFsEvent.TestResultsBatch results ->
         let lt = Features.LiveTesting.LiveTesting.mergeResults model.LiveTesting.TestState results
@@ -377,8 +389,14 @@ module SageFsUpdate =
 
       | SageFsEvent.AffectedTestsComputed testIds ->
         let lt = model.LiveTesting
+        let previousStatuses =
+          lt.TestState.StatusEntries
+          |> Array.map (fun e -> e.TestId, e.Status)
+          |> Map.ofArray
+        let updated = { lt.TestState with AffectedTests = Set.ofArray testIds }
+        let recomputed = { updated with StatusEntries = Features.LiveTesting.LiveTesting.computeStatusEntriesWithHistory previousStatuses updated }
         { model with
-            LiveTesting = { lt with TestState = { lt.TestState with AffectedTests = Set.ofArray testIds } } }, []
+            LiveTesting = { lt with TestState = recomputed } }, []
 
       | SageFsEvent.CoverageUpdated coverage ->
         let lt = model.LiveTesting
@@ -399,8 +417,14 @@ module SageFsUpdate =
 
       | SageFsEvent.RunPolicyChanged (category, policy) ->
         let lt = model.LiveTesting
+        let previousStatuses =
+          lt.TestState.StatusEntries
+          |> Array.map (fun e -> e.TestId, e.Status)
+          |> Map.ofArray
+        let updated = { lt.TestState with RunPolicies = Map.add category policy lt.TestState.RunPolicies }
+        let recomputed = { updated with StatusEntries = Features.LiveTesting.LiveTesting.computeStatusEntriesWithHistory previousStatuses updated }
         { model with
-            LiveTesting = { lt with TestState = { lt.TestState with RunPolicies = Map.add category policy lt.TestState.RunPolicies } } }, []
+            LiveTesting = { lt with TestState = recomputed } }, []
 
       | SageFsEvent.ProvidersDetected providers ->
         let lt = model.LiveTesting
