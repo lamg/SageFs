@@ -172,45 +172,57 @@ module SessionManager =
 
   /// Run `dotnet build` for the primary project.
   /// Called from the daemon process (worker is already stopped).
-  let runBuild (projects: string list) (workingDir: string) =
-    let primaryProject =
-      projects
-      |> List.tryHead
-    match primaryProject with
-    | None -> Ok "No projects to build"
-    | Some projFile ->
-      let psi =
-        ProcessStartInfo(
-          "dotnet",
-          sprintf "build \"%s\" --no-restore --no-incremental" projFile,
-          RedirectStandardOutput = true,
-          RedirectStandardError = true,
-          UseShellExecute = false,
-          WorkingDirectory = workingDir)
-      use proc = Process.Start(psi)
-      let stderrLines = System.Collections.Generic.List<string>()
-      let stderrTask =
-        System.Threading.Tasks.Task.Run(fun () ->
-          let mutable line = proc.StandardError.ReadLine()
-          while not (isNull line) do
-            stderrLines.Add(line)
-            line <- proc.StandardError.ReadLine())
-      // Drain stdout
-      let _stdoutTask =
-        System.Threading.Tasks.Task.Run(fun () ->
-          let mutable line = proc.StandardOutput.ReadLine()
-          while not (isNull line) do
-            line <- proc.StandardOutput.ReadLine())
-      let exited = proc.WaitForExit(600_000) // 10 min max
-      if not exited then
-        try proc.Kill(entireProcessTree = true) with _ -> ()
-        Error "Build timed out (10 min limit)"
-      else
-        try stderrTask.Wait(5000) |> ignore with _ -> ()
-        if proc.ExitCode <> 0 then
-          Error (sprintf "Build failed (exit %d): %s" proc.ExitCode (String.concat "\n" stderrLines))
+  /// Async so we don't block the MailboxProcessor during build.
+  let runBuildAsync (projects: string list) (workingDir: string) : Async<Result<string, string>> =
+    async {
+      let primaryProject = projects |> List.tryHead
+      match primaryProject with
+      | None -> return Ok "No projects to build"
+      | Some projFile ->
+        let psi =
+          ProcessStartInfo(
+            "dotnet",
+            sprintf "build \"%s\" --no-restore --no-incremental" projFile,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            WorkingDirectory = workingDir)
+        let proc = Process.Start(psi)
+        let stderrLines = System.Collections.Generic.List<string>()
+        let stderrTask =
+          System.Threading.Tasks.Task.Run(fun () ->
+            let mutable line = proc.StandardError.ReadLine()
+            while not (isNull line) do
+              stderrLines.Add(line)
+              line <- proc.StandardError.ReadLine())
+        let stdoutTask =
+          System.Threading.Tasks.Task.Run(fun () ->
+            let mutable line = proc.StandardOutput.ReadLine()
+            while not (isNull line) do
+              line <- proc.StandardOutput.ReadLine())
+        let! ct = Async.CancellationToken
+        let tcs = System.Threading.Tasks.TaskCompletionSource<bool>()
+        proc.EnableRaisingEvents <- true
+        proc.Exited.Add(fun _ -> tcs.TrySetResult(true) |> ignore)
+        if proc.HasExited then tcs.TrySetResult(true) |> ignore
+        let timeoutTask = System.Threading.Tasks.Task.Delay(600_000, ct)
+        let! completed =
+          System.Threading.Tasks.Task.WhenAny(tcs.Task, timeoutTask)
+          |> Async.AwaitTask
+        if Object.ReferenceEquals(completed, timeoutTask) then
+          try proc.Kill(entireProcessTree = true) with _ -> ()
+          proc.Dispose()
+          return Error "Build timed out (10 min limit)"
         else
-          Ok "Build succeeded"
+          try stderrTask.Wait(5000) |> ignore with _ -> ()
+          try stdoutTask.Wait(5000) |> ignore with _ -> ()
+          let exitCode = proc.ExitCode
+          proc.Dispose()
+          if exitCode <> 0 then
+            return Error (sprintf "Build failed (exit %d): %s" exitCode (String.concat "\n" stderrLines))
+          else
+            return Ok "Build succeeded"
+    }
 
   /// Await standby worker port discovery — posts StandbyReady or StandbySpawnFailed.
   /// Also captures WARMUP_PROGRESS lines and posts StandbyProgress updates.
@@ -367,9 +379,9 @@ module SessionManager =
                 | None -> state.Pool
               let stateAfterStop =
                 { ManagerState.removeSession id state with Pool = poolAfterKill }
-              let buildResult =
-                if rebuild then runBuild session.Projects session.WorkingDir
-                else Ok "No rebuild requested"
+              let! buildResult =
+                if rebuild then runBuildAsync session.Projects session.WorkingDir
+                else async { return Ok "No rebuild requested" }
               match buildResult with
               | Error msg ->
                 reply.Reply(Error (SageFsError.HardResetFailed msg))

@@ -1028,11 +1028,22 @@ module McpTools =
       notifyElm ctx (
         SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Restarting))
       if rebuild then
-        let! result = ctx.SessionOps.RestartSession sid true
-        return
+        notifyElm ctx (
+          SageFsEvent.WarmupProgress (1, 4, "Building project..."))
+        // Fire-and-forget: build + restart happens in background.
+        // Return immediately so MCP tool call doesn't time out (~30s build).
+        // Client polls get_fsi_status or list_sessions to check completion.
+        task {
+          let! result = ctx.SessionOps.RestartSession sid true
           match result with
-          | Ok msg -> msg
-          | Error err -> sprintf "Error: %s" (SageFsError.describe err)
+          | Ok msg ->
+            notifyElm ctx (
+              SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Running))
+          | Error err ->
+            notifyElm ctx (
+              SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Errored (SageFsError.describe err)))
+        } |> ignore
+        return "Hard reset initiated — rebuilding project. Use get_fsi_status to check when ready."
       else
         let! routeResult =
           routeToSession ctx sid

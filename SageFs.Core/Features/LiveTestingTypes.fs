@@ -221,6 +221,36 @@ type PipelineTiming = {
   Timestamp: DateTimeOffset
 }
 
+// --- Gutter Rendering ---
+
+[<RequireQualifiedAccess>]
+type GutterIcon =
+  | TestDiscovered
+  | TestPassed
+  | TestFailed
+  | TestRunning
+  | TestSkipped
+  | Covered
+  | NotCovered
+
+[<Struct>]
+type LineAnnotation = {
+  Line: int
+  Icon: GutterIcon
+  Tooltip: string
+}
+
+// --- Test Summary ---
+
+type TestSummary = {
+  Total: int
+  Passed: int
+  Failed: int
+  Stale: int
+  Running: int
+  Disabled: int
+}
+
 // --- Live Test State (Elm model aggregate) ---
 
 type LiveTestState = {
@@ -254,7 +284,140 @@ module LiveTestState =
     DetectedProviders = []
   }
 
-// --- Pure functions — all stubs for RED phase ---
+// --- Gutter Rendering Pure Functions ---
+
+module GutterIcon =
+  let toChar = function
+    | GutterIcon.TestDiscovered -> '\u25C6'
+    | GutterIcon.TestPassed -> '\u2713'
+    | GutterIcon.TestFailed -> '\u2717'
+    | GutterIcon.TestRunning -> '\u27F3'
+    | GutterIcon.TestSkipped -> '\u25CB'
+    | GutterIcon.Covered -> '\u258E'
+    | GutterIcon.NotCovered -> '\u00B7'
+
+  let toColorIndex = function
+    | GutterIcon.TestDiscovered -> 33uy
+    | GutterIcon.TestPassed -> 34uy
+    | GutterIcon.TestFailed -> 160uy
+    | GutterIcon.TestRunning -> 75uy
+    | GutterIcon.TestSkipped -> 242uy
+    | GutterIcon.Covered -> 34uy
+    | GutterIcon.NotCovered -> 160uy
+
+module StatusToGutter =
+  let fromTestStatus (status: TestRunStatus) : GutterIcon =
+    match status with
+    | TestRunStatus.Detected -> GutterIcon.TestDiscovered
+    | TestRunStatus.Queued -> GutterIcon.TestDiscovered
+    | TestRunStatus.Running -> GutterIcon.TestRunning
+    | TestRunStatus.Passed _ -> GutterIcon.TestPassed
+    | TestRunStatus.Failed _ -> GutterIcon.TestFailed
+    | TestRunStatus.Skipped _ -> GutterIcon.TestSkipped
+    | TestRunStatus.Stale -> GutterIcon.TestDiscovered
+    | TestRunStatus.PolicyDisabled -> GutterIcon.TestSkipped
+
+  let fromCoverageStatus (status: CoverageStatus) : GutterIcon =
+    match status with
+    | CoverageStatus.Covered (_, true) -> GutterIcon.Covered
+    | CoverageStatus.Covered (_, false) -> GutterIcon.NotCovered
+    | CoverageStatus.NotCovered -> GutterIcon.NotCovered
+    | CoverageStatus.Pending -> GutterIcon.TestDiscovered
+
+  let tooltip (testName: string) (status: TestRunStatus) : string =
+    match status with
+    | TestRunStatus.Detected -> sprintf "%s (detected)" testName
+    | TestRunStatus.Queued -> sprintf "%s (queued)" testName
+    | TestRunStatus.Running -> sprintf "%s (running...)" testName
+    | TestRunStatus.Passed d -> sprintf "%s \u2713 %dms" testName (int d.TotalMilliseconds)
+    | TestRunStatus.Failed (f, d) ->
+      let msg =
+        match f with
+        | TestFailure.AssertionFailed m -> m
+        | TestFailure.ExceptionThrown (m, _) -> m
+        | TestFailure.TimedOut t -> sprintf "timed out after %ds" (int t.TotalSeconds)
+      sprintf "%s \u2717 %s (%dms)" testName msg (int d.TotalMilliseconds)
+    | TestRunStatus.Skipped r -> sprintf "%s (skipped: %s)" testName r
+    | TestRunStatus.Stale -> sprintf "%s (stale \u2014 needs re-run)" testName
+    | TestRunStatus.PolicyDisabled -> sprintf "%s (disabled by policy)" testName
+
+  let toAnnotation (line: int) (testName: string) (status: TestRunStatus) : LineAnnotation =
+    { Line = line; Icon = fromTestStatus status; Tooltip = tooltip testName status }
+
+  let coverageAnnotation (line: int) (symbol: string) (status: CoverageStatus) : LineAnnotation =
+    let tip =
+      match status with
+      | CoverageStatus.Covered (n, true) -> sprintf "%s: covered by %d test(s), all passing" symbol n
+      | CoverageStatus.Covered (n, false) -> sprintf "%s: covered by %d test(s), some failing" symbol n
+      | CoverageStatus.NotCovered -> sprintf "%s: not covered by any test" symbol
+      | CoverageStatus.Pending -> sprintf "%s: coverage pending" symbol
+    { Line = line; Icon = fromCoverageStatus status; Tooltip = tip }
+
+module TestSummary =
+  let empty = { Total = 0; Passed = 0; Failed = 0; Stale = 0; Running = 0; Disabled = 0 }
+
+  let fromStatuses (statuses: TestRunStatus array) : TestSummary =
+    let mutable passed = 0
+    let mutable failed = 0
+    let mutable stale = 0
+    let mutable running = 0
+    let mutable disabled = 0
+    for s in statuses do
+      match s with
+      | TestRunStatus.Passed _ -> passed <- passed + 1
+      | TestRunStatus.Failed _ -> failed <- failed + 1
+      | TestRunStatus.Stale -> stale <- stale + 1
+      | TestRunStatus.Running -> running <- running + 1
+      | TestRunStatus.PolicyDisabled -> disabled <- disabled + 1
+      | _ -> ()
+    { Total = statuses.Length
+      Passed = passed
+      Failed = failed
+      Stale = stale
+      Running = running
+      Disabled = disabled }
+
+  let toStatusBar (s: TestSummary) : string =
+    if s.Total = 0 then "Tests: none"
+    elif s.Failed > 0 then
+      sprintf "Tests: %d/%d \u2717%d" s.Passed s.Total s.Failed
+    elif s.Running > 0 then
+      sprintf "Tests: %d/%d \u27F3%d" s.Passed s.Total s.Running
+    elif s.Stale > 0 then
+      sprintf "Tests: %d/%d \u25CF%d" s.Passed s.Total s.Stale
+    else
+      sprintf "Tests: %d/%d \u2713" s.Passed s.Total
+
+module CategoryDetection =
+  let categorize
+    (labels: string list)
+    (fullName: string)
+    (_framework: string)
+    (referencedAssemblies: string array)
+    : TestCategory =
+    let labelLower = labels |> List.map (fun l -> l.ToLowerInvariant())
+    if labelLower |> List.exists (fun l -> l.Contains "integration") then
+      TestCategory.Integration
+    elif labelLower |> List.exists (fun l -> l.Contains "browser" || l.Contains "e2e" || l.Contains "ui") then
+      TestCategory.Browser
+    elif labelLower |> List.exists (fun l -> l.Contains "benchmark") then
+      TestCategory.Benchmark
+    elif labelLower |> List.exists (fun l -> l.Contains "property") then
+      TestCategory.Property
+    elif labelLower |> List.exists (fun l -> l.Contains "architecture" || l.Contains "arch") then
+      TestCategory.Architecture
+    elif referencedAssemblies |> Array.exists (fun a -> a.Contains "Microsoft.Playwright") then
+      TestCategory.Browser
+    elif referencedAssemblies |> Array.exists (fun a -> a.Contains "BenchmarkDotNet") then
+      TestCategory.Benchmark
+    elif fullName.ToLowerInvariant().Contains "integration" then
+      TestCategory.Integration
+    elif fullName.ToLowerInvariant().Contains "browser" || fullName.ToLowerInvariant().Contains "e2e" then
+      TestCategory.Browser
+    else
+      TestCategory.Unit
+
+// --- Pure functions ---
 
 module TestDependencyGraph =
   let empty = {
@@ -329,6 +492,46 @@ module LiveTesting =
       | Some RunPolicy.OnEveryChange -> true
       | None -> true)
 
+  let private computeStatusEntriesWithHistory
+    (previousStatuses: Map<TestId, TestRunStatus>)
+    (state: LiveTestState)
+    : TestStatusEntry array =
+    state.DiscoveredTests
+    |> Array.map (fun test ->
+      let status =
+        match Map.tryFind test.Category state.RunPolicies with
+        | Some RunPolicy.Disabled -> TestRunStatus.PolicyDisabled
+        | _ ->
+          if Set.contains test.Id state.AffectedTests && state.IsRunning then
+            TestRunStatus.Running
+          elif Set.contains test.Id state.AffectedTests then
+            TestRunStatus.Queued
+          else
+            match Map.tryFind test.Id state.LastResults with
+            | Some r ->
+              match r.Result with
+              | TestResult.Passed d -> TestRunStatus.Passed d
+              | TestResult.Failed (f, d) -> TestRunStatus.Failed (f, d)
+              | TestResult.Skipped reason -> TestRunStatus.Skipped reason
+              | TestResult.NotRun -> TestRunStatus.Detected
+            | None -> TestRunStatus.Detected
+      let prevStatus =
+        match Map.tryFind test.Id previousStatuses with
+        | Some prev -> prev
+        | None -> TestRunStatus.Detected
+      { TestId = test.Id
+        DisplayName = test.DisplayName
+        FullName = test.FullName
+        Origin = test.Origin
+        Framework = test.Framework
+        Category = test.Category
+        CurrentPolicy =
+          match Map.tryFind test.Category state.RunPolicies with
+          | Some p -> p
+          | None -> RunPolicy.OnEveryChange
+        Status = status
+        PreviousStatus = prevStatus })
+
   let mergeResults (state: LiveTestState) (results: TestRunResult array) : LiveTestState =
     if Array.isEmpty results then state
     else
@@ -343,41 +546,49 @@ module LiveTesting =
           | TestResult.Failed (_, d) -> d
           | _ -> System.TimeSpan.Zero)
         |> Array.max
-      { state with
-          LastResults = newResults
-          IsRunning = false
-          History = RunHistory.PreviousRun maxDuration }
+      let previousStatuses =
+        state.StatusEntries
+        |> Array.map (fun e -> e.TestId, e.Status)
+        |> Map.ofArray
+      let updatedState =
+        { state with
+            LastResults = newResults
+            IsRunning = false
+            AffectedTests = Set.empty
+            History = RunHistory.PreviousRun maxDuration }
+      { updatedState with StatusEntries = computeStatusEntriesWithHistory previousStatuses updatedState }
 
   let computeStatusEntries (state: LiveTestState) : TestStatusEntry array =
-    state.DiscoveredTests
-    |> Array.map (fun test ->
-      let status =
-        match Map.tryFind test.Category state.RunPolicies with
-        | Some RunPolicy.Disabled -> TestRunStatus.PolicyDisabled
-        | _ ->
-          if Set.contains test.Id state.AffectedTests then
-            TestRunStatus.Queued
-          else
-            match Map.tryFind test.Id state.LastResults with
-            | Some r ->
-              match r.Result with
-              | TestResult.Passed d -> TestRunStatus.Passed d
-              | TestResult.Failed (f, d) -> TestRunStatus.Failed (f, d)
-              | TestResult.Skipped reason -> TestRunStatus.Skipped reason
-              | TestResult.NotRun -> TestRunStatus.Detected
-            | None -> TestRunStatus.Detected
-      { TestId = test.Id
-        DisplayName = test.DisplayName
-        FullName = test.FullName
-        Origin = test.Origin
-        Framework = test.Framework
-        Category = test.Category
-        CurrentPolicy =
-          match Map.tryFind test.Category state.RunPolicies with
-          | Some p -> p
-          | None -> RunPolicy.OnEveryChange
-        Status = status
-        PreviousStatus = TestRunStatus.Detected })
+    computeStatusEntriesWithHistory Map.empty state
+
+  let markAffected (testIds: TestId array) (state: LiveTestState) : LiveTestState =
+    let affected = testIds |> Set.ofArray |> Set.union state.AffectedTests
+    let previousStatuses =
+      state.StatusEntries
+      |> Array.map (fun e -> e.TestId, e.Status)
+      |> Map.ofArray
+    let updatedState = { state with AffectedTests = affected }
+    { updatedState with StatusEntries = computeStatusEntriesWithHistory previousStatuses updatedState }
+
+  let annotationsForFile (filePath: string) (state: LiveTestState) : LineAnnotation array =
+    let tsAnnotations =
+      state.SourceLocations
+      |> Array.filter (fun sl -> sl.FilePath = filePath)
+      |> Array.map (fun sl ->
+        { Line = sl.Line
+          Icon = GutterIcon.TestDiscovered
+          Tooltip = sprintf "Test: %s (detected)" sl.AttributeName })
+    let resultAnnotations =
+      state.StatusEntries
+      |> Array.choose (fun e ->
+        match e.Origin with
+        | TestOrigin.SourceMapped (f, line) when f = filePath ->
+          Some (StatusToGutter.toAnnotation line e.DisplayName e.Status)
+        | _ -> None)
+    let resultLines = resultAnnotations |> Array.map (fun a -> a.Line) |> Set.ofArray
+    let filtered = tsAnnotations |> Array.filter (fun a -> not (resultLines.Contains a.Line))
+    Array.append filtered resultAnnotations
+    |> Array.sortBy (fun a -> a.Line)
 
 module CoverageProjection =
   let symbolCoverage
@@ -437,6 +648,30 @@ module PipelineTiming =
     | PipelineDepth.TreeSitterOnly ts -> ts.TotalMilliseconds
     | PipelineDepth.ThroughFcs (ts, _) -> ts.TotalMilliseconds
     | PipelineDepth.ThroughExecution (ts, _, _) -> ts.TotalMilliseconds
+
+  let fcsMs (t: PipelineTiming) : float =
+    match t.Depth with
+    | PipelineDepth.TreeSitterOnly _ -> 0.0
+    | PipelineDepth.ThroughFcs (_, fcs) -> fcs.TotalMilliseconds
+    | PipelineDepth.ThroughExecution (_, fcs, _) -> fcs.TotalMilliseconds
+
+  let executionMs (t: PipelineTiming) : float =
+    match t.Depth with
+    | PipelineDepth.ThroughExecution (_, _, exec) -> exec.TotalMilliseconds
+    | _ -> 0.0
+
+  let totalMs (t: PipelineTiming) : float =
+    treeSitterMs t + fcsMs t + executionMs t
+
+  let toStatusBar (t: PipelineTiming) : string =
+    match t.Depth with
+    | PipelineDepth.TreeSitterOnly ts ->
+      sprintf "TS:%.1fms" ts.TotalMilliseconds
+    | PipelineDepth.ThroughFcs (ts, fcs) ->
+      sprintf "TS:%.1fms | FCS:%.0fms" ts.TotalMilliseconds fcs.TotalMilliseconds
+    | PipelineDepth.ThroughExecution (ts, fcs, exec) ->
+      sprintf "TS:%.1fms | FCS:%.0fms | Run:%.0fms (%d)"
+        ts.TotalMilliseconds fcs.TotalMilliseconds exec.TotalMilliseconds t.AffectedTests
 
 module TestProviderDescriptions =
   let builtInDescriptions : ProviderDescription list = [
