@@ -266,6 +266,7 @@ type LiveTestState = {
   ShowCoverage: bool
   RunPolicies: Map<TestCategory, RunPolicy>
   DetectedProviders: ProviderDescription list
+  CachedEditorAnnotations: LineAnnotation array
 }
 
 module LiveTestState =
@@ -282,6 +283,7 @@ module LiveTestState =
     ShowCoverage = true
     RunPolicies = RunPolicyDefaults.defaults
     DetectedProviders = []
+    CachedEditorAnnotations = Array.empty
   }
 
 // --- Gutter Rendering Pure Functions ---
@@ -619,6 +621,11 @@ module LiveTesting =
     let filtered = tsAnnotations |> Array.filter (fun a -> not (resultLines.Contains a.Line))
     Array.append filtered resultAnnotations
     |> Array.sortBy (fun a -> a.Line)
+
+  /// Recompute cached editor annotations. Call in update path, not render path.
+  let recomputeEditorAnnotations (state: LiveTestState) : LineAnnotation array =
+    if state.Enabled then annotationsForFile "editor" state
+    else [||]
 
 module CoverageProjection =
   let symbolCoverage

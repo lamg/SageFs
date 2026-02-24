@@ -93,7 +93,9 @@ module SageFsUpdate =
       |> Array.map (fun e -> e.TestId, e.Status)
       |> Map.ofArray
     let updated = updateState lt.TestState
-    { lt with TestState = { updated with StatusEntries = Features.LiveTesting.LiveTesting.computeStatusEntriesWithHistory previous updated } }
+    let withStatuses = { updated with StatusEntries = Features.LiveTesting.LiveTesting.computeStatusEntriesWithHistory previous updated }
+    let withAnnotations = { withStatuses with CachedEditorAnnotations = Features.LiveTesting.LiveTesting.recomputeEditorAnnotations withStatuses }
+    { lt with TestState = withAnnotations }
 
   let update (msg: SageFsMsg) (model: SageFsModel) : SageFsModel * SageFsEffect list =
     match msg with
@@ -362,9 +364,8 @@ module SageFsUpdate =
 
       // ── Live testing events ──
       | SageFsEvent.TestLocationsDetected locations ->
-        let lt = model.LiveTesting
-        { model with
-            LiveTesting = { lt with TestState = { lt.TestState with SourceLocations = locations } } }, []
+        let lt = recomputeStatuses model.LiveTesting (fun s -> { s with SourceLocations = locations })
+        { model with LiveTesting = lt }, []
 
       | SageFsEvent.TestsDiscovered tests ->
         let lt = recomputeStatuses model.LiveTesting (fun s -> { s with DiscoveredTests = tests })
@@ -375,13 +376,13 @@ module SageFsUpdate =
         { model with LiveTesting = lt }, []
 
       | SageFsEvent.TestResultsBatch results ->
-        let lt = Features.LiveTesting.LiveTesting.mergeResults model.LiveTesting.TestState results
-        { model with LiveTesting = { model.LiveTesting with TestState = lt } }, []
+        let merged = Features.LiveTesting.LiveTesting.mergeResults model.LiveTesting.TestState results
+        let lt = recomputeStatuses model.LiveTesting (fun _ -> merged)
+        { model with LiveTesting = lt }, []
 
       | SageFsEvent.LiveTestingToggled enabled ->
-        let lt = model.LiveTesting
-        { model with
-            LiveTesting = { lt with TestState = { lt.TestState with Enabled = enabled } } }, []
+        let lt = recomputeStatuses model.LiveTesting (fun s -> { s with Enabled = enabled })
+        { model with LiveTesting = lt }, []
 
       | SageFsEvent.AffectedTestsComputed testIds ->
         let lt = recomputeStatuses model.LiveTesting (fun s -> { s with AffectedTests = Set.ofArray testIds })
@@ -422,9 +423,8 @@ module SageFsUpdate =
       { model with Theme = theme; ThemeName = name }, []
 
     | SageFsMsg.ToggleLiveTesting ->
-      let lt = model.LiveTesting
-      { model with
-          LiveTesting = { lt with TestState = { lt.TestState with Enabled = not lt.TestState.Enabled } } }, []
+      let lt = recomputeStatuses model.LiveTesting (fun s -> { s with Enabled = not s.Enabled })
+      { model with LiveTesting = lt }, []
 
     | SageFsMsg.CycleRunPolicy ->
       let lt = model.LiveTesting
@@ -438,14 +438,9 @@ module SageFsUpdate =
         lt.TestState.RunPolicies
         |> Map.tryFind Features.LiveTesting.TestCategory.Unit
         |> Option.defaultValue Features.LiveTesting.RunPolicy.OnEveryChange
-      { model with
-          LiveTesting =
-            { lt with
-                TestState =
-                  { lt.TestState with
-                      RunPolicies =
-                        lt.TestState.RunPolicies
-                        |> Map.add Features.LiveTesting.TestCategory.Unit (nextPolicy unitPolicy) } } }, []
+      let lt' = recomputeStatuses lt (fun s ->
+        { s with RunPolicies = s.RunPolicies |> Map.add Features.LiveTesting.TestCategory.Unit (nextPolicy unitPolicy) })
+      { model with LiveTesting = lt' }, []
 
     | SageFsMsg.ToggleCoverage ->
       let lt = model.LiveTesting
@@ -490,10 +485,7 @@ module SageFsRender =
       | Some prompt ->
         sprintf "%s\n─── %s: %s█" bufText prompt.Label prompt.Input
       | None -> bufText
-    let editorAnnotations =
-      if model.LiveTesting.TestState.Enabled then
-        Features.LiveTesting.LiveTesting.annotationsForFile "editor" model.LiveTesting.TestState
-      else [||]
+    let editorAnnotations = model.LiveTesting.TestState.CachedEditorAnnotations
     let editorRegion = {
       Id = "editor"
       Flags = RegionFlags.Focusable ||| RegionFlags.LiveUpdate

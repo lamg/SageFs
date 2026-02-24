@@ -1581,6 +1581,41 @@ let annotationTests = testList "Gutter Annotations" [
     tip |> Expect.stringContains "cross mark" "\u2717"
     tip |> Expect.stringContains "message" "expected 42 got 0"
   }
+
+  test "recomputeEditorAnnotations returns annotations when enabled" {
+    let state = { LiveTestState.empty with
+                    SourceLocations = [|
+                      { AttributeName = "Fact"; FilePath = "editor"; Line = 5; Column = 0 }
+                      { AttributeName = "Test"; FilePath = "editor"; Line = 10; Column = 0 }
+                    |] }
+    let cached = LiveTesting.recomputeEditorAnnotations state
+    cached.Length |> Expect.equal "two annotations" 2
+  }
+
+  test "recomputeEditorAnnotations returns empty when disabled" {
+    let state = { LiveTestState.empty with
+                    Enabled = false
+                    SourceLocations = [|
+                      { AttributeName = "Fact"; FilePath = "editor"; Line = 5; Column = 0 }
+                    |] }
+    LiveTesting.recomputeEditorAnnotations state
+    |> Array.length |> Expect.equal "no annotations" 0
+  }
+
+  test "recomputeEditorAnnotations matches annotationsForFile" {
+    let state = { LiveTestState.empty with
+                    SourceLocations = [|
+                      { AttributeName = "Fact"; FilePath = "editor"; Line = 5; Column = 0 }
+                    |] }
+    let cached = LiveTesting.recomputeEditorAnnotations state
+    let direct = LiveTesting.annotationsForFile "editor" state
+    cached |> Expect.equal "cache matches direct" direct
+  }
+
+  test "CachedEditorAnnotations defaults to empty" {
+    LiveTestState.empty.CachedEditorAnnotations
+    |> Expect.equal "default empty" [||]
+  }
 ]
 
 // ============================================================
