@@ -238,7 +238,7 @@
     ]
   },
   "scripts": {
-    "sync-version": "node -e \"const fs=require('fs');const x=fs.readFileSync('../SageFs/SageFs.fsproj','utf8');const m=x.match(/<Version>([^<]+)<\\/Version>/);if(m){const p=JSON.parse(fs.readFileSync('package.json','utf8'));p.version=m[1];fs.writeFileSync('package.json',JSON.stringify(p,null,2)+'\\n');console.log('Version synced:',m[1])}\"",
+    "sync-version": "node -e \"const fs=require('fs');const x=fs.readFileSync('../Directory.Build.props','utf8');const m=x.match(/<Version>([^<]+)<\\/Version>/);if(m){const p=JSON.parse(fs.readFileSync('package.json','utf8'));p.version=m[1];fs.writeFileSync('package.json',JSON.stringify(p,null,2)+'\\n');console.log('Version synced:',m[1])}\"",
     "vscode:prepublish": "npm run sync-version && npm run compile",
     "compile": "dotnet fable src --outDir fable-out && node esbuild.mjs",
     "watch": "dotnet fable watch src --outDir fable-out",
