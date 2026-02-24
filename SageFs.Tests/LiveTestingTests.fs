@@ -286,7 +286,7 @@ let dependencyGraphTests = testList "TestDependencyGraph" [
     let t2 = mkTestId "test2" "x"
     let graph = {
       SymbolToTests = Map.ofList [ "MyModule.add", [| t1 |]; "MyModule.sub", [| t2 |] ]
-      TransitiveCoverage = Map.empty; SourceVersion = 1
+      TransitiveCoverage = Map.ofList [ "MyModule.add", [| t1 |]; "MyModule.sub", [| t2 |] ]; SourceVersion = 1
     }
     TestDependencyGraph.findAffected ["MyModule.add"] graph
     |> Expect.hasLength "one affected test" 1
@@ -297,7 +297,7 @@ let dependencyGraphTests = testList "TestDependencyGraph" [
     let t2 = mkTestId "test2" "x"
     let graph = {
       SymbolToTests = Map.ofList [ "A.f", [| t1 |]; "B.g", [| t2 |] ]
-      TransitiveCoverage = Map.empty; SourceVersion = 1
+      TransitiveCoverage = Map.ofList [ "A.f", [| t1 |]; "B.g", [| t2 |] ]; SourceVersion = 1
     }
     TestDependencyGraph.findAffected ["A.f"; "B.g"] graph
     |> Expect.hasLength "both tests" 2
@@ -307,7 +307,7 @@ let dependencyGraphTests = testList "TestDependencyGraph" [
     let t1 = mkTestId "test1" "x"
     let graph = {
       SymbolToTests = Map.ofList [ "A.f", [| t1 |]; "A.g", [| t1 |] ]
-      TransitiveCoverage = Map.empty; SourceVersion = 1
+      TransitiveCoverage = Map.ofList [ "A.f", [| t1 |]; "A.g", [| t1 |] ]; SourceVersion = 1
     }
     TestDependencyGraph.findAffected ["A.f"; "A.g"] graph
     |> Expect.hasLength "deduplicated to one" 1
@@ -316,7 +316,7 @@ let dependencyGraphTests = testList "TestDependencyGraph" [
   test "findAffected returns empty for unknown symbols" {
     let graph = {
       SymbolToTests = Map.ofList [ "A.f", [| mkTestId "t" "x" |] ]
-      TransitiveCoverage = Map.empty; SourceVersion = 1
+      TransitiveCoverage = Map.ofList [ "A.f", [| mkTestId "t" "x" |] ]; SourceVersion = 1
     }
     TestDependencyGraph.findAffected ["Unknown.sym"] graph
     |> Expect.hasLength "no matches" 0
@@ -739,7 +739,7 @@ let propertyTests = testList "Property-based" [
     let t2 = mkTestId "t2" "x"
     let graph = {
       SymbolToTests = Map.ofList [ "a", [| t1 |]; "b", [| t2 |] ]
-      TransitiveCoverage = Map.empty; SourceVersion = 1
+      TransitiveCoverage = Map.ofList [ "a", [| t1 |]; "b", [| t2 |] ]; SourceVersion = 1
     }
     let affected = TestDependencyGraph.findAffected [sym] graph
     let allIds = Set.ofList [ t1; t2 ]
@@ -1037,6 +1037,10 @@ let affectedTestPipelineTests = testList "affected-test pipeline" [
           "MyModule.add", [| TestId.create "add-test" "xunit" |]
           "MyModule.validate", [| TestId.create "validate-test" "xunit" |]
         ]
+        TransitiveCoverage = Map.ofList [
+          "MyModule.add", [| TestId.create "add-test" "xunit" |]
+          "MyModule.validate", [| TestId.create "validate-test" "xunit" |]
+        ]
     }
     let affected = TestDependencyGraph.findAffected ["MyModule.add"] graph
     affected.Length |> Expect.equal "one affected test" 1
@@ -1180,7 +1184,10 @@ let stalenessTests = testList "Staleness" [
       "Module.add", [| test1.Id |]
       "Module.validate", [| test1.Id; test2.Id |]
     ]
-    TransitiveCoverage = Map.empty; SourceVersion = 1
+    TransitiveCoverage = Map.ofList [
+      "Module.add", [| test1.Id |]
+      "Module.validate", [| test1.Id; test2.Id |]
+    ]; SourceVersion = 1
   }
   let baseState = {
     LiveTestState.empty with
@@ -1232,6 +1239,7 @@ let stalenessTests = testList "Staleness" [
     let graph2 = {
       TestDependencyGraph.empty with
         SymbolToTests = Map.ofList [ "Module.add", [| tc3.Id |] ]
+        TransitiveCoverage = Map.ofList [ "Module.add", [| tc3.Id |] ]
     }
     let stateNoPrior = {
       LiveTestState.empty with
@@ -1278,7 +1286,11 @@ let orchestratorTests = testList "PipelineOrchestrator" [
       "Module.validate", [| test1.Id; test2.Id |]
       "Module.dbCall", [| intTest.Id |]
     ]
-    TransitiveCoverage = Map.empty; SourceVersion = 1
+    TransitiveCoverage = Map.ofList [
+      "Module.add", [| test1.Id |]
+      "Module.validate", [| test1.Id; test2.Id |]
+      "Module.dbCall", [| intTest.Id |]
+    ]; SourceVersion = 1
   }
   let baseState = {
     LiveTestState.empty with
@@ -1688,7 +1700,10 @@ let depGraphBfsTests = testList "TestDependencyGraph BFS" [
       "Module.add", [| test1.Id |]
       "Module.validate", [| test1.Id; test2.Id |]
     ]
-    TransitiveCoverage = Map.empty; SourceVersion = 1
+    TransitiveCoverage = Map.ofList [
+      "Module.add", [| test1.Id |]
+      "Module.validate", [| test1.Id; test2.Id |]
+    ]; SourceVersion = 1
   }
 
   test "findAffected returns empty for unknown symbols" {
@@ -2014,6 +2029,7 @@ let pipelineEffectsTests = testList "PipelineEffects" [
     let graph = {
       TestDependencyGraph.empty with
         SymbolToTests = Map.ofList [ "Module.add", [| tc1.Id |] ]
+        TransitiveCoverage = Map.ofList [ "Module.add", [| tc1.Id |] ]
     }
     match PipelineEffects.afterTypeCheck ["Module.add"] RunTrigger.Keystroke graph state with
     | Some (PipelineEffect.RunAffectedTests (ids, trigger)) ->
@@ -2051,6 +2067,7 @@ let pipelineEffectsTests = testList "PipelineEffects" [
     let graph = {
       TestDependencyGraph.empty with
         SymbolToTests = Map.ofList [ "Module.add", [| tc1.Id; tc2.Id |] ]
+        TransitiveCoverage = Map.ofList [ "Module.add", [| tc1.Id; tc2.Id |] ]
     }
     match PipelineEffects.afterTypeCheck ["Module.add"] RunTrigger.Keystroke graph state with
     | Some (PipelineEffect.RunAffectedTests (ids, _)) ->
@@ -2191,6 +2208,7 @@ let pipelineStateTests = testList "LiveTestPipelineState" [
     let depGraph = {
       TestDependencyGraph.empty with
         SymbolToTests = Map.ofList ["mySymbol", [|tc.Id|]]
+        TransitiveCoverage = Map.ofList ["mySymbol", [|tc.Id|]]
     }
     let state = {
       LiveTestPipelineState.empty with
@@ -2317,6 +2335,7 @@ let endToEndPipelineTests = testList "End-to-end Pipeline" [
     let depGraph = {
       TestDependencyGraph.empty with
         SymbolToTests = Map.ofList ["changedFn", [|tc.Id|]]
+        TransitiveCoverage = Map.ofList ["changedFn", [|tc.Id|]]
     }
     let state = {
       LiveTestPipelineState.empty with
@@ -2349,6 +2368,7 @@ let endToEndPipelineTests = testList "End-to-end Pipeline" [
     let depGraph = {
       TestDependencyGraph.empty with
         SymbolToTests = Map.ofList ["sym", [|tc.Id|]]
+        TransitiveCoverage = Map.ofList ["sym", [|tc.Id|]]
     }
     let state = {
       LiveTestPipelineState.empty with
@@ -2370,6 +2390,7 @@ let endToEndPipelineTests = testList "End-to-end Pipeline" [
     let depGraph = {
       TestDependencyGraph.empty with
         SymbolToTests = Map.ofList ["sym", [|tc.Id|]]
+        TransitiveCoverage = Map.ofList ["sym", [|tc.Id|]]
     }
     let state = {
       LiveTestPipelineState.empty with
@@ -2713,6 +2734,7 @@ let compositionTests = testList "compositionTests" [
     let depGraph = {
       TestDependencyGraph.empty with
         SymbolToTests = SymbolGraphBuilder.buildIndex refs
+        TransitiveCoverage = SymbolGraphBuilder.buildIndex refs
     }
     let affected = TestDependencyGraph.findAffected (SymbolChanges.allChanged changes) depGraph
     affected |> Expect.hasLength "no affected tests" 0
@@ -2837,6 +2859,7 @@ let compositionTests = testList "compositionTests" [
     let depGraph = {
       TestDependencyGraph.empty with
         SymbolToTests = Map.ofList ["Lib.add", [|tc1.Id|]]
+        TransitiveCoverage = Map.ofList ["Lib.add", [|tc1.Id|]]
     }
     let stalified = Staleness.markStale depGraph ["Lib.add"] state
     stalified.AffectedTests |> Set.contains tc1.Id |> Expect.isTrue "tc1 is affected"
@@ -2943,7 +2966,8 @@ let elmWiringBehavioralTests = testList "Elm Wiring Behavioral Scenarios" [
     let t0 = DateTimeOffset(2025, 1, 1, 0, 0, 0, TimeSpan.Zero)
     let depGraph =
       { TestDependencyGraph.empty with
-          SymbolToTests = Map.ofList ["Lib.add", [|tc.Id|]] }
+          SymbolToTests = Map.ofList ["Lib.add", [|tc.Id|]]
+          TransitiveCoverage = Map.ofList ["Lib.add", [|tc.Id|]] }
     let state =
       { LiveTestPipelineState.empty with
           DepGraph = depGraph
@@ -3029,7 +3053,8 @@ let elmWiringBehavioralTests = testList "Elm Wiring Behavioral Scenarios" [
           LastResults = Map.ofList [tc.Id, result] }
     let depGraph =
       { TestDependencyGraph.empty with
-          SymbolToTests = Map.ofList ["Lib.add", [|tc.Id|]] }
+          SymbolToTests = Map.ofList ["Lib.add", [|tc.Id|]]
+          TransitiveCoverage = Map.ofList ["Lib.add", [|tc.Id|]] }
     let stale = Staleness.markStale depGraph ["Lib.add"] state
     stale.StatusEntries |> Array.exists (fun e -> match e.Status with TestRunStatus.Stale -> true | _ -> false)
     |> Expect.isTrue "entry is Stale after symbol change"

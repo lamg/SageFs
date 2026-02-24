@@ -426,9 +426,15 @@ module TestDependencyGraph =
     SourceVersion = 0
   }
 
+  /// Create a graph where transitive = direct (no call graph).
+  let fromDirect (symbolToTests: Map<string, TestId array>) =
+    { SymbolToTests = symbolToTests
+      TransitiveCoverage = symbolToTests
+      SourceVersion = 1 }
+
   let findAffected (changedSymbols: string list) (graph: TestDependencyGraph) : TestId array =
     changedSymbols
-    |> List.choose (fun sym -> Map.tryFind sym graph.SymbolToTests)
+    |> List.choose (fun sym -> Map.tryFind sym graph.TransitiveCoverage)
     |> Array.concat
     |> Array.distinct
 
@@ -1001,6 +1007,7 @@ module SymbolGraphBuilder =
         Map.add key value acc)
     { graph with
         SymbolToTests = merged
+        TransitiveCoverage = merged
         SourceVersion = graph.SourceVersion + 1 }
 
 /// Result of comparing two sets of symbols — separates added from removed.
