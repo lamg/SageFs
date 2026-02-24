@@ -333,8 +333,8 @@ module BuiltInExecutors =
       | :? TypeLoadException -> []
 
   let expecto : TestExecutor =
-    let mutable reflectionCache: ExpectoExecutor.ReflectionCache option = None
-    let mutable flatTestLookup = Map.empty<string, ExpectoExecutor.ReflectedFlatTest>
+    // Atomic snapshot avoids race between Discover (hot-reload thread) and Execute (async test runner)
+    let snapshot = ref (None: (ExpectoExecutor.ReflectionCache * Map<string, ExpectoExecutor.ReflectedFlatTest>) option)
     TestExecutor.Custom {
       Description = {
         Name = "expecto"
@@ -343,17 +343,17 @@ module BuiltInExecutors =
       Discover = fun asm ->
         match ExpectoExecutor.tryBuildCache asm with
         | Some cache ->
-          reflectionCache <- Some cache
-          flatTestLookup <- ExpectoExecutor.buildLookup cache asm
+          let lookup = ExpectoExecutor.buildLookup cache asm
+          System.Threading.Interlocked.Exchange(snapshot, Some (cache, lookup)) |> ignore
           ExpectoExecutor.discoverLeafTests cache asm
         | None -> []
       Execute = fun testCase ->
         async {
           let! ct = Async.CancellationToken
-          match reflectionCache with
+          match snapshot.Value with
           | None -> return TestResult.NotRun
-          | Some cache ->
-            match Map.tryFind testCase.FullName flatTestLookup with
+          | Some (cache, lookup) ->
+            match Map.tryFind testCase.FullName lookup with
             | Some rft -> return! ExpectoExecutor.executeReflected cache rft ct
             | None -> return TestResult.NotRun
         }
