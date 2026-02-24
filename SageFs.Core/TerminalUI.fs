@@ -380,6 +380,7 @@ type TerminalCommand =
   | HotReloadUnwatchAll
   | ToggleLiveTesting
   | CycleRunPolicy
+  | ToggleCoverage
 
 
 /// Map console key presses to terminal commands
@@ -410,6 +411,7 @@ module TerminalInput =
     | Some (UiAction.HotReloadUnwatchAll) -> Some TerminalCommand.HotReloadUnwatchAll
     | Some (UiAction.ToggleLiveTesting) -> Some TerminalCommand.ToggleLiveTesting
     | Some (UiAction.CycleRunPolicy) -> Some TerminalCommand.CycleRunPolicy
+    | Some (UiAction.ToggleCoverage) -> Some TerminalCommand.ToggleCoverage
     | Some (UiAction.Editor action) -> Some (TerminalCommand.Action action)
     | None ->
       // Fall through to character insertion for printable chars

@@ -1989,6 +1989,7 @@ let createApiDispatchHandler
         match action.action with
         | "toggleLiveTesting" -> Some SageFsMsg.ToggleLiveTesting
         | "cycleRunPolicy" -> Some SageFsMsg.CycleRunPolicy
+        | "toggleCoverage" -> Some SageFsMsg.ToggleCoverage
         | _ -> editorAction |> Option.map SageFsMsg.Editor
       match appMsg with
       | Some msg ->

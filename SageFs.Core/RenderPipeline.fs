@@ -149,6 +149,7 @@ and [<RequireQualifiedAccess>] UiAction =
   | HotReloadUnwatchAll
   | ToggleLiveTesting
   | CycleRunPolicy
+  | ToggleCoverage
 
 /// Maps physical keys to semantic actions
 type KeyMap = Map<KeyCombo, UiAction>
@@ -293,6 +294,7 @@ module UiAction =
     | "HotReloadUnwatchAll" -> Some UiAction.HotReloadUnwatchAll
     | "ToggleLiveTesting" -> Some UiAction.ToggleLiveTesting
     | "CycleRunPolicy" -> Some UiAction.CycleRunPolicy
+    | "ToggleCoverage" -> Some UiAction.ToggleCoverage
     | _ -> None
 
 module KeyMap =
@@ -379,6 +381,7 @@ module KeyMap =
       // Live Testing
       KeyCombo.ctrlAlt ConsoleKey.T, UiAction.ToggleLiveTesting
       KeyCombo.ctrlAlt ConsoleKey.P, UiAction.CycleRunPolicy
+      KeyCombo.ctrlAlt ConsoleKey.C, UiAction.ToggleCoverage
     ] |> Map.ofList
 
   /// Merge user overrides onto defaults (overrides win)

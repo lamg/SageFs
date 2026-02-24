@@ -273,6 +273,9 @@ let run (daemonInfo: DaemonInfo) = task {
           | Some TerminalCommand.CycleRunPolicy ->
             do! DaemonClient.dispatchAction client baseUrl "cycleRunPolicy" None |> Async.AwaitTask
             render ()
+          | Some TerminalCommand.ToggleCoverage ->
+            do! DaemonClient.dispatchAction client baseUrl "toggleCoverage" None |> Async.AwaitTask
+            render ()
           | Some (TerminalCommand.Action action) ->
             // When Sessions pane is focused, remap movement keys
             let remappedAction =

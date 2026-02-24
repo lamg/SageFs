@@ -13,6 +13,7 @@ type SageFsMsg =
   | CycleTheme
   | ToggleLiveTesting
   | CycleRunPolicy
+  | ToggleCoverage
 
 /// Side effects the Elm loop can request.
 /// Wraps EditorEffect — will grow as app-level effects emerge.
@@ -424,6 +425,11 @@ module SageFsUpdate =
                 RunPolicies =
                   lt.RunPolicies
                   |> Map.add Features.LiveTesting.TestCategory.Unit (nextPolicy unitPolicy) } }, []
+
+    | SageFsMsg.ToggleCoverage ->
+      let lt = model.LiveTesting
+      { model with
+          LiveTesting = { lt with ShowCoverage = not lt.ShowCoverage } }, []
 
 /// Pure render function: produces RenderRegion list from model.
 /// Every frontend consumes these regions — terminal, web, Neovim, etc.
