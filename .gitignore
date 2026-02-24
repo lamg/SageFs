@@ -10,7 +10,7 @@ nupkg/
 riderModule.iml
 /_ReSharper.Caches/
 .vs/
-docs/
+expertPanel/
 
 .obsidian/
 node_modules/
