@@ -1105,3 +1105,46 @@ module PipelineEffects =
           |> Array.map (fun tc -> tc.Id)
         if Array.isEmpty filtered then PipelineEffect.NoOp
         else PipelineEffect.RunAffectedTests(filtered, trigger)
+
+/// Wraps LiveTestState + PipelineDebounce + TestDependencyGraph into
+/// a single state record that the Elm update loop can carry.
+type LiveTestPipelineState = {
+  TestState: LiveTestState
+  Debounce: PipelineDebounce
+  DepGraph: TestDependencyGraph
+  ActiveFile: string option
+  ChangedSymbols: string list
+}
+
+module LiveTestPipelineState =
+  let empty = {
+    TestState = LiveTestState.empty
+    Debounce = PipelineDebounce.empty
+    DepGraph = TestDependencyGraph.empty
+    ActiveFile = None
+    ChangedSymbols = []
+  }
+
+  let onKeystroke (content: string) (filePath: string) (now: DateTimeOffset) (s: LiveTestPipelineState) =
+    let db = s.Debounce |> PipelineDebounce.onKeystroke content filePath now
+    { s with Debounce = db; ActiveFile = Some filePath }
+
+  let onFileSave (filePath: string) (now: DateTimeOffset) (s: LiveTestPipelineState) =
+    let db = s.Debounce |> PipelineDebounce.onFileSave filePath now
+    { s with Debounce = db }
+
+  /// Ticks the debounce channels and produces pipeline effects.
+  /// Returns (effects, updatedState).
+  let tick (now: DateTimeOffset) (s: LiveTestPipelineState) =
+    let (tsPayload, fcsPayload), db = s.Debounce |> PipelineDebounce.tick now
+    let filePath = s.ActiveFile |> Option.defaultValue ""
+    let effects = PipelineEffects.fromTick tsPayload fcsPayload filePath
+    let fcsEffect =
+      match fcsPayload with
+      | Some _ ->
+        PipelineEffects.afterTypeCheck s.ChangedSymbols RunTrigger.Keystroke s.DepGraph s.TestState
+      | None -> PipelineEffect.NoOp
+    let allEffects =
+      effects @ [fcsEffect]
+      |> List.filter (fun e -> e <> PipelineEffect.NoOp)
+    allEffects, { s with Debounce = db }

@@ -2334,3 +2334,331 @@ let cancellationChainTests = testList "CancellationChain" [
     (chain.currentToken = System.Threading.CancellationToken.None) |> Expect.isTrue "none token"
   }
 ]
+
+// --- Phase 4: Pipeline Integration Tests ---
+
+/// Test-only effect logger for asserting pipeline behavior.
+type EffectLog = { mutable Effects: PipelineEffect list }
+
+module EffectDispatcher =
+  let create () = { Effects = [] }
+
+  let dispatch (log: EffectLog) (effect: PipelineEffect) =
+    match effect with
+    | PipelineEffect.NoOp -> ()
+    | e -> log.Effects <- log.Effects @ [e]
+
+  let dispatchAll (log: EffectLog) (effects: PipelineEffect list) =
+    effects |> List.iter (dispatch log)
+
+  let reset (log: EffectLog) =
+    log.Effects <- []
+
+[<Tests>]
+let pipelineStateTests = testList "LiveTestPipelineState" [
+  test "onKeystroke updates debounce and active file" {
+    let t0 = DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero)
+    let s = LiveTestPipelineState.empty |> LiveTestPipelineState.onKeystroke "let x = 1" "File.fs" t0
+    s.ActiveFile |> Expect.equal "active file set" (Some "File.fs")
+    s.Debounce.TreeSitter.Pending |> Expect.isSome "ts channel has pending"
+  }
+
+  test "onFileSave updates fcs debounce with short delay" {
+    let t0 = DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero)
+    let s = LiveTestPipelineState.empty |> LiveTestPipelineState.onFileSave "File.fs" t0
+    s.Debounce.Fcs.Pending |> Expect.isSome "fcs channel has pending"
+  }
+
+  test "tick with no pending produces no effects" {
+    let t0 = DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero)
+    let effects, _ = LiveTestPipelineState.empty |> LiveTestPipelineState.tick t0
+    effects |> Expect.isEmpty "no effects from empty state"
+  }
+
+  test "tick after keystroke delay fires tree-sitter parse" {
+    let t0 = DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero)
+    let t50 = t0.AddMilliseconds(51.0)
+    let s = LiveTestPipelineState.empty |> LiveTestPipelineState.onKeystroke "let x = 1" "File.fs" t0
+    let effects, _ = s |> LiveTestPipelineState.tick t50
+    effects
+    |> List.exists (fun e ->
+      match e with
+      | PipelineEffect.ParseTreeSitter _ -> true
+      | _ -> false)
+    |> Expect.isTrue "should have tree-sitter parse"
+  }
+
+  test "tick after full delay fires both tree-sitter and fcs" {
+    let t0 = DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero)
+    let t301 = t0.AddMilliseconds(301.0)
+    let s = LiveTestPipelineState.empty |> LiveTestPipelineState.onKeystroke "let x = 1" "File.fs" t0
+    let effects, _ = s |> LiveTestPipelineState.tick t301
+    effects
+    |> List.exists (fun e ->
+      match e with
+      | PipelineEffect.ParseTreeSitter _ -> true
+      | _ -> false)
+    |> Expect.isTrue "should have tree-sitter"
+    effects
+    |> List.exists (fun e ->
+      match e with
+      | PipelineEffect.RequestFcsTypeCheck _ -> true
+      | _ -> false)
+    |> Expect.isTrue "should have fcs request"
+  }
+
+  test "tick with fcs and dependency graph produces RunAffectedTests" {
+    let t0 = DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero)
+    let t301 = t0.AddMilliseconds(301.0)
+    let tc = mkTestCase "MyModule.myTest" "expecto" TestCategory.Unit
+    let depGraph = {
+      TestDependencyGraph.empty with
+        SymbolToTests = Map.ofList ["mySymbol", [|tc.Id|]]
+    }
+    let state = {
+      LiveTestPipelineState.empty with
+        DepGraph = depGraph
+        ChangedSymbols = ["mySymbol"]
+        TestState = { LiveTestState.empty with DiscoveredTests = [|tc|]; Enabled = true }
+    }
+    let s = state |> LiveTestPipelineState.onKeystroke "let x = 1" "File.fs" t0
+    let effects, _ = s |> LiveTestPipelineState.tick t301
+    effects
+    |> List.exists (fun e ->
+      match e with
+      | PipelineEffect.RunAffectedTests _ -> true
+      | _ -> false)
+    |> Expect.isTrue "should have run affected tests"
+  }
+
+  test "file save shortens fcs debounce to 50ms" {
+    let t0 = DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero)
+    let t51 = t0.AddMilliseconds(51.0)
+    let s = LiveTestPipelineState.empty |> LiveTestPipelineState.onFileSave "File.fs" t0
+    let effects, _ = s |> LiveTestPipelineState.tick t51
+    effects
+    |> List.exists (fun e ->
+      match e with
+      | PipelineEffect.RequestFcsTypeCheck _ -> true
+      | _ -> false)
+    |> Expect.isTrue "fcs fires at 50ms on save"
+  }
+]
+
+[<Tests>]
+let effectDispatchTests = testList "EffectDispatcher" [
+  test "ParseTreeSitter logs content and file" {
+    let log = EffectDispatcher.create()
+    EffectDispatcher.dispatch log (PipelineEffect.ParseTreeSitter("let x = 1", "File.fs"))
+    log.Effects |> Expect.hasLength "one effect logged" 1
+    match log.Effects.[0] with
+    | PipelineEffect.ParseTreeSitter(c, f) ->
+      c |> Expect.equal "content" "let x = 1"
+      f |> Expect.equal "file" "File.fs"
+    | _ -> failtest "wrong effect type"
+  }
+
+  test "RequestFcsTypeCheck logs file path" {
+    let log = EffectDispatcher.create()
+    EffectDispatcher.dispatch log (PipelineEffect.RequestFcsTypeCheck "File.fs")
+    log.Effects |> Expect.hasLength "one effect" 1
+    match log.Effects.[0] with
+    | PipelineEffect.RequestFcsTypeCheck f -> f |> Expect.equal "file" "File.fs"
+    | _ -> failtest "wrong effect type"
+  }
+
+  test "RunAffectedTests logs test ids and trigger" {
+    let log = EffectDispatcher.create()
+    let ids = [| TestId.create "t1" "expecto" |]
+    EffectDispatcher.dispatch log (PipelineEffect.RunAffectedTests(ids, RunTrigger.Keystroke))
+    log.Effects |> Expect.hasLength "one effect" 1
+    match log.Effects.[0] with
+    | PipelineEffect.RunAffectedTests(tids, trigger) ->
+      tids |> Expect.hasLength "one test" 1
+      trigger |> Expect.equal "trigger" RunTrigger.Keystroke
+    | _ -> failtest "wrong effect type"
+  }
+
+  test "NoOp leaves log unchanged" {
+    let log = EffectDispatcher.create()
+    EffectDispatcher.dispatch log PipelineEffect.NoOp
+    log.Effects |> Expect.isEmpty "no effects from NoOp"
+  }
+
+  test "dispatchAll processes multiple effects" {
+    let log = EffectDispatcher.create()
+    let effects = [
+      PipelineEffect.ParseTreeSitter("x", "f")
+      PipelineEffect.RequestFcsTypeCheck "f"
+    ]
+    EffectDispatcher.dispatchAll log effects
+    log.Effects |> Expect.hasLength "two effects" 2
+  }
+]
+
+[<Tests>]
+let endToEndPipelineTests = testList "End-to-end Pipeline" [
+  test "keystroke → debounce → tree-sitter fires at 50ms" {
+    let t0 = DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero)
+    let log = EffectDispatcher.create()
+    let s0 = LiveTestPipelineState.empty |> LiveTestPipelineState.onKeystroke "let x = 1" "File.fs" t0
+    // at 30ms — nothing fires
+    let effects30, s30 = s0 |> LiveTestPipelineState.tick (t0.AddMilliseconds(30.0))
+    EffectDispatcher.dispatchAll log effects30
+    log.Effects |> Expect.isEmpty "nothing at 30ms"
+    // at 51ms — tree-sitter fires
+    let effects51, _ = s30 |> LiveTestPipelineState.tick (t0.AddMilliseconds(51.0))
+    EffectDispatcher.dispatchAll log effects51
+    log.Effects
+    |> List.exists (fun e -> match e with PipelineEffect.ParseTreeSitter _ -> true | _ -> false)
+    |> Expect.isTrue "tree-sitter fired at 51ms"
+  }
+
+  test "burst typing resets debounce" {
+    let t0 = DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero)
+    let log = EffectDispatcher.create()
+    let s0 = LiveTestPipelineState.empty
+             |> LiveTestPipelineState.onKeystroke "l" "F.fs" t0
+             |> LiveTestPipelineState.onKeystroke "le" "F.fs" (t0.AddMilliseconds(20.0))
+             |> LiveTestPipelineState.onKeystroke "let" "F.fs" (t0.AddMilliseconds(40.0))
+    // at 60ms from first keystroke — only 20ms from last, shouldn't fire
+    let effects60, _ = s0 |> LiveTestPipelineState.tick (t0.AddMilliseconds(60.0))
+    EffectDispatcher.dispatchAll log effects60
+    log.Effects |> Expect.isEmpty "burst resets debounce"
+    // at 91ms from first (51ms from last) — fires
+    EffectDispatcher.reset log
+    let effects91, _ = s0 |> LiveTestPipelineState.tick (t0.AddMilliseconds(91.0))
+    EffectDispatcher.dispatchAll log effects91
+    log.Effects
+    |> List.exists (fun e -> match e with PipelineEffect.ParseTreeSitter _ -> true | _ -> false)
+    |> Expect.isTrue "fires 50ms after last keystroke"
+  }
+
+  test "full pipeline: keystroke → TS → FCS → run affected" {
+    let t0 = DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero)
+    let log = EffectDispatcher.create()
+    let tc = mkTestCase "M.affectedTest" "expecto" TestCategory.Unit
+    let depGraph = {
+      TestDependencyGraph.empty with
+        SymbolToTests = Map.ofList ["changedFn", [|tc.Id|]]
+    }
+    let state = {
+      LiveTestPipelineState.empty with
+        DepGraph = depGraph
+        ChangedSymbols = ["changedFn"]
+        TestState = { LiveTestState.empty with DiscoveredTests = [|tc|]; Enabled = true }
+    }
+    let s = state |> LiveTestPipelineState.onKeystroke "let x = 1" "File.fs" t0
+    let effects, _ = s |> LiveTestPipelineState.tick (t0.AddMilliseconds(301.0))
+    EffectDispatcher.dispatchAll log effects
+    // Should have TS, FCS, and RunAffected
+    log.Effects
+    |> List.exists (fun e -> match e with PipelineEffect.ParseTreeSitter _ -> true | _ -> false)
+    |> Expect.isTrue "has tree-sitter"
+    log.Effects
+    |> List.exists (fun e -> match e with PipelineEffect.RequestFcsTypeCheck _ -> true | _ -> false)
+    |> Expect.isTrue "has fcs"
+    log.Effects
+    |> List.exists (fun e -> match e with PipelineEffect.RunAffectedTests _ -> true | _ -> false)
+    |> Expect.isTrue "has run affected"
+  }
+
+  test "disabled state produces no effects even after delay" {
+    let t0 = DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero)
+    let tc = mkTestCase "M.t1" "expecto" TestCategory.Unit
+    let depGraph = {
+      TestDependencyGraph.empty with
+        SymbolToTests = Map.ofList ["sym", [|tc.Id|]]
+    }
+    let state = {
+      LiveTestPipelineState.empty with
+        DepGraph = depGraph
+        ChangedSymbols = ["sym"]
+        TestState = { LiveTestState.empty with DiscoveredTests = [|tc|]; Enabled = false }
+    }
+    let s = state |> LiveTestPipelineState.onKeystroke "let x = 1" "File.fs" t0
+    let effects, _ = s |> LiveTestPipelineState.tick (t0.AddMilliseconds(301.0))
+    // TS and FCS fire (debounce doesn't check enabled), but RunAffected should not
+    effects
+    |> List.exists (fun e -> match e with PipelineEffect.RunAffectedTests _ -> true | _ -> false)
+    |> Expect.isFalse "no test run when disabled"
+  }
+
+  test "integration tests filtered on keystroke trigger" {
+    let t0 = DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero)
+    let tc = mkTestCase "M.intTest" "expecto" TestCategory.Integration
+    let depGraph = {
+      TestDependencyGraph.empty with
+        SymbolToTests = Map.ofList ["sym", [|tc.Id|]]
+    }
+    let state = {
+      LiveTestPipelineState.empty with
+        DepGraph = depGraph
+        ChangedSymbols = ["sym"]
+        TestState = { LiveTestState.empty with DiscoveredTests = [|tc|]; Enabled = true }
+    }
+    let s = state |> LiveTestPipelineState.onKeystroke "let x = 1" "File.fs" t0
+    let effects, _ = s |> LiveTestPipelineState.tick (t0.AddMilliseconds(301.0))
+    effects
+    |> List.exists (fun e -> match e with PipelineEffect.RunAffectedTests _ -> true | _ -> false)
+    |> Expect.isFalse "integration tests filtered out on keystroke"
+  }
+]
+
+[<Tests>]
+let pipelineCancellationTests = testList "PipelineCancellation" [
+  test "tokenForEffect returns live tokens" {
+    let pc = PipelineCancellation.create()
+    let t1 = PipelineCancellation.tokenForEffect (PipelineEffect.ParseTreeSitter("x", "f")) pc
+    let t2 = PipelineCancellation.tokenForEffect (PipelineEffect.RequestFcsTypeCheck "f") pc
+    let t3 = PipelineCancellation.tokenForEffect (PipelineEffect.RunAffectedTests([||], RunTrigger.Keystroke)) pc
+    t1.IsCancellationRequested |> Expect.isFalse "ts token live"
+    t2.IsCancellationRequested |> Expect.isFalse "fcs token live"
+    t3.IsCancellationRequested |> Expect.isFalse "run token live"
+    PipelineCancellation.dispose pc
+  }
+
+  test "new tree-sitter effect cancels previous tree-sitter" {
+    let pc = PipelineCancellation.create()
+    let t1 = PipelineCancellation.tokenForEffect (PipelineEffect.ParseTreeSitter("a", "f")) pc
+    let _t2 = PipelineCancellation.tokenForEffect (PipelineEffect.ParseTreeSitter("b", "f")) pc
+    t1.IsCancellationRequested |> Expect.isTrue "first ts cancelled"
+    PipelineCancellation.dispose pc
+  }
+
+  test "new fcs effect cancels previous fcs but not tree-sitter" {
+    let pc = PipelineCancellation.create()
+    let tsToken = PipelineCancellation.tokenForEffect (PipelineEffect.ParseTreeSitter("x", "f")) pc
+    let fcs1 = PipelineCancellation.tokenForEffect (PipelineEffect.RequestFcsTypeCheck "f") pc
+    let _fcs2 = PipelineCancellation.tokenForEffect (PipelineEffect.RequestFcsTypeCheck "f") pc
+    fcs1.IsCancellationRequested |> Expect.isTrue "first fcs cancelled"
+    tsToken.IsCancellationRequested |> Expect.isFalse "ts not affected"
+    PipelineCancellation.dispose pc
+  }
+
+  test "new test run cancels previous test run" {
+    let pc = PipelineCancellation.create()
+    let run1 = PipelineCancellation.tokenForEffect (PipelineEffect.RunAffectedTests([||], RunTrigger.Keystroke)) pc
+    let _run2 = PipelineCancellation.tokenForEffect (PipelineEffect.RunAffectedTests([||], RunTrigger.Keystroke)) pc
+    run1.IsCancellationRequested |> Expect.isTrue "first run cancelled"
+    PipelineCancellation.dispose pc
+  }
+
+  test "dispose cancels all active tokens" {
+    let pc = PipelineCancellation.create()
+    let ts = PipelineCancellation.tokenForEffect (PipelineEffect.ParseTreeSitter("x", "f")) pc
+    let fcs = PipelineCancellation.tokenForEffect (PipelineEffect.RequestFcsTypeCheck "f") pc
+    let run = PipelineCancellation.tokenForEffect (PipelineEffect.RunAffectedTests([||], RunTrigger.Keystroke)) pc
+    PipelineCancellation.dispose pc
+    ts.IsCancellationRequested |> Expect.isTrue "ts cancelled"
+    fcs.IsCancellationRequested |> Expect.isTrue "fcs cancelled"
+    run.IsCancellationRequested |> Expect.isTrue "run cancelled"
+  }
+
+  test "NoOp returns CancellationToken.None" {
+    let pc = PipelineCancellation.create()
+    let t = PipelineCancellation.tokenForEffect PipelineEffect.NoOp pc
+    (t = System.Threading.CancellationToken.None) |> Expect.isTrue "none token"
+    PipelineCancellation.dispose pc
+  }
+]
