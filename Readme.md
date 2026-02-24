@@ -175,12 +175,12 @@ The **SageFs extension** turns VS Code into a live F# development environment wi
 
 #### Installing the VS Code Extension
 
-**Option A: Install from .vsix (recommended)**
+**Option A: Download from GitHub Releases (recommended)**
 
-Pre-built `.vsix` packages are in the `sagefs-vscode/` directory:
+Each [GitHub Release](https://github.com/WillEhrendreich/SageFs/releases) includes a `.vsix` file. Download the latest and install:
 
 ```bash
-code --install-extension sagefs-vscode/sagefs-0.5.36.vsix
+code --install-extension sagefs-<version>.vsix
 ```
 
 Reload VS Code and you're ready to go.
@@ -191,9 +191,9 @@ Reload VS Code and you're ready to go.
 cd sagefs-vscode
 npm install
 npm run compile
+npx @vscode/vsce package
+code --install-extension sagefs-*.vsix
 ```
-
-Then press **F5** in VS Code to launch the Extension Development Host for development/testing.
 
 #### Extension Settings
 

@@ -81,3 +81,25 @@ jobs:
         dotnet nuget push release/*.nupkg \
           --api-key "$NUGET_API_KEY" \
           --source https://api.nuget.org/v3/index.json
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: 20
+
+    - name: Build VS Code extension (.vsix)
+      working-directory: sagefs-vscode
+      run: |
+        npm ci
+        npx @vscode/vsce package -o ../release/sagefs-${{ steps.tag_name.outputs.current_version }}.vsix
+
+    - name: Build Visual Studio extension (.vsix)
+      run: |
+        dotnet build sagefs-vs/SageFs.VisualStudio/SageFs.VisualStudio.csproj -c Release
+        cp sagefs-vs/SageFs.VisualStudio/bin/Release/*.vsix release/ || true
+
+    - name: Upload extensions to GitHub Release
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: ${{ github.ref_name }}
+        files: release/*.vsix
