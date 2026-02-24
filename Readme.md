@@ -82,9 +82,9 @@ Tests are categorized automatically (Unit, Integration, Browser, Property, Bench
 
 **What's in progress:**
 
-- [ ] **FCS dependency graph** — Wire F# Compiler Service `CheckFileResults` to build a real call graph for symbol-level reachability (currently affected tests found by method name matching; FCS would give precise symbol-level coverage)
-- [ ] **Three-speed pipeline end-to-end** — Wire tree-sitter → FCS enrichment → execution into a single debounced pipeline (histograms ready, debounce not yet connected)
-- [ ] **VS Code gutter markers** — DecorationProvider and TestController integration in the VS Code extension
+- [x] **FCS dependency graph** — F# Compiler Service `CheckFileResults` wired via `SymbolGraphBuilder` to build symbol→test dependency maps, with `SymbolDiff` for detecting changes between FCS runs and `FileAnalysisCache` for per-file caching
+- [x] **Three-speed pipeline end-to-end** — Full debounced pipeline: keystroke → tree-sitter (50ms) → FCS with adaptive backoff (300ms, max 2000ms) → affected-test execution. `PipelineDebounce` manages per-stage cancellation tokens, `AdaptiveDebounce` backs off dynamically on FCS cancellations
+- [ ] **VS Code gutter markers** — DecorationProvider and TestController integration in the VS Code extension (`LineAnnotation` data ready, UI not yet connected)
 - [ ] **Neovim gutter markers** — Extmark signs and virtual text for test status in sagefs.nvim
 - [ ] **Raylib GUI gutter rendering** — Gutter icons in the GPU-rendered GUI frontend
 - [ ] **Visual Studio gutter markers** — Margin glyphs via the VS Extensibility SDK
