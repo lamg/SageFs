@@ -386,7 +386,7 @@ module SageFsUpdate =
         { model with LiveTesting = lt }, []
 
       | SageFsEvent.AffectedTestsComputed testIds ->
-        let lt = recomputeStatuses model.LiveTesting (fun s -> { s with AffectedTests = Set.ofArray testIds })
+        let lt = recomputeStatuses model.LiveTesting (fun s -> { s with IsRunning = true; AffectedTests = Set.ofArray testIds })
         let effects =
           Features.LiveTesting.LiveTestPipelineState.triggerExecutionForAffected
             testIds Features.LiveTesting.RunTrigger.FileSave lt
@@ -395,7 +395,7 @@ module SageFsUpdate =
 
       | SageFsEvent.RunTestsRequested tests ->
         let testIds = tests |> Array.map (fun t -> t.Id)
-        let lt = recomputeStatuses model.LiveTesting (fun s -> { s with AffectedTests = Set.ofArray testIds })
+        let lt = recomputeStatuses model.LiveTesting (fun s -> { s with IsRunning = true; AffectedTests = Set.ofArray testIds })
         let effects =
           if Array.isEmpty tests || not lt.TestState.Enabled then []
           else

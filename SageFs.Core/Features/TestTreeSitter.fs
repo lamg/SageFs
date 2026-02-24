@@ -63,8 +63,10 @@ module TestTreeSitter =
             currentAttr <- code.Substring(int node.StartIndex, int node.EndIndex - int node.StartIndex)
           | "test.name" ->
             if currentAttr.Length > 0 then
+              let funcName = code.Substring(int node.StartIndex, int node.EndIndex - int node.StartIndex)
               locations.Add {
                 AttributeName = currentAttr
+                FunctionName = funcName
                 FilePath = filePath
                 Line = int node.StartPosition.Row + 1
                 Column = int node.StartPosition.Column

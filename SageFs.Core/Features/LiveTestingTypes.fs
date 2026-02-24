@@ -76,6 +76,7 @@ type AssemblyInfo = {
 [<Struct>]
 type SourceTestLocation = {
   AttributeName: string
+  FunctionName: string
   FilePath: string
   Line: int
   Column: int
@@ -723,6 +724,67 @@ module LiveTesting =
   let recomputeEditorAnnotations (state: LiveTestState) : LineAnnotation array =
     if state.Enabled then annotationsForFile "editor" state
     else [||]
+
+module SourceMapping =
+  /// Extract the method/property name that should match tree-sitter's FunctionName.
+  /// For "Namespace.Module.Tests.shouldAdd" → "shouldAdd"
+  /// For "Namespace.Module.myTests/should add numbers" → "myTests" (Expecto hierarchical)
+  let extractMethodName (fullName: string) =
+    let slashIdx = fullName.IndexOf('/')
+    if slashIdx > 0 then
+      let prefix = fullName.Substring(0, slashIdx)
+      let lastDot = prefix.LastIndexOf('.')
+      if lastDot >= 0 then prefix.Substring(lastDot + 1)
+      else prefix
+    else
+      let parts = fullName.Split('.')
+      if parts.Length > 0 then parts.[parts.Length - 1]
+      else fullName
+
+  /// Does this attribute name match the given test framework?
+  let attributeMatchesFramework (framework: string) (attrName: string) =
+    match framework with
+    | "expecto" -> attrName = "Tests" || attrName = "TestsAttribute"
+    | "xunit" ->
+      attrName = "Fact" || attrName = "FactAttribute"
+      || attrName = "Theory" || attrName = "TheoryAttribute"
+    | "nunit" ->
+      attrName = "Test" || attrName = "TestAttribute"
+      || attrName = "TestCase" || attrName = "TestCaseAttribute"
+    | "mstest" ->
+      attrName = "TestMethod" || attrName = "TestMethodAttribute"
+      || attrName = "DataTestMethod" || attrName = "DataTestMethodAttribute"
+    | "tunit" -> attrName = "Test" || attrName = "TestAttribute"
+    | _ -> false
+
+  /// Merge tree-sitter source locations into discovered tests.
+  /// Matches by function name against the test's FullName suffix.
+  /// Tests already source-mapped are preserved unchanged.
+  let mergeSourceLocations
+    (locations: SourceTestLocation array)
+    (tests: TestCase array)
+    : TestCase array =
+    if Array.isEmpty locations then tests
+    else
+      let locationsByFuncName =
+        locations
+        |> Array.groupBy (fun loc -> loc.FunctionName)
+        |> Map.ofArray
+      tests |> Array.map (fun test ->
+        match test.Origin with
+        | TestOrigin.SourceMapped _ -> test
+        | TestOrigin.ReflectionOnly ->
+          let methodName = extractMethodName test.FullName
+          match Map.tryFind methodName locationsByFuncName with
+          | Some locs ->
+            let matchingLoc =
+              locs
+              |> Array.tryFind (fun loc -> attributeMatchesFramework test.Framework loc.AttributeName)
+              |> Option.orElseWith (fun () -> locs |> Array.tryHead)
+            match matchingLoc with
+            | Some loc -> { test with Origin = TestOrigin.SourceMapped(loc.FilePath, loc.Line) }
+            | None -> test
+          | None -> test)
 
 module CoverageProjection =
   let symbolCoverage

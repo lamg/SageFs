@@ -432,7 +432,7 @@ module TestOrchestrator =
     : Async<TestRunResult array> =
     async {
       use cts = Threading.CancellationTokenSource.CreateLinkedTokenSource(ct)
-      cts.CancelAfter(TimeSpan.FromSeconds 30.0)
+      cts.CancelAfter(TimeSpan.FromMilliseconds(float (30_000 + 100 * tests.Length)))
       let semaphore = new Threading.SemaphoreSlim(maxParallelism)
       let! results =
         tests

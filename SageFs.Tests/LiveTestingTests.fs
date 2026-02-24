@@ -1528,6 +1528,113 @@ let statusEntryTests = testList "StatusEntry Computation" [
 // ============================================================
 
 [<Tests>]
+let sourceMappingTests = testList "SourceMapping" [
+  test "extractMethodName gets last segment from dotted name" {
+    SourceMapping.extractMethodName "MyModule.Tests.shouldAdd"
+    |> Expect.equal "last segment" "shouldAdd"
+  }
+
+  test "extractMethodName gets property before slash for Expecto" {
+    SourceMapping.extractMethodName "Ns.Mod.allMyTests/group/should add"
+    |> Expect.equal "before slash" "allMyTests"
+  }
+
+  test "attributeMatchesFramework matches Fact to xunit" {
+    SourceMapping.attributeMatchesFramework "xunit" "Fact"
+    |> Expect.isTrue "Fact is xunit"
+  }
+
+  test "attributeMatchesFramework does not match Fact to nunit" {
+    SourceMapping.attributeMatchesFramework "nunit" "Fact"
+    |> Expect.isFalse "Fact is not nunit"
+  }
+
+  test "mergeSourceLocations maps xunit test by function name" {
+    let locations = [|
+      { AttributeName = "Fact"; FunctionName = "shouldAdd"
+        FilePath = "Tests.fs"; Line = 10; Column = 0 }
+    |]
+    let tests = [|
+      { Id = TestId.create "Mod.Tests.shouldAdd" "xunit"
+        FullName = "Mod.Tests.shouldAdd"; DisplayName = "shouldAdd"
+        Origin = TestOrigin.ReflectionOnly; Labels = []
+        Framework = "xunit"; Category = TestCategory.Unit }
+    |]
+    let result = SourceMapping.mergeSourceLocations locations tests
+    result.[0].Origin
+    |> Expect.equal "mapped" (TestOrigin.SourceMapped("Tests.fs", 10))
+  }
+
+  test "mergeSourceLocations maps Expecto hierarchical tests" {
+    let locations = [|
+      { AttributeName = "Tests"; FunctionName = "allMyTests"
+        FilePath = "MyTests.fs"; Line = 5; Column = 0 }
+    |]
+    let tests = [|
+      { Id = TestId.create "Ns.Mod.allMyTests/group/test1" "expecto"
+        FullName = "Ns.Mod.allMyTests/group/test1"; DisplayName = "test1"
+        Origin = TestOrigin.ReflectionOnly; Labels = []
+        Framework = "expecto"; Category = TestCategory.Unit }
+      { Id = TestId.create "Ns.Mod.allMyTests/group/test2" "expecto"
+        FullName = "Ns.Mod.allMyTests/group/test2"; DisplayName = "test2"
+        Origin = TestOrigin.ReflectionOnly; Labels = []
+        Framework = "expecto"; Category = TestCategory.Unit }
+    |]
+    let result = SourceMapping.mergeSourceLocations locations tests
+    result.[0].Origin
+    |> Expect.equal "first mapped" (TestOrigin.SourceMapped("MyTests.fs", 5))
+    result.[1].Origin
+    |> Expect.equal "second mapped" (TestOrigin.SourceMapped("MyTests.fs", 5))
+  }
+
+  test "mergeSourceLocations preserves already-mapped tests" {
+    let locations = [|
+      { AttributeName = "Tests"; FunctionName = "myTests"
+        FilePath = "New.fs"; Line = 99; Column = 0 }
+    |]
+    let tests = [|
+      { Id = TestId.create "Mod.myTests" "expecto"
+        FullName = "Mod.myTests"; DisplayName = "myTests"
+        Origin = TestOrigin.SourceMapped("Old.fs", 42); Labels = []
+        Framework = "expecto"; Category = TestCategory.Unit }
+    |]
+    let result = SourceMapping.mergeSourceLocations locations tests
+    result.[0].Origin
+    |> Expect.equal "kept original" (TestOrigin.SourceMapped("Old.fs", 42))
+  }
+
+  test "mergeSourceLocations returns tests unchanged when no locations" {
+    let tests = [|
+      { Id = TestId.create "T.x" "xunit"
+        FullName = "T.x"; DisplayName = "x"
+        Origin = TestOrigin.ReflectionOnly; Labels = []
+        Framework = "xunit"; Category = TestCategory.Unit }
+    |]
+    let result = SourceMapping.mergeSourceLocations [||] tests
+    result.[0].Origin
+    |> Expect.equal "unchanged" TestOrigin.ReflectionOnly
+  }
+
+  test "mergeSourceLocations disambiguates by framework" {
+    let locations = [|
+      { AttributeName = "Test"; FunctionName = "validate"
+        FilePath = "Nunit.fs"; Line = 10; Column = 0 }
+      { AttributeName = "Fact"; FunctionName = "validate"
+        FilePath = "Xunit.fs"; Line = 20; Column = 0 }
+    |]
+    let tests = [|
+      { Id = TestId.create "Suite.validate" "xunit"
+        FullName = "Suite.validate"; DisplayName = "validate"
+        Origin = TestOrigin.ReflectionOnly; Labels = []
+        Framework = "xunit"; Category = TestCategory.Unit }
+    |]
+    let result = SourceMapping.mergeSourceLocations locations tests
+    result.[0].Origin
+    |> Expect.equal "picked xunit location" (TestOrigin.SourceMapped("Xunit.fs", 20))
+  }
+]
+
+[<Tests>]
 let annotationTests = testList "Gutter Annotations" [
   let test1 =
     { Id = TestId.create "Module.Tests.test1" "expecto"; FullName = "Module.Tests.test1"
@@ -1540,8 +1647,8 @@ let annotationTests = testList "Gutter Annotations" [
     let state = {
       LiveTestState.empty with
         SourceLocations = [|
-          { AttributeName = "Test"; FilePath = "test.fs"; Line = 10; Column = 0 }
-          { AttributeName = "Test"; FilePath = "other.fs"; Line = 5; Column = 0 }
+          { AttributeName = "Test"; FunctionName = "test1"; FilePath = "test.fs"; Line = 10; Column = 0 }
+          { AttributeName = "Test"; FunctionName = "test2"; FilePath = "other.fs"; Line = 5; Column = 0 }
         |]
         Enabled = true
     }
@@ -1555,7 +1662,7 @@ let annotationTests = testList "Gutter Annotations" [
     let baseState = {
       LiveTestState.empty with
         SourceLocations = [|
-          { AttributeName = "Test"; FilePath = "test.fs"; Line = 10; Column = 0 }
+          { AttributeName = "Test"; FunctionName = "test1"; FilePath = "test.fs"; Line = 10; Column = 0 }
         |]
         DiscoveredTests = [| test1 |]
         LastResults = Map.ofList [
@@ -1592,8 +1699,8 @@ let annotationTests = testList "Gutter Annotations" [
   test "recomputeEditorAnnotations returns annotations when enabled" {
     let state = { LiveTestState.empty with
                     SourceLocations = [|
-                      { AttributeName = "Fact"; FilePath = "editor"; Line = 5; Column = 0 }
-                      { AttributeName = "Test"; FilePath = "editor"; Line = 10; Column = 0 }
+                      { AttributeName = "Fact"; FunctionName = "test1"; FilePath = "editor"; Line = 5; Column = 0 }
+                      { AttributeName = "Test"; FunctionName = "test2"; FilePath = "editor"; Line = 10; Column = 0 }
                     |] }
     let cached = LiveTesting.recomputeEditorAnnotations state
     cached.Length |> Expect.equal "two annotations" 2
@@ -1603,7 +1710,7 @@ let annotationTests = testList "Gutter Annotations" [
     let state = { LiveTestState.empty with
                     Enabled = false
                     SourceLocations = [|
-                      { AttributeName = "Fact"; FilePath = "editor"; Line = 5; Column = 0 }
+                      { AttributeName = "Fact"; FunctionName = "test1"; FilePath = "editor"; Line = 5; Column = 0 }
                     |] }
     LiveTesting.recomputeEditorAnnotations state
     |> Array.length |> Expect.equal "no annotations" 0
@@ -1612,7 +1719,7 @@ let annotationTests = testList "Gutter Annotations" [
   test "recomputeEditorAnnotations matches annotationsForFile" {
     let state = { LiveTestState.empty with
                     SourceLocations = [|
-                      { AttributeName = "Fact"; FilePath = "editor"; Line = 5; Column = 0 }
+                      { AttributeName = "Fact"; FunctionName = "test1"; FilePath = "editor"; Line = 5; Column = 0 }
                     |] }
     let cached = LiveTesting.recomputeEditorAnnotations state
     let direct = LiveTesting.annotationsForFile "editor" state
@@ -3991,8 +4098,8 @@ let pipelineBenchmarkTests = testList "Pipeline Core Benchmark" [
         t.Id, { TestId = t.Id; TestName = t.DisplayName
                 Result = TestResult.Passed (TimeSpan.FromMilliseconds 5.0)
                 Timestamp = DateTimeOffset.UtcNow }) |> Map.ofArray
-    let locs = tests |> Array.map (fun t ->
-      { AttributeName = "Test"; FilePath = "editor"
+    let locs = tests |> Array.mapi (fun i t ->
+      { AttributeName = "Test"; FunctionName = sprintf "t%d" i; FilePath = "editor"
         Line = (match t.Origin with TestOrigin.SourceMapped (_, l) -> l | _ -> 0); Column = 0 })
     let state = { LiveTestState.empty with
                     DiscoveredTests = tests; LastResults = results; SourceLocations = locs
@@ -4031,8 +4138,8 @@ let pipelineBenchmarkTests = testList "Pipeline Core Benchmark" [
         t.Id, { TestId = t.Id; TestName = t.DisplayName
                 Result = TestResult.Passed (TimeSpan.FromMilliseconds 3.0)
                 Timestamp = DateTimeOffset.UtcNow }) |> Map.ofArray
-    let locs = tests |> Array.map (fun t ->
-      { AttributeName = "Test"; FilePath = "editor"
+    let locs = tests |> Array.mapi (fun i t ->
+      { AttributeName = "Test"; FunctionName = sprintf "t%d" i; FilePath = "editor"
         Line = (match t.Origin with TestOrigin.SourceMapped (_, l) -> l | _ -> 0); Column = 0 })
     let state = { LiveTestState.empty with
                     DiscoveredTests = tests; LastResults = results; SourceLocations = locs

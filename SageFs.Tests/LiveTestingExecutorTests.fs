@@ -218,7 +218,7 @@ let hookDiscoverTestsTests = testList "LiveTestingHook.discoverTests" [
 ]
 
 let findAffectedTestsTests = testList "LiveTestingHook.findAffectedTests" [
-  test "returns all test IDs when no updated methods specified" {
+  test "returns empty when no updated methods specified" {
     let tests = [|
       { Id = TestId.create "Mod.test1" "expecto"
         FullName = "Mod.test1"; DisplayName = "test1"
@@ -232,7 +232,7 @@ let findAffectedTestsTests = testList "LiveTestingHook.findAffectedTests" [
     let affected = LiveTestingHook.findAffectedTests tests []
     affected
     |> Array.length
-    |> Expect.equal "all tests affected on full reload" 2
+    |> Expect.equal "no tests affected when no methods changed" 0
   }
 
   test "filters to matching tests when updated methods specified" {
@@ -273,8 +273,8 @@ let afterReloadTests = testList "LiveTestingHook.afterReload" [
       let result = LiveTestingHook.afterReload BuiltInExecutors.builtIn asm []
       Expect.isTrue "should detect providers" (not (List.isEmpty result.DetectedProviders))
       Expect.isTrue "should discover tests" (result.DiscoveredTests.Length > 0)
-      Expect.isTrue "affected = discovered on full reload"
-        (result.AffectedTestIds.Length = result.DiscoveredTests.Length)
+      Expect.isTrue "affected = 0 when no methods changed"
+        (result.AffectedTestIds.Length = 0)
     | None -> skiptest "SageFs.Tests assembly not loaded"
   }
 

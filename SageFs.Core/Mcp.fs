@@ -1223,8 +1223,12 @@ module McpTools =
               match e.Origin with
               | Features.LiveTesting.TestOrigin.SourceMapped (file, _) -> file = f
               | Features.LiveTesting.TestOrigin.ReflectionOnly -> false)
-          | None -> state.StatusEntries
-        let resp = {| Enabled = state.Enabled; Summary = summary; Tests = tests |}
+            |> Some
+          | None -> None
+        let resp =
+          match tests with
+          | Some t -> {| Enabled = state.Enabled; Summary = summary; Tests = t |} |> box
+          | None -> {| Enabled = state.Enabled; Summary = summary |} |> box
         return JsonSerializer.Serialize(resp, liveTestJsonOpts)
     }
 
