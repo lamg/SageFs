@@ -11,6 +11,7 @@ module Completion = SageFs.Vscode.CompletionProvider
 module HotReload = SageFs.Vscode.HotReloadTreeProvider
 module SessionCtx = SageFs.Vscode.SessionContextTreeProvider
 module LiveTest = SageFs.Vscode.LiveTestingListener
+module TestCtrl = SageFs.Vscode.TestControllerAdapter
 
 open SageFs.Vscode.LiveTestingTypes
 
@@ -26,6 +27,7 @@ let mutable private diagnosticCollection: DiagnosticCollection option = None
 let mutable private blockDecorations: Map<int, TextEditorDecorationType> = Map.empty
 let mutable private activeSessionId: string option = None
 let mutable private liveTestListener: LiveTest.LiveTestingListener option = None
+let mutable private testAdapter: TestCtrl.TestAdapter option = None
 
 // ── JS Interop ─────────────────────────────────────────────────
 
@@ -693,9 +695,12 @@ let activate (context: ExtensionContext) =
   |> Promise.iter (fun running ->
     if running then
       diagnosticsDisposable <- Some (Diag.start c.mcpPort dc)
+      // TestController for VS Code Test Explorer
+      let adapter = TestCtrl.create (fun () -> client)
+      testAdapter <- Some adapter
       // Live testing listener — handles test_summary, test_results_batch, and state events
       let listener = LiveTest.start c.mcpPort {
-        OnStateChange = fun _changes -> ()
+        OnStateChange = fun changes -> adapter.Refresh changes
         OnSummaryUpdate = fun summary -> updateTestStatusBar summary
         OnStatusRefresh = fun () -> refreshStatus ()
       }
@@ -760,4 +765,6 @@ let deactivate () =
   sseDisposable |> Option.iter (fun d -> d.dispose () |> ignore)
   liveTestListener |> Option.iter (fun l -> l.Dispose ())
   liveTestListener <- None
+  testAdapter |> Option.iter (fun a -> a.Dispose ())
+  testAdapter <- None
   clearAllDecorations ()

@@ -390,3 +390,23 @@ let getCompletions (code: string) (cursorPosition: int) (workingDirectory: strin
     with _ ->
       return [||]
   }
+
+let runTests (pattern: string) (c: Client) =
+  promise {
+    try
+      let code =
+        if System.String.IsNullOrWhiteSpace pattern then
+          """Expecto.Tests.runTestsWithCLIArgs [] [||] SageFs.Tests.AllTests.tests;;"""
+        else
+          sprintf """Expecto.Tests.runTestsWithCLIArgs [] [||] (SageFs.Tests.AllTests.tests |> Expecto.Tests.filterTestList "%s" []);;""" pattern
+      let! resp = httpPost c "/exec" (jsonStringify {| code = code; working_directory = "" |}) 60000
+      let parsed = jsonParse resp.body
+      return
+        { success = parsed?success |> unbox<bool>
+          result = Some (parsed?result |> unbox<string>)
+          error =
+            let e = parsed?error
+            if isNull e then None else Some (unbox<string> e) }
+    with err ->
+      return { success = false; result = None; error = Some (string err) }
+  }

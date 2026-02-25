@@ -128,6 +128,72 @@ type [<AllowNullLiteral>] ProgressOptions =
   abstract location: int with get, set
   abstract title: string option with get, set
 
+// ── Testing API ───────────────────────────────────────────────
+
+type [<AllowNullLiteral>] TestItem =
+  abstract id: string
+  abstract label: string with get, set
+  abstract uri: Uri option with get, set
+  abstract range: Range option with get, set
+  abstract children: TestItemCollection
+  abstract canResolveChildren: bool with get, set
+  abstract description: string option with get, set
+  abstract sortText: string option with get, set
+  abstract tags: obj array with get, set
+
+and [<AllowNullLiteral>] TestItemCollection =
+  abstract size: int
+  [<Emit("$0.add($1)")>]
+  abstract add: item: TestItem -> unit
+  [<Emit("$0.delete($1)")>]
+  abstract delete: id: string -> unit
+  [<Emit("$0.get($1)")>]
+  abstract get: id: string -> TestItem option
+  [<Emit("$0.replace($1)")>]
+  abstract replace: items: TestItem array -> unit
+
+type [<AllowNullLiteral>] TestRunRequest =
+  abstract ``include``: TestItem array option
+  abstract exclude: TestItem array option
+
+type [<AllowNullLiteral>] TestRun =
+  abstract token: CancellationToken
+  [<Emit("$0.started($1)")>]
+  abstract started: item: TestItem -> unit
+  [<Emit("$0.passed($1, $2)")>]
+  abstract passed: item: TestItem * duration: float -> unit
+  [<Emit("$0.failed($1, $2, $3)")>]
+  abstract failed: item: TestItem * message: obj * duration: float -> unit
+  [<Emit("$0.skipped($1)")>]
+  abstract skipped: item: TestItem -> unit
+  [<Emit("$0.end()")>]
+  abstract ``end``: unit -> unit
+
+type [<AllowNullLiteral>] TestRunProfile =
+  abstract label: string with get, set
+  abstract isDefault: bool with get, set
+
+type [<AllowNullLiteral>] TestController =
+  abstract id: string
+  abstract label: string with get, set
+  abstract items: TestItemCollection
+  [<Emit("$0.createTestItem($1, $2, $3)")>]
+  abstract createTestItem: id: string * label: string * ?uri: Uri -> TestItem
+  [<Emit("$0.createRunProfile($1, $2, $3, $4)")>]
+  abstract createRunProfile: label: string * kind: int * handler: (TestRunRequest -> CancellationToken -> JS.Promise<unit>) * ?isDefault: bool -> TestRunProfile
+  [<Emit("$0.createTestRun($1)")>]
+  abstract createTestRun: request: TestRunRequest -> TestRun
+  abstract dispose: unit -> unit
+
+[<RequireQualifiedAccess>]
+module TestRunProfileKind =
+  [<Emit("1")>]
+  let Run: int = jsNative
+  [<Emit("2")>]
+  let Debug: int = jsNative
+  [<Emit("3")>]
+  let Coverage: int = jsNative
+
 // ── Enums as Ints ────────────────────────────────────────────────
 
 [<RequireQualifiedAccess>]
@@ -275,6 +341,16 @@ module Languages =
   let private _createDiagnosticCollection (l: obj) (name: string) : DiagnosticCollection = jsNative
   let createDiagnosticCollection (name: string) = _createDiagnosticCollection languagesExports name
 
+// ── Tests API ───────────────────────────────────────────────────
+
+[<Import("tests", "vscode")>]
+let private testsExports: obj = jsNative
+
+module Tests =
+  [<Emit("$0.createTestController($1, $2)")>]
+  let private _createTestController (t: obj) (id: string) (label: string) : TestController = jsNative
+  let createTestController (id: string) (label: string) = _createTestController testsExports id label
+
 // ── Env API ─────────────────────────────────────────────────────
 
 [<Import("env", "vscode")>]
@@ -317,6 +393,10 @@ let uriFile (path: string) = _uriFile vscodeAll path
 [<Emit("new $0.Diagnostic($1, $2, $3)")>]
 let private _newDiagnostic (v: obj) (range: Range) (message: string) (severity: int) : Diagnostic = jsNative
 let newDiagnostic (range: Range) (message: string) (severity: int) = _newDiagnostic vscodeAll range message severity
+
+[<Emit("new $0.TestMessage($1)")>]
+let private _newTestMessage (v: obj) (message: string) : obj = jsNative
+let newTestMessage (message: string) = _newTestMessage vscodeAll message
 
 [<Emit("new $0.CodeLens($1, $2)")>]
 let private _newCodeLens (v: obj) (range: Range) (cmd: obj) : CodeLens = jsNative
