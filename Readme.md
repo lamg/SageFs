@@ -78,7 +78,7 @@ Tests are categorized automatically (Unit, Integration, Browser, Property, Bench
 - [x] **Run policy enforcement** — `filterByPolicy()` integrated into execution paths so unit tests run on keystroke, integration on save, browser on demand
 - [x] **SSE push of test results** — `TestSummaryChanged` and `TestResultsBatch` events streamed to connected HTTP/SSE clients via push notification architecture
 - [x] **MCP live test tools** — `get_live_test_status` (query test state with file filter), `set_run_policy` (control which categories run when), `get_pipeline_trace` (debug the pipeline waterfall)
-- [x] **128+ tests** — Domain model, executor, tree-sitter, instrumentation, Elm integration, and FsCheck property-based tests all passing — including state machine property tests for `TestRunPhase` transitions and debounce semantics
+- [x] **150+ tests** — Domain model, executor, tree-sitter, instrumentation, Elm integration, flaky detection, coverage correlation, and FsCheck property-based tests all passing — including state machine property tests for `TestRunPhase` transitions and debounce semantics
 - [x] **FCS dependency graph** — F# Compiler Service `CheckFileResults` wired via `SymbolGraphBuilder` to build symbol→test dependency maps, with `SymbolDiff` for detecting changes between FCS runs and `FileAnalysisCache` for per-file caching
 - [x] **Three-speed pipeline end-to-end** — Full debounced pipeline: keystroke → tree-sitter (50ms) → FCS with adaptive backoff (300ms, max 2000ms) → affected-test execution. `PipelineDebounce` manages per-stage cancellation tokens, `AdaptiveDebounce` backs off dynamically on FCS cancellations
 - [x] **Source mapping** — `SourceMapping` module bridges tree-sitter source locations (file/line/column) to reflection-discovered tests via function name matching, so gutter markers land on the right line even for Expecto-style hierarchical tests
@@ -86,10 +86,13 @@ Tests are categorized automatically (Unit, Integration, Browser, Property, Bench
 - [x] **`toggle_live_testing` MCP tool** — Enable/disable live testing from any MCP client
 - [x] **Daemon startup guard** — All editor plugins (VS Code, Visual Studio, CLI, Raylib GUI) now check for an already-running daemon via HTTP probe before spawning a new instance, preventing duplicate daemons
 
+- [x] **Neovim live testing & coverage** — Full sagefs.nvim integration: test gutter signs, test panel, coverage gutter signs, coverage panel, pipeline trace, test policy controls, statusline — 23 modules, 669 tests
+- [x] **Flaky test detection** — `ResultWindow` sliding window, `TestStability` DU (Stable/Flaky/Insufficient), `FlakyDetection.outcomeOf`, `GutterIcon.TestFlaky` — property-based tested
+- [x] **Per-test coverage correlation** — `CoverageCorrelation.testsForSymbol` and `testsForLine` chain FCS dependency graph → enriched test info, answering "which tests cover this line?"
+
 **What's next:**
 
 - [ ] **VS Code gutter markers** — DecorationProvider and TestController integration in the VS Code extension (`LineAnnotation` data ready, UI not yet connected)
-- [ ] **Neovim gutter markers** — Extmark signs and virtual text for test status in sagefs.nvim
 - [ ] **Raylib GUI gutter rendering** — Gutter icons in the GPU-rendered GUI frontend
 - [ ] **Visual Studio gutter markers** — Margin glyphs via the VS Extensibility SDK
 
@@ -212,7 +215,7 @@ code --install-extension sagefs-*.vsix
 
 ### Neovim Plugin
 
-[**sagefs.nvim**](https://github.com/WillEhrendreich/sagefs.nvim) gives you the same experience in Neovim — **Alt+Enter** to evaluate `;;`-delimited cells, inline results via extmarks, gutter signs, SSE live updates, and session management.
+[**sagefs.nvim**](https://github.com/WillEhrendreich/sagefs.nvim) is a full-featured Neovim frontend — **23 Lua modules, 669 tests, zero failures.** Pure Lua core (testable with busted outside Neovim) plus a thin integration layer for vim APIs.
 
 ```lua
 -- lazy.nvim
@@ -223,7 +226,35 @@ code --install-extension sagefs-*.vsix
 }
 ```
 
-The plugin auto-connects to the running daemon, shows eval results as virtual text below your code, and marks cells with ✓/✖/⏳ gutter signs. See the [sagefs.nvim README](https://github.com/WillEhrendreich/sagefs.nvim) for full setup and keybindings.
+**What you get:**
+
+- **Alt+Enter** — Evaluate the `;;`-delimited cell under cursor. **Shift+Alt+Enter** — Evaluate and advance to next cell. Visual mode evaluation too.
+- **Inline results** — Success/error output as virtual text at the `;;` boundary, multi-line output rendered below
+- **Gutter signs** — ✓/✖/⏳ indicators for cell state, plus flash animation when evaluation starts
+- **Stale detection** — Editing a cell automatically marks its result as stale
+- **CodeLens-style markers** — "▶ Eval" virtual text above idle/stale cells
+- **SSE live updates** — Subscribes to the SageFs event stream with exponential backoff reconnect (1s→32s). Full state recovery on reconnect.
+- **Live diagnostics** — F# errors/warnings streamed via SSE into `vim.diagnostic`
+- **Check on save** — `BufWritePost` sends `.fsx` file content for type-checking (configurable)
+- **Live test gutter signs** — Pass/fail/running/stale signs per test in the sign column
+- **Live test panel** — `:SageFsTestPanel` for a persistent split with test results, `<CR>` to jump to source
+- **Tests for current file** — `:SageFsTestsHere` shows tests covering the file you're editing
+- **Test policy controls** — `:SageFsTestPolicy` for category+policy drill-down
+- **Pipeline trace** — `:SageFsPipelineTrace` shows the three-speed pipeline state
+- **Coverage gutter signs** — Green=covered, Red=uncovered per-line signs from FCS symbol graph
+- **Coverage panel** — `:SageFsCoverage` with per-file breakdown and totals
+- **Type explorer** — `:SageFsTypeExplorer` for assembly→namespace→type→members drill-down, or `:SageFsTypeExplorerFlat` for fuzzy pick
+- **Session management** — Create, switch, stop, reset sessions via picker
+- **Hot reload controls** — Per-file toggle, watch-all, unwatch-all
+- **Daemon lifecycle** — `:SageFsStart`/`:SageFsStop` to manage the daemon from Neovim
+- **Status dashboard** — `:SageFsStatus` with daemon, session, tests, coverage, and config
+- **History browser** — `:SageFsHistory` with preview of past evaluations
+- **Export to .fsx** — `:SageFsExport` exports session history as executable F# script
+- **Call graph** — `:SageFsCallers`/`:SageFsCallees` for symbol dependency navigation
+- **Code completion** — Omnifunc-based completions via SageFs completion endpoint
+- **Combined statusline** — `require("sagefs").statusline()` → session │ testing │ coverage │ daemon
+
+33 commands, 9 user autocmd events, and full parity with VS Code features. See the [sagefs.nvim README](https://github.com/WillEhrendreich/sagefs.nvim) for full setup, keybindings, and architecture details.
 
 ### Visual Studio Extension
 
@@ -374,9 +405,21 @@ Already running at `http://localhost:37750/dashboard`. Submit code, view session
 | CodeLens | n/a¹ | n/a¹ | n/a¹ | ✅ | ✅ | ✅ |
 | Project discovery | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Session resume | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Live test gutter signs | ✅ | —³ | — | —³ | —³ | ✅ |
+| Test panel / results | — | — | — | — | — | ✅ |
+| Coverage gutter signs | ✅ | —³ | — | —³ | —³ | ✅ |
+| Coverage panel | — | — | — | — | — | ✅ |
+| Test policy controls | — | — | — | — | — | ✅ |
+| Pipeline trace | — | — | — | — | — | ✅ |
+| Type explorer | — | — | — | — | — | ✅ |
+| Call graph | — | — | — | — | — | ✅ |
+| History browser | — | — | — | — | — | ✅ |
+| Daemon lifecycle | ✅ | — | — | ✅ | — | ✅ |
+| Status dashboard | — | — | ✅ | — | — | ✅ |
 
 > ¹ **n/a** — Feature is architecturally inapplicable. TUI/Raylib are REPL interfaces (eval file = just type code); CodeLens requires an editor with source buffers.
 > ² **—** — VS Extensibility SDK (out-of-process, v17.14) does not yet expose completion provider or theme color contribution APIs. The HTTP client (`GetCompletionsAsync`) is implemented; UI integration awaits SDK support.
+> ³ Server-side data is ready (`LineAnnotation`, SSE events). Editor UI integration pending.
 
 ---
 
