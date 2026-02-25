@@ -550,6 +550,41 @@ Run [Expecto](https://github.com/haf/expecto) tests directly inside SageFs — n
 
 ## CLI Reference
 
+```
+SageFs - F# Interactive daemon with MCP, hot reloading, and live dashboard
+
+Usage: SageFs [options]                Start daemon (default mode)
+       SageFs --supervised [options]   Start with watchdog auto-restart
+       SageFs connect                  Connect to running daemon
+       SageFs stop                     Stop running daemon
+       SageFs status                   Show daemon info
+       SageFs worker [options]         Internal: worker process
+
+Options:
+  --version, -v          Show version information
+  --help, -h             Show this help message
+  --mcp-port PORT        Set custom MCP server port (default: 37749)
+  --supervised           Run under watchdog supervisor (auto-restart on crash)
+  --bare                 Start a bare FSI session — no project/solution loading
+  --no-watch             Disable file watching — no automatic #load on changes
+  --no-resume            Skip restoring previous sessions on daemon startup
+  --prune                Mark all stale sessions as stopped and exit
+  --proj FILE            Load project from .fsproj file
+  --sln FILE             Load all projects from solution file
+  --dir DIR              Set working directory
+  --reference:FILE       Reference a .NET assembly
+  --load:FILE            Load and compile an F# source file at startup
+  --use:FILE             Use a file for initial input/prompt config
+  --lib DIR [DIR...]     Directories to search for referenced assemblies
+  --other ARGS...        Pass remaining arguments to FSI
+
+Environment Variables:
+  SageFs_MCP_PORT        Override MCP server port (same as --mcp-port)
+  SAGEFS_BIND_HOST       Bind address (default: localhost, use 0.0.0.0 for Docker)
+```
+
+**Examples:**
+
 ```bash
 # Start daemon (default)
 sagefs                           # Auto-detect project
@@ -569,11 +604,11 @@ sagefs status                    # Show daemon info
 # Production / long-running
 sagefs --supervised              # Auto-restart on crash
 
-# Options
+# Advanced
 sagefs --mcp-port 8080           # Custom MCP port
 sagefs --no-watch                # Disable file watcher
-sagefs --use script.fsx          # Run script on startup
-sagefs --help                    # All options
+sagefs --use:script.fsx          # Run script on startup
+sagefs --reference:Lib.dll       # Reference an assembly
 ```
 
 ---
@@ -607,6 +642,8 @@ SageFs auto-loads `~/.SageFs/init.fsx` on session start, if it exists. Use it fo
 **Build errors after code changes** — If you changed `.fs` files and the REPL seems stale, run `hard_reset_fsi_session` (via MCP) or `#hard-reset` (in the REPL). This rebuilds and reloads. Note: file watching handles most cases automatically — you shouldn't need manual resets often.
 
 **Port already in use** — Another SageFs instance is running. Use `sagefs stop` or `sagefs --mcp-port 8080`.
+
+**Running in Docker** — Set `SAGEFS_BIND_HOST=0.0.0.0` so the daemon listens on all interfaces (required for container port mapping). The default `localhost` only binds to the loopback interface.
 
 **Hot reload not working** — Make sure your app uses `SageFs.DevReloadMiddleware` for browser auto-refresh. Check the SageFs console for 🔥 or 📄 messages confirming file changes are detected.
 
@@ -689,6 +726,8 @@ dotnet run --project SageFs.Tests
 dotnet run --project SageFs.Tests -- --filter "Snapshot"
 dotnet run --project SageFs.Tests -- --filter "Hot Reload"
 ```
+
+The test suite includes **3700+ tests**: unit tests, FsCheck property-based tests, snapshot tests (Verify), state machine property tests, and Docker-based integration tests via [Testcontainers](https://dotnet.testcontainers.org/).
 
 </details>
 
