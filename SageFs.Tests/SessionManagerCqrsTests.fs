@@ -269,10 +269,68 @@ let querySnapshotTests = testList "QuerySnapshot projection" [
   }
 ]
 
+// ── Warmup progress tests ─────────────────────────────────────
+
+let warmupProgressTests = testList "Warmup progress in QuerySnapshot" [
+  test "fromManagerState propagates warmup progress" {
+    let state = {
+      ManagerState.empty with
+        WarmupProgress = Map.ofList [ "s1", "2/4 Scanned 12 files" ]
+    }
+    let snap = QuerySnapshot.fromManagerState state
+    snap.WarmupProgress
+    |> Map.tryFind "s1"
+    |> Expect.isSome "should have warmup progress for s1"
+  }
+
+  test "empty state has no warmup progress" {
+    let snap = QuerySnapshot.fromManagerState ManagerState.empty
+    snap.WarmupProgress
+    |> Map.isEmpty
+    |> Expect.isTrue "should be empty"
+  }
+
+  test "warmup progress cleared when session removed" {
+    let state = {
+      ManagerState.empty with
+        WarmupProgress = Map.ofList [ "s1", "2/4 Scanned 12 files" ]
+    }
+    let afterRemove = ManagerState.removeSession "s1" state
+    let snap = QuerySnapshot.fromManagerState afterRemove
+    snap.WarmupProgress
+    |> Map.containsKey "s1"
+    |> Expect.isFalse "should not have warmup progress after session removed"
+  }
+
+  test "warmup progress for multiple sessions" {
+    let state = {
+      ManagerState.empty with
+        WarmupProgress = Map.ofList [
+          "s1", "1/4 FSI session created"
+          "s2", "3/4 Opening namespaces"
+        ]
+    }
+    let snap = QuerySnapshot.fromManagerState state
+    snap.WarmupProgress |> Map.count
+    |> Expect.equal "should have 2 entries" 2
+    snap.WarmupProgress |> Map.find "s1"
+    |> Expect.equal "s1 progress" "1/4 FSI session created"
+    snap.WarmupProgress |> Map.find "s2"
+    |> Expect.equal "s2 progress" "3/4 Opening namespaces"
+  }
+
+  test "QuerySnapshot.empty has no warmup progress" {
+    QuerySnapshot.empty.WarmupProgress
+    |> Map.isEmpty
+    |> Expect.isTrue "empty snapshot should have no warmup progress"
+  }
+]
+
 // ── Combined test list ───────────────────────────────────────
 
 [<Tests>]
 let allCqrsTests = testList "SessionManager CQRS" [
   cqrsPatternTests
   querySnapshotTests
+  warmupProgressTests
 ]

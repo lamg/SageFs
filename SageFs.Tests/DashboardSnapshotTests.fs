@@ -19,12 +19,12 @@ let verifyDashboard (name: string) (html: string) =
 
 let dashboardRenderSnapshotTests = testList "Dashboard render snapshots" [
   testTask "renderSessionStatus ready" {
-    let html = renderSessionStatus "Ready" "session-abc" "/home/user/project" |> renderNode
+    let html = renderSessionStatus "Ready" "session-abc" "/home/user/project" "" |> renderNode
     do! verifyDashboard "dashboard_sessionStatus_ready" html
   }
 
   testTask "renderSessionStatus warming" {
-    let html = renderSessionStatus "WarmingUp" "session-def" "/home/user/project" |> renderNode
+    let html = renderSessionStatus "WarmingUp" "session-def" "/home/user/project" "" |> renderNode
     do! verifyDashboard "dashboard_sessionStatus_warming" html
   }
 
@@ -156,8 +156,13 @@ let edgeCaseSnapshotTests = testList "edge case snapshots" [
   }
 
   testTask "renderSessionStatus faulted" {
-    let html = renderSessionStatus "Faulted" "session-err" @"C:\broken" |> renderNode
+    let html = renderSessionStatus "Faulted" "session-err" @"C:\broken" "" |> renderNode
     do! verifyDashboard "dashboard_sessionStatus_faulted" html
+  }
+
+  testTask "renderSessionStatus warming with progress" {
+    let html = renderSessionStatus "WarmingUp" "session-warm" "/home/user/project" "2/4 Scanned 12 source files" |> renderNode
+    do! verifyDashboard "dashboard_sessionStatus_warmingWithProgress" html
   }
 
   testTask "renderOutput single result line" {

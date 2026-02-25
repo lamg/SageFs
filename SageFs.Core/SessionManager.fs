@@ -52,6 +52,7 @@ module SessionManager =
     | StandbySpawnFailed of StandbyKey * workerPid: int * string
     | StandbyExited of StandbyKey * workerPid: int
     | StandbyProgress of StandbyKey * progress: string
+    | WorkerWarmupProgress of SessionId * progress: string
     | InvalidateStandbys of workingDir: string
     | GetStandbyInfo of AsyncReplyChannel<StandbyInfo>
 
@@ -59,6 +60,9 @@ module SessionManager =
     Sessions: Map<SessionId, ManagedSession>
     RestartPolicy: RestartPolicy.Policy
     Pool: PoolState
+    /// Per-session warmup progress from worker stdout (e.g., "2/4 Scanned 12 files").
+    /// Cleared when WorkerReady is received or session is removed.
+    WarmupProgress: Map<SessionId, string>
   }
 
   module ManagerState =
@@ -66,13 +70,16 @@ module SessionManager =
       Sessions = Map.empty
       RestartPolicy = RestartPolicy.defaultPolicy
       Pool = PoolState.empty
+      WarmupProgress = Map.empty
     }
 
     let addSession id session state =
       { state with Sessions = Map.add id session state.Sessions }
 
     let removeSession id state =
-      { state with Sessions = Map.remove id state.Sessions }
+      { state with
+          Sessions = Map.remove id state.Sessions
+          WarmupProgress = Map.remove id state.WarmupProgress }
 
     let tryGetSession id state =
       Map.tryFind id state.Sessions
@@ -87,6 +94,8 @@ module SessionManager =
   type QuerySnapshot = {
     Sessions: Map<SessionId, SessionInfo>
     StandbyInfo: StandbyInfo
+    /// Per-session warmup progress (e.g., "2/4 Scanned 12 files").
+    WarmupProgress: Map<SessionId, string>
   }
 
   /// Compute standby info from pool state (pure function).
@@ -112,7 +121,7 @@ module SessionManager =
       let sessions =
         state.Sessions
         |> Map.map (fun _id ms -> ms.Info)
-      { Sessions = sessions; StandbyInfo = standby }
+      { Sessions = sessions; StandbyInfo = standby; WarmupProgress = state.WarmupProgress }
 
     /// Project a snapshot directly from ManagerState (computes standby info).
     let fromManagerState (state: ManagerState) : QuerySnapshot =
@@ -124,7 +133,7 @@ module SessionManager =
     let allSessions (snap: QuerySnapshot) : SessionInfo list =
       snap.Sessions |> Map.toList |> List.map snd
 
-    let empty = { Sessions = Map.empty; StandbyInfo = StandbyInfo.NoPool }
+    let empty = { Sessions = Map.empty; StandbyInfo = StandbyInfo.NoPool; WarmupProgress = Map.empty }
 
   /// A proxy that rejects calls while the worker is still starting up.
   let pendingProxy : SessionProxy =
@@ -184,6 +193,9 @@ module SessionManager =
           let! line = proc.StandardOutput.ReadLineAsync(ct).AsTask() |> Async.AwaitTask
           if isNull line then
             failwith "Worker process exited before reporting port"
+          elif line.StartsWith("WARMUP_PROGRESS=", System.StringComparison.Ordinal) then
+            let payload = line.Substring("WARMUP_PROGRESS=".Length)
+            inbox.Post(SessionCommand.WorkerWarmupProgress(sessionId, payload))
           elif line.StartsWith("WORKER_PORT=", System.StringComparison.Ordinal) then
             found <- Some (line.Substring("WORKER_PORT=".Length))
         match found with
@@ -518,11 +530,14 @@ module SessionManager =
           | Some session ->
             let updated =
               { session with Proxy = proxy; WorkerBaseUrl = baseUrl }
-            let newState = ManagerState.addSession id updated state
+            let newState =
+              { ManagerState.addSession id updated state with
+                  WarmupProgress = Map.remove id state.WarmupProgress }
             // Trigger standby warmup for this session's config
             let key = StandbyKey.fromSession session.Projects session.WorkingDir
             if state.Pool.Enabled && PoolState.getStandby key state.Pool |> Option.isNone then
               inbox.Post(SessionCommand.WarmStandby key)
+            onStandbyProgressChanged ()
             return! loop newState
           | None ->
             // Session was stopped before port discovery completed — ignore
@@ -693,6 +708,12 @@ module SessionManager =
             return! loop { state with Pool = newPool }
           | _ ->
             return! loop state
+
+        | SessionCommand.WorkerWarmupProgress(id, progress) ->
+          let newState =
+            { state with WarmupProgress = Map.add id progress state.WarmupProgress }
+          onStandbyProgressChanged ()
+          return! loop newState
 
         | SessionCommand.InvalidateStandbys workingDir ->
           // Kill and remove standbys matching this working dir

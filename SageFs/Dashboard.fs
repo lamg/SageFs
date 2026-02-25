@@ -593,15 +593,23 @@ let renderShell (version: string) =
   ]
 
 /// Render session status as an HTML fragment for Datastar morphing.
-let renderSessionStatus (sessionState: string) (sessionId: string) (workingDir: string) =
+let renderSessionStatus (sessionState: string) (sessionId: string) (workingDir: string) (warmupProgress: string) =
+  let warmupNode =
+    if warmupProgress.Length > 0 then
+      [ Elem.br []
+        Elem.span [ Attr.class' "meta warmup-progress" ] [
+          Text.raw (sprintf "⏳ %s" warmupProgress)
+        ] ]
+    else []
   match sessionState with
   | "Ready" ->
     Elem.div [ Attr.id "session-status"; Attr.create "data-working-dir" workingDir ] [
-      Elem.span [ Attr.class' "status status-ready" ] [ Text.raw sessionState ]
-      Elem.br []
-      Elem.span [ Attr.class' "meta" ] [
+      yield Elem.span [ Attr.class' "status status-ready" ] [ Text.raw sessionState ]
+      yield Elem.br []
+      yield Elem.span [ Attr.class' "meta" ] [
         Text.raw (sprintf "Session: %s | CWD: %s" sessionId workingDir)
       ]
+      yield! warmupNode
     ]
   | _ ->
     let statusClass =
@@ -609,11 +617,12 @@ let renderSessionStatus (sessionState: string) (sessionId: string) (workingDir: 
       | "WarmingUp" -> "status-warming"
       | _ -> "status-faulted"
     Elem.div [ Attr.id "session-status"; Attr.create "data-working-dir" workingDir ] [
-      Elem.span [ Attr.class' (sprintf "status %s" statusClass) ] [ Text.raw sessionState ]
-      Elem.br []
-      Elem.span [ Attr.class' "meta" ] [
+      yield Elem.span [ Attr.class' (sprintf "status %s" statusClass) ] [ Text.raw sessionState ]
+      yield Elem.br []
+      yield Elem.span [ Attr.class' "meta" ] [
         Text.raw (sprintf "Session: %s | CWD: %s" sessionId workingDir)
       ]
+      yield! warmupNode
     ]
 
 /// Render eval stats as an HTML fragment.
@@ -1294,6 +1303,7 @@ let createStreamHandler
   (getStandbyInfo: unit -> Threading.Tasks.Task<StandbyInfo>)
   (getHotReloadState: string -> Threading.Tasks.Task<{| files: {| path: string; watched: bool |} list; watchedCount: int |} option>)
   (getWarmupContext: string -> Threading.Tasks.Task<WarmupContext option>)
+  (getWarmupProgress: string -> string)
   : HttpHandler =
   fun ctx -> task {
     Response.sseStartResponse ctx |> ignore
@@ -1325,7 +1335,7 @@ let createStreamHandler
         else 0.0
       let isReady = stateStr = "Ready"
       do! ssePatchNode ctx (
-        renderSessionStatus stateStr currentSessionId workingDir)
+        renderSessionStatus stateStr currentSessionId workingDir (getWarmupProgress currentSessionId))
       // Push theme when session or working dir changes
       match resolveThemePush sessionThemes currentSessionId workingDir lastSessionId lastWorkingDir with
       | Some themeName ->
@@ -2049,10 +2059,11 @@ let createEndpoints
   (getWarmupContext: string -> Threading.Tasks.Task<WarmupContext option>)
   (getCompletions: (string -> string -> int -> Threading.Tasks.Task<Features.AutoCompletion.CompletionItem list>) option)
   (getLiveTestingStatus: unit -> string)
+  (getWarmupProgress: string -> string)
   : HttpEndpoint list =
   [
     yield get "/dashboard" (FalcoResponse.ofHtml (renderShell version))
-    yield get "/dashboard/stream" (createStreamHandler getSessionState getStatusMsg getEvalStats getSessionWorkingDir getActiveSessionId getElmRegions stateChanged connectionTracker getPreviousSessions getAllSessions sessionThemes getStandbyInfo getHotReloadState getWarmupContext)
+    yield get "/dashboard/stream" (createStreamHandler getSessionState getStatusMsg getEvalStats getSessionWorkingDir getActiveSessionId getElmRegions stateChanged connectionTracker getPreviousSessions getAllSessions sessionThemes getStandbyInfo getHotReloadState getWarmupContext getWarmupProgress)
     yield post "/dashboard/eval" (createEvalHandler evalCode)
     yield post "/dashboard/eval-file" (createEvalFileHandler evalCode)
     match getCompletions with

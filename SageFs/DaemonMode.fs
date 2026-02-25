@@ -430,7 +430,12 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
   let getStatusMsg (sid: string) =
     match tryGetSessionSnapshot sid with
     | Some snap -> snap.StatusMessage
-    | None -> None
+    | None ->
+      // Fall back to warmup progress from CQRS snapshot (available before proxy)
+      let snapshot = readSnapshot()
+      match Map.tryFind sid snapshot.WarmupProgress with
+      | Some progress -> Some progress
+      | None -> None
 
   let getWorkerBaseUrl (sid: string) =
     try
@@ -647,6 +652,12 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
       (fun () ->
         let model = elmRuntime.GetModel()
         SageFs.Features.LiveTesting.LiveTestPipelineState.liveTestingStatusBar model.LiveTesting)
+      // Warmup progress from CQRS snapshot
+      (fun sessionId ->
+        let snapshot = readSnapshot()
+        match Map.tryFind sessionId snapshot.WarmupProgress with
+        | Some progress -> progress
+        | None -> "")
 
   // Hot-reload proxy endpoints — forward to worker HTTP servers
   let hotReloadHttpClient = new Net.Http.HttpClient()
