@@ -607,6 +607,62 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     newModel.Sessions.Sessions
     |> List.filter (fun s -> s.IsActive)
     |> Expect.hasLength "only s3 active" 1
+
+  testCase "ToggleLiveTesting activating with discovered tests emits RunAffectedTests" <| fun _ ->
+    let tc : Features.LiveTesting.TestCase =
+      { Id = Features.LiveTesting.TestId.create "MyModule.test1" "expecto"
+        FullName = "MyModule.test1"; DisplayName = "test1"
+        Origin = Features.LiveTesting.TestOrigin.ReflectionOnly
+        Labels = []; Framework = "expecto"
+        Category = Features.LiveTesting.TestCategory.Unit }
+    let model =
+      { SageFsModel.initial with
+          LiveTesting =
+            { SageFsModel.initial.LiveTesting with
+                TestState =
+                  { SageFsModel.initial.LiveTesting.TestState with
+                      Activation = Features.LiveTesting.LiveTestingActivation.Inactive
+                      DiscoveredTests = [| tc |] } } }
+    let newModel, effects =
+      SageFsUpdate.update SageFsMsg.ToggleLiveTesting model
+    newModel.LiveTesting.TestState.Activation
+    |> Expect.equal "should be active" Features.LiveTesting.LiveTestingActivation.Active
+    effects |> Expect.isNonEmpty "should emit effects when activating with tests"
+    effects
+    |> List.exists (fun e ->
+      match e with
+      | SageFsEffect.Pipeline (Features.LiveTesting.PipelineEffect.RunAffectedTests _) -> true
+      | _ -> false)
+    |> Expect.isTrue "should contain RunAffectedTests effect"
+
+  testCase "ToggleLiveTesting activating with no tests emits no effects" <| fun _ ->
+    let model =
+      { SageFsModel.initial with
+          LiveTesting =
+            { SageFsModel.initial.LiveTesting with
+                TestState =
+                  { SageFsModel.initial.LiveTesting.TestState with
+                      Activation = Features.LiveTesting.LiveTestingActivation.Inactive
+                      DiscoveredTests = [||] } } }
+    let newModel, effects =
+      SageFsUpdate.update SageFsMsg.ToggleLiveTesting model
+    newModel.LiveTesting.TestState.Activation
+    |> Expect.equal "should be active" Features.LiveTesting.LiveTestingActivation.Active
+    effects |> Expect.isEmpty "no effects when no tests discovered"
+
+  testCase "ToggleLiveTesting deactivating emits no effects" <| fun _ ->
+    let model =
+      { SageFsModel.initial with
+          LiveTesting =
+            { SageFsModel.initial.LiveTesting with
+                TestState =
+                  { SageFsModel.initial.LiveTesting.TestState with
+                      Activation = Features.LiveTesting.LiveTestingActivation.Active } } }
+    let newModel, effects =
+      SageFsUpdate.update SageFsMsg.ToggleLiveTesting model
+    newModel.LiveTesting.TestState.Activation
+    |> Expect.equal "should be inactive" Features.LiveTesting.LiveTestingActivation.Inactive
+    effects |> Expect.isEmpty "no effects when deactivating"
 ]
 
 [<Tests>]
