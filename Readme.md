@@ -169,16 +169,23 @@ SageFs is a daemon — one server, many clients. Start it once, connect from any
 
 ### VS Code Extension
 
-The **SageFs extension** turns VS Code into a live F# development environment with inline eval results, real-time diagnostics, hot reload controls, and session management — all powered by the running SageFs daemon.
+The **SageFs extension** turns VS Code into a live F# development environment with inline eval results, real-time diagnostics, hot reload controls, live unit testing with inline pass/fail markers, and session management — all powered by the running SageFs daemon.
 
 **What you get:**
 
 - **Alt+Enter** — Evaluate the current selection or `;;`-delimited code block. Results appear as inline decorations right next to your code.
 - **Alt+Shift+Enter** — Evaluate the entire file
-- **CodeLens** — Clickable "▶ Eval" buttons above every `;;` block
+- **CodeLens** — Clickable "▶ Eval" buttons above every `;;` block, plus live test result CodeLens (✓ Passed / ✗ Failed) above test functions
+- **Live test decorations** — Inline ✓/✗/● markers on test lines, updated in real-time via SSE. Failed tests also appear as native VS Code diagnostics (squiggles).
+- **Native Test Explorer** — Tests appear in VS Code's built-in Test Explorer panel via a `TestController` adapter, with pass/fail status synced from the daemon
 - **Live diagnostics** — Type errors and warnings stream in via SSE as you edit, appearing as native VS Code squiggles
 - **Hot Reload sidebar** — A tree view in the activity bar showing all project files with watch toggles. Toggle individual files, directories, or watch/unwatch everything at once.
 - **Session Context sidebar** — See loaded assemblies, opened namespaces, failed opens, and warmup details for the active session
+- **Type Explorer sidebar** — Browse .NET types and namespaces interactively from the activity bar
+- **Test policy controls** — Toggle live testing, run all tests, or configure run policies (unit on keystroke, integration on save, browser on demand) from the command palette
+- **Call graph viewer** — Visualize test dependency graphs via `sagefs.showCallGraph`
+- **Event history** — Browse recent pipeline events via `sagefs.showHistory` QuickPick
+- **Dashboard webview** — Open the SageFs dashboard directly inside VS Code as a webview panel
 - **Status bar** — Shows the active project, eval count, supervised status, and restart count. Click it to open the web dashboard.
 - **Multi-session support** — Create, switch, and manage multiple sessions from the command palette
 - **Auto-start** — Detects `.fsproj`/`.sln`/`.slnx` files and offers to start SageFs automatically
