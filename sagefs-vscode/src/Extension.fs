@@ -10,17 +10,22 @@ module Lens = SageFs.Vscode.CodeLensProvider
 module Completion = SageFs.Vscode.CompletionProvider
 module HotReload = SageFs.Vscode.HotReloadTreeProvider
 module SessionCtx = SageFs.Vscode.SessionContextTreeProvider
+module LiveTest = SageFs.Vscode.LiveTestingListener
+
+open SageFs.Vscode.LiveTestingTypes
 
 // ── Mutable state ──────────────────────────────────────────────
 
 let mutable private client: Client.Client option = None
 let mutable private outputChannel: OutputChannel option = None
 let mutable private statusBarItem: StatusBarItem option = None
+let mutable private testStatusBarItem: StatusBarItem option = None
 let mutable private diagnosticsDisposable: Disposable option = None
 let mutable private sseDisposable: Disposable option = None
 let mutable private diagnosticCollection: DiagnosticCollection option = None
 let mutable private blockDecorations: Map<int, TextEditorDecorationType> = Map.empty
 let mutable private activeSessionId: string option = None
+let mutable private liveTestListener: LiveTest.LiveTestingListener option = None
 
 // ── JS Interop ─────────────────────────────────────────────────
 
@@ -59,35 +64,6 @@ let private setTimeout (fn: unit -> unit) (ms: int) : obj = jsNative
 
 [<Emit("new Promise(resolve => setTimeout(resolve, $0))")>]
 let private sleep (ms: int) : JS.Promise<unit> = jsNative
-
-[<Emit("""(() => {
-  const http = require('http');
-  let req;
-  let buffer = '';
-  let retryDelay = 1000;
-  const maxDelay = 30000;
-  const startListening = () => {
-    req = http.get($0, { timeout: 0 }, (res) => {
-      retryDelay = 1000;
-      res.on('data', (chunk) => {
-        buffer += chunk.toString();
-        let lines = buffer.split('\\n');
-        buffer = lines.pop() || '';
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            try { $1(JSON.parse(line.slice(6))); } catch (_) {}
-          }
-        }
-      });
-      res.on('end', () => { setTimeout(startListening, retryDelay); retryDelay = Math.min(retryDelay * 2, maxDelay); });
-      res.on('error', () => { setTimeout(startListening, retryDelay); retryDelay = Math.min(retryDelay * 2, maxDelay); });
-    });
-    req.on('error', () => { setTimeout(startListening, retryDelay); retryDelay = Math.min(retryDelay * 2, maxDelay); });
-  };
-  startListening();
-  return { dispose: () => { if (req) req.destroy(); } };
-})()""")>]
-let private subscribeSse (url: string) (onData: obj -> unit) : Disposable = jsNative
 
 let mutable private daemonProcess: obj option = None
 
@@ -218,6 +194,27 @@ let private showInlineDiagnostic (editor: TextEditor) (text: string) =
   setTimeout (fun () -> clearBlockDecoration line) 30000 |> ignore
 
 // ── Status ─────────────────────────────────────────────────────
+
+let updateTestStatusBar (summary: VscTestSummary) =
+  match testStatusBarItem with
+  | None -> ()
+  | Some sb ->
+    if summary.Total = 0 then
+      sb.text <- "$(beaker) No tests"
+      sb.backgroundColor <- None
+    elif summary.Failed > 0 then
+      sb.text <- sprintf "$(testing-error-icon) %d/%d failed" summary.Failed summary.Total
+      sb.backgroundColor <- Some (newThemeColor "statusBarItem.errorBackground")
+    elif summary.Running > 0 then
+      sb.text <- sprintf "$(sync~spin) Running %d/%d" summary.Running summary.Total
+      sb.backgroundColor <- None
+    elif summary.Stale > 0 then
+      sb.text <- sprintf "$(warning) %d/%d stale" summary.Stale summary.Total
+      sb.backgroundColor <- Some (newThemeColor "statusBarItem.warningBackground")
+    else
+      sb.text <- sprintf "$(testing-passed-icon) %d/%d passed" summary.Passed summary.Total
+      sb.backgroundColor <- None
+    sb.show ()
 
 let private refreshStatus () =
   promise {
@@ -639,6 +636,12 @@ let activate (context: ExtensionContext) =
   statusBarItem <- Some sb
   context.subscriptions.Add (sb :> obj :?> Disposable)
 
+  let tsb = Window.createStatusBarItem StatusBarAlignment.Left 49.
+  tsb.text <- "$(beaker) No tests"
+  tsb.tooltip <- Some "SageFs live testing"
+  testStatusBarItem <- Some tsb
+  context.subscriptions.Add (tsb :> obj :?> Disposable)
+
   let dc = Languages.createDiagnosticCollection "sagefs"
   diagnosticCollection <- Some dc
   context.subscriptions.Add (dc :> obj :?> Disposable)
@@ -690,11 +693,16 @@ let activate (context: ExtensionContext) =
   |> Promise.iter (fun running ->
     if running then
       diagnosticsDisposable <- Some (Diag.start c.mcpPort dc)
-      // SSE live state updates — triggers instant status bar refresh
-      let eventsUrl = sprintf "http://localhost:%d/events" c.mcpPort
-      let sseD = subscribeSse eventsUrl (fun _data -> refreshStatus ())
-      sseDisposable <- Some sseD
-      context.subscriptions.Add sseD
+      // Live testing listener — handles test_summary, test_results_batch, and state events
+      let listener = LiveTest.start c.mcpPort {
+        OnStateChange = fun _changes -> ()
+        OnSummaryUpdate = fun summary -> updateTestStatusBar summary
+        OnStatusRefresh = fun () -> refreshStatus ()
+      }
+      liveTestListener <- Some listener
+      sseDisposable <- Some {
+        new Disposable with member _.dispose () = listener.Dispose(); null
+      }
       // Auto-discover and create session if none exists
       Client.listSessions c
       |> Promise.iter (fun sessions ->
@@ -750,4 +758,6 @@ let activate (context: ExtensionContext) =
 let deactivate () =
   diagnosticsDisposable |> Option.iter (fun d -> d.dispose () |> ignore)
   sseDisposable |> Option.iter (fun d -> d.dispose () |> ignore)
+  liveTestListener |> Option.iter (fun l -> l.Dispose ())
+  liveTestListener <- None
   clearAllDecorations ()
