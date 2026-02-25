@@ -24,5 +24,6 @@
   "SageFs.ShowRecentEvents.DisplayName": "SageFs: Show Recent Events",
   "SageFs.TestCodeLens.DisplayName": "SageFs Live Tests",
   "SageFs.ShowLiveTesting.DisplayName": "SageFs: Live Testing Dashboard",
-  "SageFs.ShowTypeExplorer.DisplayName": "SageFs: Type Explorer"
+  "SageFs.ShowTypeExplorer.DisplayName": "SageFs: Type Explorer",
+  "SageFs.ShowHotReload.DisplayName": "SageFs: Hot Reload Files"
 }
