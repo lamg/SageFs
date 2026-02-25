@@ -467,3 +467,15 @@ let explore (name: string) (c: Client) =
     with _ ->
       return None
   }
+
+let getRecentEvents (count: int) (c: Client) =
+  promise {
+    try
+      let! resp = httpGet c (sprintf "/api/recent-events?count=%d" count) 10000
+      if resp.statusCode = 200 then
+        return Some resp.body
+      else
+        return None
+    with _ ->
+      return None
+  }

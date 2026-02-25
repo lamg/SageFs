@@ -14,6 +14,7 @@ module LiveTest = SageFs.Vscode.LiveTestingListener
 module TestCtrl = SageFs.Vscode.TestControllerAdapter
 module TypeExpl = SageFs.Vscode.TypeExplorerProvider
 module TestDeco = SageFs.Vscode.TestDecorations
+module TestLens = SageFs.Vscode.TestCodeLensProvider
 
 open SageFs.Vscode.LiveTestingTypes
 
@@ -739,10 +740,27 @@ let activate (context: ExtensionContext) =
             | None -> ())
         | None -> ())
     | None -> Window.showWarningMessage "SageFs is not connected" [||] |> ignore)
+  reg "sagefs.showHistory" (fun _ ->
+    match client with
+    | Some c ->
+      Client.getRecentEvents 30 c
+      |> Promise.iter (fun bodyOpt ->
+        match bodyOpt with
+        | Some body ->
+          let lines = body.Split('\n') |> Array.filter (fun l -> l.Trim().Length > 0)
+          if lines.Length = 0 then
+            Window.showInformationMessage "No recent events" [||] |> ignore
+          else
+            Window.showQuickPick lines "Recent SageFs events"
+            |> Promise.iter (fun _ -> ())
+        | None -> Window.showWarningMessage "Could not fetch events" [||] |> ignore)
+    | None -> Window.showWarningMessage "SageFs is not connected" [||] |> ignore)
 
   // CodeLens
   let lensProvider = Lens.create ()
   context.subscriptions.Add (Languages.registerCodeLensProvider "fsharp" lensProvider)
+  let testLensProvider = TestLens.create ()
+  context.subscriptions.Add (Languages.registerCodeLensProvider "fsharp" testLensProvider)
 
   // Code completion
   let getWorkDir () =
@@ -776,6 +794,7 @@ let activate (context: ExtensionContext) =
           let state = listenerRef |> Option.map (fun l -> l.State ()) |> Option.defaultValue VscLiveTestState.empty
           TestDeco.applyToAllEditors state
           TestDeco.updateDiagnostics state
+          TestLens.updateState state
         OnSummaryUpdate = fun summary -> updateTestStatusBar summary
         OnStatusRefresh = fun () -> refreshStatus ()
       }

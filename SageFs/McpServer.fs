@@ -756,8 +756,18 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                 }) :> Task
             ) |> ignore
 
-            // Wire push notifications: subscribe to events → broadcast to MCP clients
-            // Two delivery paths:
+            // GET /api/recent-events — get recent FSI events
+            app.MapGet("/api/recent-events", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+                task {
+                    let count =
+                      match ctx.Request.Query.TryGetValue("count") with
+                      | true, v -> match System.Int32.TryParse(string v) with true, n -> n | _ -> 20
+                      | _ -> 20
+                    let! result = SageFs.McpTools.getRecentEvents mcpContext "http" count None
+                    ctx.Response.ContentType <- "application/json"
+                    do! ctx.Response.Body.WriteAsync(System.Text.Encoding.UTF8.GetBytes(result))
+                } :> Task
+            ) |> ignore
             //   1. MCP notifications (for clients that surface them)
             //   2. Event accumulator → appended to next tool response (guaranteed delivery)
             //

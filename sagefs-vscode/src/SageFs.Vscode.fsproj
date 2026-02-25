@@ -16,6 +16,7 @@
     <Compile Include="TypeExplorerProvider.fs" />
     <Compile Include="TestControllerAdapter.fs" />
     <Compile Include="TestDecorations.fs" />
+    <Compile Include="TestCodeLensProvider.fs" />
     <Compile Include="Extension.fs" />
   </ItemGroup>
   <ItemGroup>
