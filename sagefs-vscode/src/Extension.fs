@@ -13,6 +13,7 @@ module SessionCtx = SageFs.Vscode.SessionContextTreeProvider
 module LiveTest = SageFs.Vscode.LiveTestingListener
 module TestCtrl = SageFs.Vscode.TestControllerAdapter
 module TypeExpl = SageFs.Vscode.TypeExplorerProvider
+module TestDeco = SageFs.Vscode.TestDecorations
 
 open SageFs.Vscode.LiveTestingTypes
 
@@ -765,16 +766,33 @@ let activate (context: ExtensionContext) =
       // TestController for VS Code Test Explorer
       let adapter = TestCtrl.create (fun () -> client)
       testAdapter <- Some adapter
+      // Initialize inline test decorations
+      TestDeco.initialize ()
       // Live testing listener — handles test_summary, test_results_batch, and state events
+      let mutable listenerRef: LiveTest.LiveTestingListener option = None
       let listener = LiveTest.start c.mcpPort {
-        OnStateChange = fun changes -> adapter.Refresh changes
+        OnStateChange = fun changes ->
+          adapter.Refresh changes
+          let state = listenerRef |> Option.map (fun l -> l.State ()) |> Option.defaultValue VscLiveTestState.empty
+          TestDeco.applyToAllEditors state
+          TestDeco.updateDiagnostics state
         OnSummaryUpdate = fun summary -> updateTestStatusBar summary
         OnStatusRefresh = fun () -> refreshStatus ()
       }
+      listenerRef <- Some listener
       liveTestListener <- Some listener
       sseDisposable <- Some {
         new Disposable with member _.dispose () = listener.Dispose(); null
       }
+      // Re-apply decorations when editors change
+      context.subscriptions.Add (
+        Window.onDidChangeVisibleTextEditors (fun _editors ->
+          let state = listenerRef |> Option.map (fun l -> l.State ()) |> Option.defaultValue VscLiveTestState.empty
+          TestDeco.applyToAllEditors state))
+      context.subscriptions.Add (
+        Window.onDidChangeActiveTextEditor (fun _editor ->
+          let state = listenerRef |> Option.map (fun l -> l.State ()) |> Option.defaultValue VscLiveTestState.empty
+          TestDeco.applyToAllEditors state))
       // Auto-discover and create session if none exists
       Client.listSessions c
       |> Promise.iter (fun sessions ->
@@ -834,4 +852,5 @@ let deactivate () =
   liveTestListener <- None
   testAdapter |> Option.iter (fun a -> a.Dispose ())
   testAdapter <- None
+  TestDeco.dispose ()
   clearAllDecorations ()

@@ -245,6 +245,24 @@ module Window =
   let getActiveTextEditor () : TextEditor option =
     activeTextEditor windowExports
 
+  [<Emit("$0.visibleTextEditors")>]
+  let visibleTextEditorsRaw (w: obj) : TextEditor array = jsNative
+
+  let getVisibleTextEditors () : TextEditor array =
+    visibleTextEditorsRaw windowExports
+
+  [<Emit("$0.onDidChangeVisibleTextEditors($1)")>]
+  let onDidChangeVisibleTextEditorsRaw (w: obj) (handler: TextEditor array -> unit) : Disposable = jsNative
+
+  let onDidChangeVisibleTextEditors (handler: TextEditor array -> unit) : Disposable =
+    onDidChangeVisibleTextEditorsRaw windowExports handler
+
+  [<Emit("$0.onDidChangeActiveTextEditor($1)")>]
+  let onDidChangeActiveTextEditorRaw (w: obj) (handler: TextEditor option -> unit) : Disposable = jsNative
+
+  let onDidChangeActiveTextEditor (handler: TextEditor option -> unit) : Disposable =
+    onDidChangeActiveTextEditorRaw windowExports handler
+
   [<Emit("$0.createOutputChannel($1)")>]
   let private _createOutputChannel (w: obj) (name: string) : OutputChannel = jsNative
   let createOutputChannel (name: string) = _createOutputChannel windowExports name
