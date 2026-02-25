@@ -90,9 +90,13 @@ Tests are categorized automatically (Unit, Integration, Browser, Property, Bench
 - [x] **Flaky test detection** — `ResultWindow` sliding window, `TestStability` DU (Stable/Flaky/Insufficient), `FlakyDetection.outcomeOf`, `GutterIcon.TestFlaky` — property-based tested
 - [x] **Per-test coverage correlation** — `CoverageCorrelation.testsForSymbol` and `testsForLine` chain FCS dependency graph → enriched test info, answering "which tests cover this line?"
 
+- [x] **VS Code live testing suite** — Full VS Code integration: inline ✓/✗/● decorations on test lines, native Test Explorer via `TestController` adapter, test result CodeLens above every test function, failure diagnostics as native squiggles, SSE-driven `LiveTestingListener` consuming typed `test_summary` and `test_results_batch` events, policy control commands (`sagefs.toggleLiveTesting`, `sagefs.runTests`, `sagefs.setRunPolicy`), call graph viewer (`sagefs.showCallGraph` → `/api/dependency-graph`), event history QuickPick (`sagefs.showHistory` → `/api/recent-events`), type explorer sidebar, dashboard webview panel — all wired through HTTP proxy endpoints to the daemon
+- [x] **Typed SSE event broadcast** — `/events` endpoint broadcasts `event: test_summary` and `event: test_results_batch` alongside `event: state`, with `JsonFSharpConverter` for proper F# DU serialization. Clients subscribe once and receive all event types over a single SSE stream with auto-reconnect and exponential backoff
+- [x] **HTTP API for editor extensions** — `/api/live-testing/toggle`, `/api/live-testing/policy`, `/api/live-testing/run`, `/api/live-testing/status`, `/api/explore`, `/api/completions`, `/api/dependency-graph`, `/api/recent-events` — RESTful endpoints proxied by VS Code and available to any HTTP client
+
 **What's next:**
 
-- [ ] **VS Code gutter markers** — DecorationProvider and TestController integration in the VS Code extension (`LineAnnotation` data ready, UI not yet connected)
+- [ ] **VS Code coverage gutter markers** — Coverage annotations on production code lines (data ready via `CoverageAnnotation`, UI not yet connected)
 - [ ] **Raylib GUI gutter rendering** — Gutter icons in the GPU-rendered GUI frontend
 - [ ] **Visual Studio gutter markers** — Margin glyphs via the VS Extensibility SDK
 
@@ -405,17 +409,17 @@ Already running at `http://localhost:37750/dashboard`. Submit code, view session
 | CodeLens | n/a¹ | n/a¹ | n/a¹ | ✅ | ✅ | ✅ |
 | Project discovery | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Session resume | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Live test gutter signs | ✅ | —³ | — | —³ | —³ | ✅ |
-| Test panel / results | — | — | — | — | — | ✅ |
+| Live test gutter signs | ✅ | —³ | — | ✅ | —³ | ✅ |
+| Test panel / results | — | — | — | ✅ | — | ✅ |
 | Coverage gutter signs | ✅ | —³ | — | —³ | —³ | ✅ |
 | Coverage panel | — | — | — | — | — | ✅ |
-| Test policy controls | — | — | — | — | — | ✅ |
-| Pipeline trace | — | — | — | — | — | ✅ |
-| Type explorer | — | — | — | — | — | ✅ |
-| Call graph | — | — | — | — | — | ✅ |
-| History browser | — | — | — | — | — | ✅ |
+| Test policy controls | — | — | — | ✅ | — | ✅ |
+| Pipeline trace | — | — | — | ✅ | — | ✅ |
+| Type explorer | — | — | — | ✅ | — | ✅ |
+| Call graph | — | — | — | ✅ | — | ✅ |
+| History browser | — | — | — | ✅ | — | ✅ |
 | Daemon lifecycle | ✅ | — | — | ✅ | — | ✅ |
-| Status dashboard | — | — | ✅ | — | — | ✅ |
+| Status dashboard | — | — | ✅ | ✅ | — | ✅ |
 
 > ¹ **n/a** — Feature is architecturally inapplicable. TUI/Raylib are REPL interfaces (eval file = just type code); CodeLens requires an editor with source buffers.
 > ² **—** — VS Extensibility SDK (out-of-process, v17.14) does not yet expose completion provider or theme color contribution APIs. The HTTP client (`GetCompletionsAsync`) is implemented; UI integration awaits SDK support.

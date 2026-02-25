@@ -447,3 +447,126 @@ let sessionLifecycleTests =
         client.Dispose()
         killDaemon proc
   ]
+
+[<Tests>]
+let vsCodeEndpointTests =
+  testList "[Integration] VS Code extension endpoints" [
+
+    testCase "GET /api/live-testing/status returns Enabled and Summary" <| fun _ ->
+      let port = 39900 + (Random().Next(50))
+      let proc, client = startDaemon port |> Async.AwaitTask |> Async.RunSynchronously
+      try
+        let status, body = getJson client "/api/live-testing/status" |> Async.AwaitTask |> Async.RunSynchronously
+        status |> Expect.equal "200 OK" 200
+
+        use doc = JsonDocument.Parse(body)
+        let root = doc.RootElement
+        root.TryGetProperty("Enabled") |> fst
+        |> Expect.isTrue "has Enabled field"
+        root.TryGetProperty("Summary") |> fst
+        |> Expect.isTrue "has Summary field"
+
+        let summary = root.GetProperty("Summary")
+        summary.TryGetProperty("Total") |> fst
+        |> Expect.isTrue "Summary has Total"
+        summary.TryGetProperty("Passed") |> fst
+        |> Expect.isTrue "Summary has Passed"
+        summary.TryGetProperty("Failed") |> fst
+        |> Expect.isTrue "Summary has Failed"
+      finally
+        client.Dispose()
+        killDaemon proc
+
+    testCase "POST /api/live-testing/toggle returns success and message" <| fun _ ->
+      let port = 39950 + (Random().Next(50))
+      let proc, client = startDaemon port |> Async.AwaitTask |> Async.RunSynchronously
+      try
+        let status, body = postJson client "/api/live-testing/toggle" {||} |> Async.AwaitTask |> Async.RunSynchronously
+        status |> Expect.equal "200 OK" 200
+
+        use doc = JsonDocument.Parse(body)
+        doc.RootElement.GetProperty("success").GetBoolean()
+        |> Expect.isTrue "toggle succeeded"
+        doc.RootElement.GetProperty("message").GetString()
+        |> Expect.isNotEmpty "has message"
+      finally
+        client.Dispose()
+        killDaemon proc
+
+    testCase "POST /api/live-testing/policy sets unit policy" <| fun _ ->
+      let port = 40000 + (Random().Next(50))
+      let proc, client = startDaemon port |> Async.AwaitTask |> Async.RunSynchronously
+      try
+        let payload = {| category = "unit"; policy = "every" |}
+        let status, body = postJson client "/api/live-testing/policy" payload |> Async.AwaitTask |> Async.RunSynchronously
+        status |> Expect.equal "200 OK" 200
+
+        use doc = JsonDocument.Parse(body)
+        doc.RootElement.GetProperty("success").GetBoolean()
+        |> Expect.isTrue "policy set succeeded"
+      finally
+        client.Dispose()
+        killDaemon proc
+
+    testCase "POST /api/live-testing/run returns response" <| fun _ ->
+      let port = 40050 + (Random().Next(50))
+      let proc, client = startDaemon port |> Async.AwaitTask |> Async.RunSynchronously
+      try
+        let payload = {| pattern = ""; category = "" |}
+        let status, body = postJson client "/api/live-testing/run" payload |> Async.AwaitTask |> Async.RunSynchronously
+        status |> Expect.equal "200 OK" 200
+        body |> Expect.isNotEmpty "has response body"
+      finally
+        client.Dispose()
+        killDaemon proc
+
+    testCase "GET /api/dependency-graph returns TotalSymbols" <| fun _ ->
+      let port = 40100 + (Random().Next(50))
+      let proc, client = startDaemon port |> Async.AwaitTask |> Async.RunSynchronously
+      try
+        let status, body = getJson client "/api/dependency-graph" |> Async.AwaitTask |> Async.RunSynchronously
+        status |> Expect.equal "200 OK" 200
+
+        use doc = JsonDocument.Parse(body)
+        let root = doc.RootElement
+        root.TryGetProperty("TotalSymbols") |> fst
+        |> Expect.isTrue "has TotalSymbols"
+
+        let total = root.GetProperty("TotalSymbols").GetInt32()
+        Expect.isGreaterThanOrEqual "TotalSymbols >= 0" (total, 0)
+      finally
+        client.Dispose()
+        killDaemon proc
+
+    testCase "GET /api/dependency-graph?symbol=unknown returns empty tests" <| fun _ ->
+      let port = 40150 + (Random().Next(50))
+      let proc, client = startDaemon port |> Async.AwaitTask |> Async.RunSynchronously
+      try
+        let status, body = getJson client "/api/dependency-graph?symbol=NonExistent.symbol" |> Async.AwaitTask |> Async.RunSynchronously
+        status |> Expect.equal "200 OK" 200
+
+        use doc = JsonDocument.Parse(body)
+        doc.RootElement.GetProperty("Tests").GetArrayLength()
+        |> Expect.equal "no tests for unknown symbol" 0
+      finally
+        client.Dispose()
+        killDaemon proc
+
+    testCase "GET /api/recent-events returns content after eval" <| fun _ ->
+      let port = 40200 + (Random().Next(50))
+      let proc, client = startDaemon port |> Async.AwaitTask |> Async.RunSynchronously
+      try
+        // Generate events first
+        let payload =
+          {| code = "1 + 1;;"
+             working_directory = testProjectDir |}
+        let evalStatus, _ = postJson client "/exec" payload |> Async.AwaitTask |> Async.RunSynchronously
+        evalStatus |> Expect.equal "eval 200" 200
+
+        let status, body = getJson client "/api/recent-events?count=5" |> Async.AwaitTask |> Async.RunSynchronously
+        status |> Expect.equal "200 OK" 200
+        body |> Expect.isNotEmpty "has recent events content"
+      finally
+        client.Dispose()
+        killDaemon proc
+  ]
