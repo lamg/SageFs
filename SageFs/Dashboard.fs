@@ -1895,11 +1895,19 @@ let createApiStateHandler
       | Some evt ->
         let tcs = Threading.Tasks.TaskCompletionSource()
         use _ct = ctx.RequestAborted.Register(fun () -> tcs.TrySetResult() |> ignore)
+        // Heartbeat keeps connection alive through proxies
+        let heartbeat = new Threading.Timer((fun _ ->
+            try
+                let bytes = Text.Encoding.UTF8.GetBytes(": keepalive\n\n")
+                ctx.Response.Body.WriteAsync(bytes).AsTask()
+                |> fun t -> t.ContinueWith(fun (_: Threading.Tasks.Task) -> ctx.Response.Body.FlushAsync()) |> ignore
+            with _ -> ()), null, 15000, 15000)
+        use _heartbeat = heartbeat
         use _sub = evt.Subscribe(fun _ ->
           Threading.Tasks.Task.Run(fun () ->
             task {
               try do! pushJson ()
-              with _ -> () // Client disconnected or pipe broken — ignore
+              with _ -> ()
             } :> Threading.Tasks.Task)
           |> ignore)
         do! tcs.Task

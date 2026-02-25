@@ -457,7 +457,6 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
             ) |> ignore
 
             // GET /events — SSE stream of Elm state changes
-            // GET /events — SSE stream of Elm state changes
             app.MapGet("/events", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
                 task {
                     ctx.Response.ContentType <- "text/event-stream"
@@ -468,6 +467,14 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                     | Some evt ->
                         let tcs = System.Threading.Tasks.TaskCompletionSource()
                         use _ct = ctx.RequestAborted.Register(fun () -> tcs.TrySetResult() |> ignore)
+                        // Heartbeat keeps connection alive through proxies
+                        let heartbeat = new System.Threading.Timer((fun _ ->
+                            try
+                                let bytes = System.Text.Encoding.UTF8.GetBytes(": keepalive\n\n")
+                                ctx.Response.Body.WriteAsync(bytes).AsTask()
+                                |> fun t -> t.ContinueWith(fun (_: Task) -> ctx.Response.Body.FlushAsync()) |> ignore
+                            with _ -> ()), null, 15000, 15000)
+                        use _heartbeat = heartbeat
                         use _sub = evt.Subscribe(fun json ->
                             try
                                 let sseEvent = sprintf "event: state\ndata: %s\n\n" json

@@ -779,6 +779,9 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
   // Brief yield to let servers bind their ports
   do! System.Threading.Tasks.Task.Delay(200)
   eprintfn "SageFs daemon ready (PID %d, MCP port %d, dashboard port %d)" Environment.ProcessId mcpPort dashboardPort
+  eprintfn "  Dashboard: http://localhost:%d/dashboard" dashboardPort
+  eprintfn "  SSE events: http://localhost:%d/events" mcpPort
+  eprintfn "  Health: http://localhost:%d/health" mcpPort
 
   // Resume sessions in background — don't block the daemon main task.
   // Each resumed session dispatches ListSessions so dashboard sees them incrementally.
