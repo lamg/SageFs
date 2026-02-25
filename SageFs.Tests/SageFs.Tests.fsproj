@@ -84,6 +84,7 @@
         <Compile Include="RetryPolicyTests.fs" />
         <Compile Include="FsiRewriteTests.fs" />
         <Compile Include="LiveTestingTypesTests.fs" />
+        <Compile Include="CoverageBoostTests.fs" />
         <Compile Include="Program.fs" />
     </ItemGroup>
 
