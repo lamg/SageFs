@@ -25,6 +25,14 @@ module DockerFixture =
   let fixtureDir =
     Path.Combine(repoRoot, "SageFs.Tests", "fixtures", "TestWorkspace")
 
+  /// Use pre-built sagefs-daemon-test:latest image.
+  /// Build with: docker build -f Dockerfile.vscode-test --target sagefs-base -t sagefs-daemon-test:latest .
+  let sageFsDaemonImageName = "sagefs-daemon-test:latest"
+
+  /// Use pre-built sagefs-vscode-test:latest image.
+  /// Build with: docker build -f Dockerfile.vscode-test --target vscode-test -t sagefs-vscode-test:latest .
+  let vscodeTestImageName = "sagefs-vscode-test:latest"
+
   let isDockerAvailable =
     lazy(
       try
@@ -37,16 +45,19 @@ module DockerFixture =
             CreateNoWindow = true)
         use p = Diagnostics.Process.Start(psi)
         p.WaitForExit(5000) |> ignore
-        p.ExitCode = 0
+        if p.ExitCode <> 0 then false
+        else
+          let imgPsi =
+            Diagnostics.ProcessStartInfo(
+              "docker", sprintf "image inspect %s" sageFsDaemonImageName,
+              RedirectStandardOutput = true,
+              RedirectStandardError = true,
+              UseShellExecute = false,
+              CreateNoWindow = true)
+          use imgP = Diagnostics.Process.Start(imgPsi)
+          imgP.WaitForExit(5000) |> ignore
+          imgP.ExitCode = 0
       with _ -> false)
-
-  /// Use pre-built sagefs-daemon-test:latest image.
-  /// Build with: docker build -f Dockerfile.vscode-test --target sagefs-base -t sagefs-daemon-test:latest .
-  let sageFsDaemonImageName = "sagefs-daemon-test:latest"
-
-  /// Use pre-built sagefs-vscode-test:latest image.
-  /// Build with: docker build -f Dockerfile.vscode-test --target vscode-test -t sagefs-vscode-test:latest .
-  let vscodeTestImageName = "sagefs-vscode-test:latest"
 
 // ---------------------------------------------------------------------------
 // SageFs Daemon Container

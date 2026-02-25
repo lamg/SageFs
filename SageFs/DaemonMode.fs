@@ -209,7 +209,17 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
       | Some _ -> () // Previously tracked active session — clients resolve on connect
       | None -> ()
     else
-      eprintfn "No previous sessions to resume. Waiting for clients to create sessions."
+      if not initialProjects.IsEmpty then
+        eprintfn "No previous sessions. Creating session from --proj args..."
+        let! result = sessionOps.CreateSession initialProjects workingDir
+        match result with
+        | Ok info ->
+          eprintfn "  Created session: %s" info
+          onSessionResumed ()
+        | Error err ->
+          eprintfn "  [WARN] Failed to create session from --proj: %A" err
+      else
+        eprintfn "No previous sessions to resume. Waiting for clients to create sessions."
   }
 
   // Create EffectDeps from SessionManager + start Elm loop
