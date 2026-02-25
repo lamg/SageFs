@@ -260,7 +260,11 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
             System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(logPath)) |> ignore
             
             let builder = WebApplication.CreateBuilder([||])
-            builder.WebHost.UseUrls($"http://localhost:%d{port}") |> ignore
+            let bindHost =
+              match System.Environment.GetEnvironmentVariable("SAGEFS_BIND_HOST") with
+              | null | "" -> "localhost"
+              | h -> h
+            builder.WebHost.UseUrls($"http://%s{bindHost}:%d{port}") |> ignore
 
             // Get version from assembly
             let version = 

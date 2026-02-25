@@ -3,6 +3,7 @@ open System
 open System.IO
 open System.Text
 open System.Reflection
+open SageFs
 open SageFs.Server
 
 /// Wraps a TextWriter to normalize lone LF to CRLF.
@@ -54,17 +55,17 @@ let parseMcpPort (args: string array) =
   | _ -> defaultPort
 
 /// Filter out SageFs-specific flags, keep FSI-passthrough args.
-let filterArgs (args: string array) (extraFlags: string list) =
-  let SageFsFlags =
-    set ([ "--mcp-port"; "--help"; "-h";
-           "--version"; "-v" ] @ extraFlags)
+let filterArgs (args: string array) =
+  let sageFsFlags =
+    set [ "--mcp-port"; "--help"; "-h";
+          "--version"; "-v"; "--supervised" ]
   let mcpPortIndex = args |> Array.tryFindIndex (fun a -> a = "--mcp-port")
   let ionideFlags =
     args |> Array.filter (fun a -> a.StartsWith("--fsi-server-", System.StringComparison.Ordinal))
   let regularArgs =
     args
     |> Array.filter (fun a ->
-      not (SageFsFlags.Contains(a))
+      not (sageFsFlags.Contains(a))
       && not (Array.contains a ionideFlags))
     |> Array.filter (fun a ->
       match mcpPortIndex with
@@ -76,12 +77,10 @@ let filterArgs (args: string array) (extraFlags: string list) =
     regularArgs
 
 /// Run daemon mode (default behavior).
-let runDaemon (args: string array) (extraFlags: string list) =
+let runDaemon (args: string array) =
   let mcpPort = parseMcpPort args
-  let filteredArgs = filterArgs args extraFlags
-  let parsedArgs =
-    try SageFs.Args.parser.ParseCommandLine(filteredArgs).GetAllResults()
-    with _ -> []
+  let filteredArgs = filterArgs args
+  let parsedArgs = Args.parseArgs filteredArgs
   if args |> Array.exists (fun a -> a = "--supervised") then
     let daemonArgs =
       args
@@ -123,8 +122,23 @@ let main args =
     printfn "  --version, -v          Show version information"
     printfn "  --help, -h             Show this help message"
     printfn "  --mcp-port PORT        Set custom MCP server port (default: 37749)"
-    printfn "  --bare                 Start a bare FSI session — no project/solution loading"
     printfn "  --supervised           Run under watchdog supervisor (auto-restart on crash)"
+    printfn "  --bare                 Start a bare FSI session — no project/solution loading"
+    printfn "  --no-watch             Disable file watching — no automatic #load on changes"
+    printfn "  --no-resume            Skip restoring previous sessions on daemon startup"
+    printfn "  --prune                Mark all stale sessions as stopped and exit"
+    printfn "  --proj FILE            Load project from .fsproj file"
+    printfn "  --sln FILE             Load all projects from solution file"
+    printfn "  --dir DIR              Set working directory"
+    printfn "  --reference:FILE       Reference a .NET assembly"
+    printfn "  --load:FILE            Load and compile an F# source file at startup"
+    printfn "  --use:FILE             Use a file for initial input/prompt config"
+    printfn "  --lib DIR [DIR...]     Directories to search for referenced assemblies"
+    printfn "  --other ARGS...        Pass remaining arguments to FSI"
+    printfn ""
+    printfn "Environment Variables:"
+    printfn "  SageFs_MCP_PORT        Override MCP server port (same as --mcp-port)"
+    printfn "  SAGEFS_BIND_HOST       Bind address (default: localhost, use 0.0.0.0 for Docker)"
     printfn ""
     printfn "Daemon:"
     printfn "  SageFs runs as a daemon by default. The daemon provides:"
@@ -138,6 +152,7 @@ let main args =
     printfn "Examples:"
     printfn "  SageFs                              Start daemon"
     printfn "  SageFs --proj MyProject.fsproj      Start daemon with project"
+    printfn "  SageFs --mcp-port 47700 --proj X    Start daemon on custom port"
     printfn "  SageFs --supervised                 Start with auto-restart"
     printfn "  SageFs connect                      Connect REPL to running daemon"
     printfn "  SageFs status                       Show daemon status"
@@ -205,19 +220,17 @@ let main args =
           | _ -> None
         else None)
       |> Option.defaultValue 0
-    // Filter out worker-specific flags, pass rest to Argu
-    let SageFsArgs =
+    // Filter out worker-specific flags, pass rest to Args.parseArgs
+    let workerSpecific = set ["--session-id"; "--http-port"]
+    let filteredArgs =
       workerArgs
       |> List.filter (fun a ->
-        a <> "--session-id" && a <> "--http-port"
+        not (workerSpecific.Contains a)
         && not (workerArgs
                 |> List.pairwise
                 |> List.exists (fun (prev, cur) ->
-                  cur = a && (prev = "--session-id" || prev = "--http-port"))))
-    let parsedArgs =
-      try SageFs.Args.parser.ParseCommandLine(SageFsArgs |> List.toArray)
-            .GetAllResults()
-      with _ -> []
+                  cur = a && workerSpecific.Contains prev)))
+    let parsedArgs = Args.parseArgs (filteredArgs |> List.toArray)
     WorkerMain.run sessionId httpPort parsedArgs
     |> Async.RunSynchronously
     0
@@ -295,4 +308,4 @@ let main args =
       TuiClient.run info
       |> _.GetAwaiter() |> _.GetResult()
     | None ->
-      runDaemon args []
+      runDaemon args

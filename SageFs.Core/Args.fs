@@ -1,58 +1,46 @@
 module SageFs.Args
 
-open Argu
-open System
-
-type Sep = CustomAssignmentOrSpacedAttribute
-type Alt = AltCommandLineAttribute
-
-//todo check if we can have 2 subtypes, one for cli another for nrepl
-//maybe make Other in SageFs.Nrepl?
-//and add transport options, like websockets/tcp/tty, with provided ports and other configuration
 type Arguments =
-  | [<Unique; AltCommandLine("-v")>] Version
-  | [<Unique>] Bare
-  | [<Unique>] No_Watch
-  | [<Unique>] No_Resume
-  | [<Unique>] Prune
+  | Version
+  | Bare
+  | No_Watch
+  | No_Resume
+  | Prune
   | Sln of fileName: string
   | Proj of filename: string
-  | [<Unique>] Dir of workingDirectory: string
-  | [<Alt("-r"); Sep(":")>] Reference of assemblyFileName: string
-  | [<Sep(":")>] Load of fileName: string
-  | [<Sep(":")>] Use of fileName: string
-  | [<Alt("-l")>] Lib of folderList: string list
-  | [<Last>] Other of args: string list
+  | Dir of workingDirectory: string
+  | Reference of assemblyFileName: string
+  | Load of fileName: string
+  | Use of fileName: string
+  | Lib of folderList: string list
+  | Other of args: string list
 
-  interface IArgParserTemplate with
-    member s.Usage =
-      match s with
-      | Version -> "displays the version of SageFs."
-      | Bare -> "start a bare FSI session with no project/solution loading — fast startup for quick one-off use."
-      | No_Watch -> "disable file watching — no automatic #load on source file changes."
-      | No_Resume -> "skip restoring previous sessions on daemon startup."
-      | Prune -> "mark all previously alive sessions as stopped in the event store and exit."
-      | Sln _ -> "loads all sources and dependencies for given solution."
-      | Proj _ -> "loads all sources and dependencies for given fsproj file."
-      | Dir _ -> "specifies alternative working directory to current directory."
-      | Reference _ -> "makes code from an F# or .NET Framework assembly available to the code being compiled."
-      | Load _ -> "compiles the given source code at startup and loads the compiled F# constructs into the session."
-      | Use _ ->
-        "tells the interpreter to use the given file on startup as initial input. If it contains prompt configuration, it'd be used for this REPL."
-      | Lib _ -> "specifies a directory to be searched for assemblies that are referenced."
-      | Other _ -> "Any other arguments which will be passed to fsi.exe"
+/// Parse a raw arg array into Arguments list.
+/// SageFs-specific flags (--help, --version, --mcp-port, --supervised)
+/// are handled in Program.main before this is called.
+let rec parseLoop (args: string list) (acc: Arguments list) =
+  match args with
+  | [] -> List.rev acc
+  | "--bare" :: rest -> parseLoop rest (Bare :: acc)
+  | "--no-watch" :: rest -> parseLoop rest (No_Watch :: acc)
+  | "--no-resume" :: rest -> parseLoop rest (No_Resume :: acc)
+  | "--prune" :: rest -> parseLoop rest (Prune :: acc)
+  | "--sln" :: file :: rest -> parseLoop rest (Sln file :: acc)
+  | "--proj" :: file :: rest -> parseLoop rest (Proj file :: acc)
+  | "--dir" :: dir :: rest -> parseLoop rest (Dir dir :: acc)
+  | s :: rest when s.StartsWith("-r:") -> parseLoop rest (Reference (s.Substring(3)) :: acc)
+  | "--reference" :: file :: rest -> parseLoop rest (Reference file :: acc)
+  | s :: rest when s.StartsWith("--load:") -> parseLoop rest (Load (s.Substring(7)) :: acc)
+  | "--load" :: file :: rest -> parseLoop rest (Load file :: acc)
+  | s :: rest when s.StartsWith("--use:") -> parseLoop rest (Use (s.Substring(6)) :: acc)
+  | "--use" :: file :: rest -> parseLoop rest (Use file :: acc)
+  | "--lib" :: rest | "-l" :: rest ->
+    let libs = rest |> List.takeWhile (fun a -> not (a.StartsWith("--")))
+    let remaining = rest |> List.skip libs.Length
+    parseLoop remaining (Lib libs :: acc)
+  | "--other" :: rest -> List.rev (Other rest :: acc)
+  | _ :: rest -> parseLoop rest acc
 
-let errorHandler =
-  ProcessExiter(
-    colorizer =
-      function
-      | ErrorCode.HelpText -> None
-      | _ -> Some ConsoleColor.Red
-  )
-
-let parser =
-  ArgumentParser.Create<Arguments>(programName = "SageFs", errorHandler = errorHandler)
-
-let parseArgs args =
-  parser.ParseCommandLine(args).GetAllResults()
+let parseArgs (args: string array) =
+  parseLoop (Array.toList args) []
 

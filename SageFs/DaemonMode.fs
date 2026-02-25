@@ -733,7 +733,11 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
         .AddFilter("Microsoft.Hosting", LogLevel.Warning)
       |> ignore
       let app = builder.Build()
-      app.Urls.Add(sprintf "http://localhost:%d" dashboardPort)
+      let bindHost =
+        match System.Environment.GetEnvironmentVariable("SAGEFS_BIND_HOST") with
+        | null | "" -> "localhost"
+        | h -> h
+      app.Urls.Add(sprintf "http://%s:%d" bindHost dashboardPort)
       app.UseRouting().UseFalco(dashboardEndpoints @ hotReloadProxyEndpoints) |> ignore
       eprintfn "Dashboard available at http://localhost:%d/dashboard" dashboardPort
       do! app.RunAsync()
