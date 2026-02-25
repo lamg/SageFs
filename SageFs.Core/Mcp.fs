@@ -682,7 +682,7 @@ module McpTools =
   let normalizePath (p: string) =
     let trimmed = p.TrimEnd('/', '\\')
     if Environment.OSVersion.Platform = PlatformID.Win32NT then
-      trimmed.ToLowerInvariant()
+      trimmed.Replace('/', '\\').ToLowerInvariant()
     else
       trimmed
 
