@@ -279,7 +279,7 @@ let sseProgressCallbackTests = testList "SSE progress callback" [
   testCase "StandbyProgress for nonexistent key does NOT trigger callback" <| fun _ ->
     use cts = new CancellationTokenSource(5000)
     let mutable callCount = 0
-    let mgr = SessionManager.create cts.Token (fun () -> callCount <- callCount + 1)
+    let mgr, _ = SessionManager.create cts.Token (fun () -> callCount <- callCount + 1)
     let fakeKey = { StandbyKey.Projects = ["test.fsproj"]; WorkingDir = "C:\\fake" }
     mgr.Post(SessionManager.SessionCommand.StandbyProgress(fakeKey, "1/4 test"))
     Thread.Sleep(100)
@@ -288,7 +288,7 @@ let sseProgressCallbackTests = testList "SSE progress callback" [
   testCase "callback not invoked on creation alone" <| fun _ ->
     use cts = new CancellationTokenSource(5000)
     let mutable callCount = 0
-    let _mgr = SessionManager.create cts.Token (fun () -> callCount <- callCount + 1)
+    let _mgr, _ = SessionManager.create cts.Token (fun () -> callCount <- callCount + 1)
     Thread.Sleep(100)
     Expect.equal "callback should not fire on creation alone" 0 callCount
 ]

@@ -82,6 +82,50 @@ module SessionManager =
       |> Map.toList
       |> List.map (fun (_, s) -> s.Info)
 
+  /// Immutable snapshot of ManagerState for lock-free CQRS reads.
+  /// Published after every command — reads go here, never to the mailbox.
+  type QuerySnapshot = {
+    Sessions: Map<SessionId, SessionInfo>
+    StandbyInfo: StandbyInfo
+  }
+
+  /// Compute standby info from pool state (pure function).
+  let computeStandbyInfo (pool: PoolState) : StandbyInfo =
+    if not pool.Enabled then StandbyInfo.NoPool
+    elif pool.Standbys.IsEmpty then StandbyInfo.NoPool
+    else
+      let states = pool.Standbys |> Map.toList |> List.map (fun (_, s) -> s.State)
+      if states |> List.exists (fun s -> s = StandbyState.Invalidated) then StandbyInfo.Invalidated
+      elif states |> List.forall (fun s -> s = StandbyState.Ready) then StandbyInfo.Ready
+      else
+        let progress =
+          pool.Standbys
+          |> Map.toList
+          |> List.tryPick (fun (_, s) ->
+            if s.State = StandbyState.Warming then s.WarmupProgress
+            else None)
+          |> Option.defaultValue ""
+        StandbyInfo.Warming progress
+
+  module QuerySnapshot =
+    let fromState (state: ManagerState) (standby: StandbyInfo) : QuerySnapshot =
+      let sessions =
+        state.Sessions
+        |> Map.map (fun _id ms -> ms.Info)
+      { Sessions = sessions; StandbyInfo = standby }
+
+    /// Project a snapshot directly from ManagerState (computes standby info).
+    let fromManagerState (state: ManagerState) : QuerySnapshot =
+      fromState state (computeStandbyInfo state.Pool)
+
+    let tryGetSession (id: SessionId) (snap: QuerySnapshot) : SessionInfo option =
+      snap.Sessions |> Map.tryFind id
+
+    let allSessions (snap: QuerySnapshot) : SessionInfo list =
+      snap.Sessions |> Map.toList |> List.map snd
+
+    let empty = { Sessions = Map.empty; StandbyInfo = StandbyInfo.NoPool }
+
   /// A proxy that rejects calls while the worker is still starting up.
   let pendingProxy : SessionProxy =
     fun _msg -> async {
@@ -274,9 +318,14 @@ module SessionManager =
   }
 
   /// Create the supervisor MailboxProcessor.
+  /// Returns (mailbox, readSnapshot) where readSnapshot is a lock-free CQRS query function.
   let create (ct: CancellationToken) (onStandbyProgressChanged: unit -> unit) =
-    MailboxProcessor<SessionCommand>.Start((fun inbox ->
+    let snapshotRef = ref QuerySnapshot.empty
+    let mailbox = MailboxProcessor<SessionCommand>.Start((fun inbox ->
+      let publishSnapshot (state: ManagerState) =
+        System.Threading.Interlocked.Exchange(snapshotRef, QuerySnapshot.fromManagerState state) |> ignore
       let rec loop (state: ManagerState) = async {
+        publishSnapshot state
         let! cmd = inbox.Receive()
         match cmd with
         | SessionCommand.CreateSession(projects, workingDir, reply) ->
@@ -658,24 +707,9 @@ module SessionManager =
           return! loop { state with Pool = newPool }
 
         | SessionCommand.GetStandbyInfo reply ->
-          let info =
-            if not state.Pool.Enabled then StandbyInfo.NoPool
-            elif state.Pool.Standbys.IsEmpty then StandbyInfo.NoPool
-            else
-              let states = state.Pool.Standbys |> Map.toList |> List.map (fun (_, s) -> s.State)
-              if states |> List.exists (fun s -> s = StandbyState.Invalidated) then StandbyInfo.Invalidated
-              elif states |> List.forall (fun s -> s = StandbyState.Ready) then StandbyInfo.Ready
-              else
-                let progress =
-                  state.Pool.Standbys
-                  |> Map.toList
-                  |> List.tryPick (fun (_, s) ->
-                    if s.State = StandbyState.Warming then s.WarmupProgress
-                    else None)
-                  |> Option.defaultValue ""
-                StandbyInfo.Warming progress
-          reply.Reply info
+          reply.Reply (computeStandbyInfo state.Pool)
           return! loop state
       }
       loop ManagerState.empty
     ), cancellationToken = ct)
+    (mailbox, fun () -> snapshotRef.Value)

@@ -1377,9 +1377,11 @@ let createStreamHandler
           match wCtx with
           | Some ctx' ->
             let state = getSessionState currentSessionId
-            let hrState =
-              try (getHotReloadState currentSessionId).Result
-              with _ -> None
+            let! hrState =
+              task {
+                try return! getHotReloadState currentSessionId
+                with _ -> return None
+              }
             let fileStatuses =
               match hrState with
               | Some hr ->
