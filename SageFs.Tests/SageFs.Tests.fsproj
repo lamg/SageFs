@@ -89,6 +89,7 @@
         <Compile Include="SessionManagerCqrsTests.fs" />
         <Compile Include="FeaturesCoverageTests.fs" />
         <Compile Include="DrawAndRectCoverageTests.fs" />
+        <Compile Include="MiscCoverageTests.fs" />
         <Compile Include="Program.fs" />
     </ItemGroup>
 
