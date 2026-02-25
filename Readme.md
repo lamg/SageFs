@@ -78,7 +78,7 @@ Tests are categorized automatically (Unit, Integration, Browser, Property, Bench
 - [x] **Run policy enforcement** — `filterByPolicy()` integrated into execution paths so unit tests run on keystroke, integration on save, browser on demand
 - [x] **SSE push of test results** — `TestSummaryChanged` and `TestResultsBatch` events streamed to connected HTTP/SSE clients via push notification architecture
 - [x] **MCP live test tools** — `get_live_test_status` (query test state with file filter), `set_run_policy` (control which categories run when), `get_pipeline_trace` (debug the pipeline waterfall)
-- [x] **3600+ tests** — Full test suite covering domain model, executor, tree-sitter, instrumentation, Elm integration, flaky detection, coverage correlation, snapshot tests, and FsCheck property-based tests — including state machine property tests for `TestRunPhase` transitions and debounce semantics
+- [x] **2900+ tests** — Full test suite covering domain model, executor, tree-sitter, instrumentation, Elm integration, flaky detection, coverage correlation, snapshot tests, and FsCheck property-based tests — including state machine property tests for `TestRunPhase` transitions and debounce semantics
 - [x] **FCS dependency graph** — F# Compiler Service `CheckFileResults` wired via `SymbolGraphBuilder` to build symbol→test dependency maps, with `SymbolDiff` for detecting changes between FCS runs and `FileAnalysisCache` for per-file caching
 - [x] **Three-speed pipeline end-to-end** — Full debounced pipeline: keystroke → tree-sitter (50ms) → FCS with adaptive backoff (300ms, max 2000ms) → affected-test execution. `PipelineDebounce` manages per-stage cancellation tokens, `AdaptiveDebounce` backs off dynamically on FCS cancellations
 - [x] **Source mapping** — `SourceMapping` module bridges tree-sitter source locations (file/line/column) to reflection-discovered tests via function name matching, so gutter markers land on the right line even for Expecto-style hierarchical tests
@@ -86,7 +86,7 @@ Tests are categorized automatically (Unit, Integration, Browser, Property, Bench
 - [x] **`toggle_live_testing` MCP tool** — Enable/disable live testing from any MCP client
 - [x] **Daemon startup guard** — All editor plugins (VS Code, Visual Studio, CLI, Raylib GUI) now check for an already-running daemon via HTTP probe before spawning a new instance, preventing duplicate daemons
 
-- [x] **Neovim live testing & coverage** — Full sagefs.nvim integration: test gutter signs, test panel, coverage gutter signs, coverage panel, pipeline trace, test policy controls, statusline — 23 modules, 669 tests
+- [x] **Neovim live testing & coverage** — Full sagefs.nvim integration: test gutter signs, test panel, coverage gutter signs, coverage panel, pipeline trace, test policy controls, statusline — 24 modules, 800+ tests
 - [x] **Flaky test detection** — `ResultWindow` sliding window, `TestStability` DU (Stable/Flaky/Insufficient), `FlakyDetection.outcomeOf`, `GutterIcon.TestFlaky` — property-based tested
 - [x] **Per-test coverage correlation** — `CoverageCorrelation.testsForSymbol` and `testsForLine` chain FCS dependency graph → enriched test info, answering "which tests cover this line?"
 
@@ -193,6 +193,8 @@ The **SageFs extension** turns VS Code into a live F# development environment wi
 
 #### Installing the VS Code Extension
 
+> **Note:** The SageFs VS Code extension is **not published on the VS Marketplace**. Install it manually from a `.vsix` file.
+
 **Option A: Download from GitHub Releases (recommended)**
 
 Each [GitHub Release](https://github.com/WillEhrendreich/SageFs/releases) includes a `.vsix` file. Download the latest and install:
@@ -226,7 +228,7 @@ code --install-extension sagefs-*.vsix
 
 ### Neovim Plugin
 
-[**sagefs.nvim**](https://github.com/WillEhrendreich/sagefs.nvim) is a full-featured Neovim frontend — **23 Lua modules, 669 tests, zero failures.** Pure Lua core (testable with busted outside Neovim) plus a thin integration layer for vim APIs.
+[**sagefs.nvim**](https://github.com/WillEhrendreich/sagefs.nvim) is a full-featured Neovim frontend — **24 Lua modules, 800+ tests, zero failures.** Pure Lua core (testable with busted outside Neovim) plus a thin integration layer for vim APIs.
 
 ```lua
 -- lazy.nvim
@@ -740,7 +742,7 @@ dotnet run --project SageFs.Tests -- --filter "Snapshot"
 dotnet run --project SageFs.Tests -- --filter "Hot Reload"
 ```
 
-The test suite includes **3700+ tests**: unit tests, FsCheck property-based tests, snapshot tests (Verify), state machine property tests, and Docker-based integration tests via [Testcontainers](https://dotnet.testcontainers.org/).
+The test suite includes **2900+ tests**: unit tests, FsCheck property-based tests, snapshot tests (Verify), state machine property tests, and Docker-based integration tests via [Testcontainers](https://dotnet.testcontainers.org/).
 
 </details>
 
