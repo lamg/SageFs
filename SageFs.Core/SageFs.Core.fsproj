@@ -8,6 +8,7 @@
     <ItemGroup>
         <Compile Include="Args.fs" />
         <Compile Include="Utils.fs" />
+        <Compile Include="Instrumentation.fs" />
         <Compile Include="ProjectLoading.fs" />
         <Compile Include="ShadowCopy.fs" />
         <Compile Include="WarmUp.fs" />

@@ -43,6 +43,7 @@ module SessionManager =
     | TouchSession of SessionId
     | WorkerExited of SessionId * workerPid: int * exitCode: int
     | WorkerReady of SessionId * workerPid: int * baseUrl: string * SessionProxy
+    | WorkerTestDiscovery of SessionId * tests: Features.LiveTesting.TestCase array * providers: Features.LiveTesting.ProviderDescription list
     | WorkerSpawnFailed of SessionId * workerPid: int * string
     | ScheduleRestart of SessionId
     | StopAll of AsyncReplyChannel<unit>
@@ -337,7 +338,10 @@ module SessionManager =
 
   /// Create the supervisor MailboxProcessor.
   /// Returns (mailbox, readSnapshot) where readSnapshot is a lock-free CQRS query function.
-  let create (ct: CancellationToken) (onStandbyProgressChanged: unit -> unit) =
+  let create
+    (ct: CancellationToken)
+    (onStandbyProgressChanged: unit -> unit)
+    (onTestDiscovery: SessionId -> Features.LiveTesting.TestCase array -> Features.LiveTesting.ProviderDescription list -> unit) =
     let snapshotRef = ref QuerySnapshot.empty
     let mailbox = MailboxProcessor<SessionCommand>.Start((fun inbox ->
       let publishSnapshot (state: ManagerState) =
@@ -348,6 +352,8 @@ module SessionManager =
         match cmd with
         | SessionCommand.CreateSession(projects, workingDir, reply) ->
           let sessionId = Guid.NewGuid().ToString("N").[..7]
+          let span = Instrumentation.startSpan Instrumentation.sessionSource "session.create"
+                       [("session.id", box sessionId); ("session.projects", box (String.concat "," projects)); ("session.working_dir", box workingDir)]
           let onExited workerPid exitCode =
             inbox.Post(SessionCommand.WorkerExited(sessionId, workerPid, exitCode))
           match startWorkerProcess sessionId projects workingDir onExited with
@@ -375,25 +381,36 @@ module SessionManager =
             }
             let newState = ManagerState.addSession sessionId managed state
             reply.Reply(Ok info)
+            Instrumentation.sessionsCreated.Add(1L)
+            Instrumentation.activeSessions.Add(1L)
+            Instrumentation.succeedSpan span
             // Port discovery runs off the agent loop
             awaitWorkerPort sessionId proc inbox ct
             return! loop newState
           | Error err ->
             reply.Reply(Error err)
+            Instrumentation.failSpan span (sprintf "%A" err)
             return! loop state
 
         | SessionCommand.StopSession(id, reply) ->
+          let span = Instrumentation.startSpan Instrumentation.sessionSource "session.stop" [("session.id", box id)]
           match ManagerState.tryGetSession id state with
           | Some session ->
             do! stopWorker session
             let newState = ManagerState.removeSession id state
             reply.Reply(Ok ())
+            Instrumentation.sessionsStopped.Add(1L)
+            Instrumentation.activeSessions.Add(-1L)
+            Instrumentation.succeedSpan span
             return! loop newState
           | None ->
             reply.Reply(Error (SageFsError.SessionNotFound id))
+            Instrumentation.failSpan span (sprintf "Session %s not found" id)
             return! loop state
 
         | SessionCommand.RestartSession(id, rebuild, reply) ->
+          let span = Instrumentation.startSpan Instrumentation.sessionSource "session.restart"
+                       [("session.id", box id); ("rebuild", box rebuild)]
           match ManagerState.tryGetSession id state with
           | Some session ->
             let key = StandbyKey.fromSession session.Projects session.WorkingDir
@@ -401,6 +418,7 @@ module SessionManager =
             match StandbyPool.decideRestart rebuild standby with
             | RestartDecision.SwapStandby readyStandby ->
               // Fast path: swap the warm standby in
+              if not (isNull span) then span.SetTag("restart.decision", "standby_swap") |> ignore
               do! stopWorker session
               let stateAfterStop = ManagerState.removeSession id state
               let info : SessionInfo = {
@@ -431,11 +449,15 @@ module SessionManager =
                 { ManagerState.addSession id swapped stateAfterStop with
                     Pool = poolAfterSwap }
               reply.Reply(Ok "Hard reset complete — swapped warm standby (instant).")
+              Instrumentation.sessionsRestarted.Add(1L)
+              Instrumentation.standbySwaps.Add(1L)
+              Instrumentation.succeedSpan span
               // Start warming a new standby for next time
               inbox.Post(SessionCommand.WarmStandby key)
               return! loop newState
             | RestartDecision.ColdRestart ->
               // Slow path: traditional stop → build → spawn
+              if not (isNull span) then span.SetTag("restart.decision", "cold_restart") |> ignore
               do! stopWorker session
               // Also kill any stale standby for this config
               let poolAfterKill =
@@ -452,6 +474,7 @@ module SessionManager =
               match buildResult with
               | Error msg ->
                 reply.Reply(Error (SageFsError.HardResetFailed msg))
+                Instrumentation.failSpan span msg
                 return! loop stateAfterStop
               | Ok _buildMsg ->
               let onExited workerPid exitCode =
@@ -480,13 +503,18 @@ module SessionManager =
                 }
                 let newState = ManagerState.addSession id restarted stateAfterStop
                 reply.Reply(Ok "Hard reset complete — worker respawning with fresh assemblies.")
+                Instrumentation.sessionsRestarted.Add(1L)
+                Instrumentation.coldRestarts.Add(1L)
+                Instrumentation.succeedSpan span
                 awaitWorkerPort id proc inbox ct
                 return! loop newState
               | Error err ->
                 reply.Reply(Error err)
+                Instrumentation.failSpan span (sprintf "%A" err)
                 return! loop stateAfterStop
           | None ->
             reply.Reply(Error (SageFsError.SessionNotFound id))
+            Instrumentation.failSpan span (sprintf "Session %s not found" id)
             return! loop state
 
         | SessionCommand.GetSession(id, reply) ->
@@ -544,10 +572,25 @@ module SessionManager =
             if state.Pool.Enabled && PoolState.getStandby key state.Pool |> Option.isNone then
               inbox.Post(SessionCommand.WarmStandby key)
             onStandbyProgressChanged ()
+            // Request initial test discovery from the worker
+            Async.Start(async {
+              try
+                let rid = System.Guid.NewGuid().ToString("N")
+                let! resp = proxy (WorkerMessage.GetTestDiscovery rid)
+                match resp with
+                | WorkerResponse.InitialTestDiscovery(tests, providers) ->
+                  inbox.Post(SessionCommand.WorkerTestDiscovery(id, tests, providers))
+                | _ -> ()
+              with _ -> ()
+            }, ct)
             return! loop newState
           | None ->
             // Session was stopped before port discovery completed — ignore
             return! loop state
+
+        | SessionCommand.WorkerTestDiscovery(id, tests, providers) ->
+          onTestDiscovery id tests providers
+          return! loop state
 
         | SessionCommand.WorkerSpawnFailed(id, _workerPid, msg) ->
           match ManagerState.tryGetSession id state with
@@ -561,11 +604,15 @@ module SessionManager =
             return! loop state
 
         | SessionCommand.WorkerExited(id, workerPid, exitCode) ->
+          let span = Instrumentation.startSpan Instrumentation.sessionSource "worker.exited"
+                       [("session.id", box id); ("worker.pid", box workerPid); ("exit_code", box exitCode)]
           match ManagerState.tryGetSession id state with
           | Some session ->
             // Ignore stale exit events from old workers (e.g., after RestartSession)
             match session.Info.WorkerPid with
             | Some currentPid when currentPid <> workerPid ->
+              if not (isNull span) then span.SetTag("stale_event", true) |> ignore
+              Instrumentation.succeedSpan span
               return! loop state
             | _ ->
             let outcome =
@@ -577,12 +624,22 @@ module SessionManager =
             let newStatus = SessionLifecycle.statusAfterExit outcome
             match outcome with
             | SessionLifecycle.ExitOutcome.Graceful ->
+              if not (isNull span) then span.SetTag("outcome", "graceful") |> ignore
+              Instrumentation.activeSessions.Add(-1L)
+              Instrumentation.succeedSpan span
               let newState = ManagerState.removeSession id state
               return! loop newState
             | SessionLifecycle.ExitOutcome.Abandoned _ ->
+              if not (isNull span) then span.SetTag("outcome", "abandoned") |> ignore
+              Instrumentation.activeSessions.Add(-1L)
+              Instrumentation.succeedSpan span
               let newState = ManagerState.removeSession id state
               return! loop newState
             | SessionLifecycle.ExitOutcome.RestartAfter(delay, newRestartState) ->
+              if not (isNull span) then
+                span.SetTag("outcome", "restart_scheduled") |> ignore
+                span.SetTag("restart.delay_ms", delay.TotalMilliseconds) |> ignore
+              Instrumentation.succeedSpan span
               let updated =
                 { session with
                     RestartState = newRestartState
@@ -594,6 +651,7 @@ module SessionManager =
               }, ct)
               return! loop newState
           | None ->
+            Instrumentation.succeedSpan span
             return! loop state
 
         | SessionCommand.ScheduleRestart id ->

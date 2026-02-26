@@ -299,6 +299,9 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                 .WithTracing(fun tracing ->
                     tracing
                         .AddSource("SageFs.LiveTesting")
+                        .AddSource("SageFs.SessionManager")
+                        .AddSource("SageFs.Pipeline")
+                        .AddSource("Marten")
                         .AddAspNetCoreInstrumentation()
                         .AddHttpClientInstrumentation() |> ignore
                     if otelConfigured then tracing.AddOtlpExporter() |> ignore
@@ -306,6 +309,9 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                 .WithMetrics(fun metrics ->
                     metrics
                         .AddMeter("SageFs.LiveTesting")
+                        .AddMeter("SageFs.SessionManager")
+                        .AddMeter("SageFs.Pipeline")
+                        .AddMeter("Marten")
                         .AddAspNetCoreInstrumentation()
                         .AddHttpClientInstrumentation() |> ignore
                     if otelConfigured then metrics.AddOtlpExporter() |> ignore
