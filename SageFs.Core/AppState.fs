@@ -812,6 +812,13 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
             let newShadowDir = ShadowCopy.createShadowDir ()
             logger.LogInfo "  Creating shadow copies..."
             let newSln = ShadowCopy.shadowCopySolution newShadowDir st.OriginalSolution
+            logger.LogInfo "  Instrumenting assemblies for IL coverage..."
+            let instrSw = System.Diagnostics.Stopwatch.StartNew()
+            let targetPaths = newSln.Projects |> List.map (fun po -> po.TargetPath)
+            let instrMaps = Features.LiveTesting.CoverageInstrumenter.instrumentShadowSolution targetPaths
+            instrSw.Stop()
+            let totalProbes = instrMaps |> Array.sumBy (fun (m: Features.LiveTesting.InstrumentationMap) -> m.TotalProbes)
+            logger.LogInfo (sprintf "  IL coverage: %d probes across %d assemblies in %.0fms" totalProbes instrMaps.Length instrSw.Elapsed.TotalMilliseconds)
             ShadowCopy.cleanupStaleDirs ()
 
             logger.LogInfo "  Creating new FSI session..."

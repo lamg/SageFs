@@ -85,15 +85,63 @@ module HttpWorkerClient =
         use! stream = resp.Content.ReadAsStreamAsync() |> Async.AwaitTask
         use reader = new IO.StreamReader(stream)
         let mutable keepReading = true
+        let mutable isCoverageEvent = false
         while keepReading do
           let! line = reader.ReadLineAsync() |> Async.AwaitTask
           if isNull line then
             keepReading <- false
           elif line.StartsWith("event: done") then
             keepReading <- false
+          elif line.StartsWith("event: coverage") then
+            isCoverageEvent <- true
           elif line.StartsWith("data: ") then
             let json = line.Substring(6)
-            if json <> "{}" then
+            if isCoverageEvent then
+              isCoverageEvent <- false
+              // Coverage data is ignored here — collected via separate proxy
+            elif json <> "{}" then
+              let result = Serialization.deserialize<Features.LiveTesting.TestRunResult> json
+              onResult result
+      }
+
+  /// Streaming test proxy that also collects IL coverage hits.
+  let streamingTestProxyWithCoverage (baseUrl: string)
+    : Features.LiveTesting.TestCase array
+      -> int
+      -> (Features.LiveTesting.TestRunResult -> unit)
+      -> (bool array -> unit)
+      -> Async<unit> =
+    let client = new HttpClient(BaseAddress = Uri(baseUrl), Timeout = System.Threading.Timeout.InfiniteTimeSpan)
+    fun tests maxParallelism onResult onCoverage ->
+      async {
+        let body = Serialization.serialize {| tests = tests; maxParallelism = maxParallelism |}
+        let content = new StringContent(body, Encoding.UTF8, "application/json")
+        let msg = new HttpRequestMessage(HttpMethod.Post, "/run-tests-stream", Content = content)
+        let! resp = client.SendAsync(msg, HttpCompletionOption.ResponseHeadersRead) |> Async.AwaitTask
+        resp.EnsureSuccessStatusCode() |> ignore
+        use! stream = resp.Content.ReadAsStreamAsync() |> Async.AwaitTask
+        use reader = new IO.StreamReader(stream)
+        let mutable keepReading = true
+        let mutable isCoverageEvent = false
+        while keepReading do
+          let! line = reader.ReadLineAsync() |> Async.AwaitTask
+          if isNull line then
+            keepReading <- false
+          elif line.StartsWith("event: done") then
+            keepReading <- false
+          elif line.StartsWith("event: coverage") then
+            isCoverageEvent <- true
+          elif line.StartsWith("data: ") then
+            let json = line.Substring(6)
+            if isCoverageEvent then
+              isCoverageEvent <- false
+              try
+                let doc = System.Text.Json.JsonDocument.Parse(json)
+                let hitsArr = doc.RootElement.GetProperty("hits")
+                let hits = [| for i in 0 .. hitsArr.GetArrayLength() - 1 -> hitsArr.[i].GetBoolean() |]
+                onCoverage hits
+              with _ -> ()
+            elif json <> "{}" then
               let result = Serialization.deserialize<Features.LiveTesting.TestRunResult> json
               onResult result
       }

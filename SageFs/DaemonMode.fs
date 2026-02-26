@@ -311,7 +311,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
           let snapshot = readSnapshot()
           match Map.tryFind sid snapshot.WorkerBaseUrls with
           | Some url when url.Length > 0 ->
-            Some (HttpWorkerClient.streamingTestProxy url)
+            Some (HttpWorkerClient.streamingTestProxyWithCoverage url)
           | _ -> None }
   let elmRuntime =
     ElmDaemon.start effectDeps (fun model _regions ->

@@ -2504,8 +2504,8 @@ let pipelineEffectsTests = testList "PipelineEffects" [
         SymbolToTests = Map.ofList [ "Module.add", [| tc1.Id |] ]
         TransitiveCoverage = Map.ofList [ "Module.add", [| tc1.Id |] ]
     }
-    match PipelineEffects.afterTypeCheck ["Module.add"] RunTrigger.Keystroke graph state None with
-    | Some (PipelineEffect.RunAffectedTests (tests, trigger, _tsElapsed, _fcsElapsed, _sessionId)) ->
+    match PipelineEffects.afterTypeCheck ["Module.add"] RunTrigger.Keystroke graph state None [||] with
+    | Some (PipelineEffect.RunAffectedTests (tests, trigger, _tsElapsed, _fcsElapsed, _sessionId, _maps)) ->
       tests.Length |> Expect.equal "one test" 1
       trigger |> Expect.equal "keystroke trigger" RunTrigger.Keystroke
     | other -> failtestf "expected Some RunAffectedTests, got %A" other
@@ -2514,14 +2514,14 @@ let pipelineEffectsTests = testList "PipelineEffects" [
   test "afterTypeCheck with no affected tests returns None" {
     let state = { LiveTestState.empty with DiscoveredTests = [||]; Activation = LiveTestingActivation.Active }
     let graph = TestDependencyGraph.empty
-    PipelineEffects.afterTypeCheck ["unknown.symbol"] RunTrigger.Keystroke graph state None
+    PipelineEffects.afterTypeCheck ["unknown.symbol"] RunTrigger.Keystroke graph state None [||]
     |> Expect.isNone "no affected tests"
   }
 
   test "afterTypeCheck when disabled returns None" {
     let state = { LiveTestState.empty with Activation = LiveTestingActivation.Inactive }
     let graph = TestDependencyGraph.empty
-    PipelineEffects.afterTypeCheck ["Module.add"] RunTrigger.Keystroke graph state None
+    PipelineEffects.afterTypeCheck ["Module.add"] RunTrigger.Keystroke graph state None [||]
     |> Expect.isNone "disabled"
   }
 
@@ -2539,7 +2539,7 @@ let pipelineEffectsTests = testList "PipelineEffects" [
       TestDependencyGraph.empty with
         TransitiveCoverage = Map.ofList [ "Module.add", [| tc1.Id |] ]
     }
-    PipelineEffects.afterTypeCheck ["Module.add"] RunTrigger.Keystroke graph state None
+    PipelineEffects.afterTypeCheck ["Module.add"] RunTrigger.Keystroke graph state None [||]
     |> Expect.isNone "should not produce effect when tests are running"
   }
 
@@ -2557,7 +2557,7 @@ let pipelineEffectsTests = testList "PipelineEffects" [
       TestDependencyGraph.empty with
         TransitiveCoverage = Map.ofList [ "Module.add", [| tc1.Id |] ]
     }
-    PipelineEffects.afterTypeCheck ["Module.add"] RunTrigger.Keystroke graph state None
+    PipelineEffects.afterTypeCheck ["Module.add"] RunTrigger.Keystroke graph state None [||]
     |> Expect.isNone "should not produce effect when running-but-edited"
   }
 
@@ -2578,8 +2578,8 @@ let pipelineEffectsTests = testList "PipelineEffects" [
         SymbolToTests = Map.ofList [ "Module.add", [| tc1.Id; tc2.Id |] ]
         TransitiveCoverage = Map.ofList [ "Module.add", [| tc1.Id; tc2.Id |] ]
     }
-    match PipelineEffects.afterTypeCheck ["Module.add"] RunTrigger.Keystroke graph state None with
-    | Some (PipelineEffect.RunAffectedTests (tests, _, _, _, _)) ->
+    match PipelineEffects.afterTypeCheck ["Module.add"] RunTrigger.Keystroke graph state None [||] with
+    | Some (PipelineEffect.RunAffectedTests (tests, _, _, _, _, _)) ->
       tests.Length |> Expect.equal "only unit test" 1
       tests.[0].Id |> Expect.equal "unit test id" tc1.Id
     | other -> failtestf "expected Some RunAffectedTests, got %A" other
@@ -2792,10 +2792,10 @@ let effectDispatchTests = testList "EffectDispatcher" [
     let tests = [| { Id = TestId.create "t1" "expecto"; FullName = "t1"; DisplayName = "t1"
                      Origin = TestOrigin.ReflectionOnly; Labels = []; Framework = "expecto"
                      Category = TestCategory.Unit } |]
-    EffectDispatcher.dispatch log (PipelineEffect.RunAffectedTests(tests, RunTrigger.Keystroke, System.TimeSpan.Zero, System.TimeSpan.Zero, None))
+    EffectDispatcher.dispatch log (PipelineEffect.RunAffectedTests(tests, RunTrigger.Keystroke, System.TimeSpan.Zero, System.TimeSpan.Zero, None, [||]))
     log.Effects |> Expect.hasLength "one effect" 1
     match log.Effects.[0] with
-    | PipelineEffect.RunAffectedTests(tcs, trigger, _, _, _) ->
+    | PipelineEffect.RunAffectedTests(tcs, trigger, _, _, _, _) ->
       tcs |> Expect.hasLength "one test" 1
       trigger |> Expect.equal "trigger" RunTrigger.Keystroke
     | _ -> failtest "wrong effect type"
@@ -2874,10 +2874,10 @@ let endToEndPipelineTests = testList "End-to-end Pipeline" [
     |> List.exists (fun e -> match e with PipelineEffect.RequestFcsTypeCheck _ -> true | _ -> false)
     |> Expect.isTrue "has fcs"
     // Phase 2: afterTypeCheck (after FCS completes) fires RunAffectedTests
-    let runEffect = PipelineEffects.afterTypeCheck s2.ChangedSymbols RunTrigger.Keystroke s2.DepGraph s2.TestState None
+    let runEffect = PipelineEffects.afterTypeCheck s2.ChangedSymbols RunTrigger.Keystroke s2.DepGraph s2.TestState None s2.InstrumentationMaps
     runEffect |> Expect.isSome "afterTypeCheck produces RunAffectedTests"
     match runEffect.Value with
-    | PipelineEffect.RunAffectedTests (tests, trigger, _, _, _) ->
+    | PipelineEffect.RunAffectedTests (tests, trigger, _, _, _, _) ->
       tests |> Array.length |> Expect.equal "one affected test" 1
       trigger |> Expect.equal "trigger is keystroke" RunTrigger.Keystroke
     | _ -> failwith "expected RunAffectedTests"
@@ -2933,7 +2933,7 @@ let pipelineCancellationTests = testList "PipelineCancellation" [
     let pc = PipelineCancellation.create()
     let t1 = PipelineCancellation.tokenForEffect (PipelineEffect.ParseTreeSitter("x", "f")) pc
     let t2 = PipelineCancellation.tokenForEffect (PipelineEffect.RequestFcsTypeCheck("f", System.TimeSpan.Zero)) pc
-    let t3 = PipelineCancellation.tokenForEffect (PipelineEffect.RunAffectedTests([||], RunTrigger.Keystroke, System.TimeSpan.Zero, System.TimeSpan.Zero, None)) pc
+    let t3 = PipelineCancellation.tokenForEffect (PipelineEffect.RunAffectedTests([||], RunTrigger.Keystroke, System.TimeSpan.Zero, System.TimeSpan.Zero, None, [||])) pc
     t1.IsCancellationRequested |> Expect.isFalse "ts token live"
     t2.IsCancellationRequested |> Expect.isFalse "fcs token live"
     t3.IsCancellationRequested |> Expect.isFalse "run token live"
@@ -2960,8 +2960,8 @@ let pipelineCancellationTests = testList "PipelineCancellation" [
 
   test "new test run cancels previous test run" {
     let pc = PipelineCancellation.create()
-    let run1 = PipelineCancellation.tokenForEffect (PipelineEffect.RunAffectedTests([||], RunTrigger.Keystroke, System.TimeSpan.Zero, System.TimeSpan.Zero, None)) pc
-    let _run2 = PipelineCancellation.tokenForEffect (PipelineEffect.RunAffectedTests([||], RunTrigger.Keystroke, System.TimeSpan.Zero, System.TimeSpan.Zero, None)) pc
+    let run1 = PipelineCancellation.tokenForEffect (PipelineEffect.RunAffectedTests([||], RunTrigger.Keystroke, System.TimeSpan.Zero, System.TimeSpan.Zero, None, [||])) pc
+    let _run2 = PipelineCancellation.tokenForEffect (PipelineEffect.RunAffectedTests([||], RunTrigger.Keystroke, System.TimeSpan.Zero, System.TimeSpan.Zero, None, [||])) pc
     run1.IsCancellationRequested |> Expect.isTrue "first run cancelled"
     PipelineCancellation.dispose pc
   }
@@ -2970,7 +2970,7 @@ let pipelineCancellationTests = testList "PipelineCancellation" [
     let pc = PipelineCancellation.create()
     let ts = PipelineCancellation.tokenForEffect (PipelineEffect.ParseTreeSitter("x", "f")) pc
     let fcs = PipelineCancellation.tokenForEffect (PipelineEffect.RequestFcsTypeCheck("f", System.TimeSpan.Zero)) pc
-    let run = PipelineCancellation.tokenForEffect (PipelineEffect.RunAffectedTests([||], RunTrigger.Keystroke, System.TimeSpan.Zero, System.TimeSpan.Zero, None)) pc
+    let run = PipelineCancellation.tokenForEffect (PipelineEffect.RunAffectedTests([||], RunTrigger.Keystroke, System.TimeSpan.Zero, System.TimeSpan.Zero, None, [||])) pc
     PipelineCancellation.dispose pc
     ts.IsCancellationRequested |> Expect.isTrue "ts cancelled"
     fcs.IsCancellationRequested |> Expect.isTrue "fcs cancelled"
@@ -4307,9 +4307,9 @@ let symbolGraphWiringTests = testList "symbol graph wiring integration" [
         RunPolicies = RunPolicyDefaults.defaults }
     let effect =
       PipelineEffects.afterTypeCheck
-        [ "MyModule.add" ] RunTrigger.Keystroke graph ltState None
+        [ "MyModule.add" ] RunTrigger.Keystroke graph ltState None [||]
     match effect with
-    | Some (PipelineEffect.RunAffectedTests (tests, _, _, _, _)) ->
+    | Some (PipelineEffect.RunAffectedTests (tests, _, _, _, _, _)) ->
       tests |> Array.exists (fun t -> t.Id = tid)
       |> Expect.isTrue "should contain affected test"
     | other -> failtestf "expected Some RunAffectedTests, got %A" other
@@ -4354,7 +4354,7 @@ let symbolGraphWiringTests = testList "symbol graph wiring integration" [
     effects
     |> List.exists (fun e ->
       match e with
-      | PipelineEffect.RunAffectedTests (tests, _, _, _, _) ->
+      | PipelineEffect.RunAffectedTests (tests, _, _, _, _, _) ->
         tests |> Array.exists (fun t -> t.Id = tid)
       | _ -> false)
     |> Expect.isTrue "should produce RunAffectedTests via fallback"
@@ -4374,7 +4374,7 @@ let symbolGraphWiringTests = testList "symbol graph wiring integration" [
         Activation = LiveTestingActivation.Inactive
         DiscoveredTests = [| testCase |]
         RunPolicies = RunPolicyDefaults.defaults }
-    PipelineEffects.afterTypeCheck [ "M.func" ] RunTrigger.Keystroke graph ltState None
+    PipelineEffects.afterTypeCheck [ "M.func" ] RunTrigger.Keystroke graph ltState None [||]
     |> Expect.isNone "no effect when disabled"
   }
 
@@ -4392,7 +4392,7 @@ let symbolGraphWiringTests = testList "symbol graph wiring integration" [
         Activation = LiveTestingActivation.Active
         DiscoveredTests = [| testCase |]
         RunPolicies = RunPolicyDefaults.defaults }
-    PipelineEffects.afterTypeCheck [] RunTrigger.Keystroke graph ltState None
+    PipelineEffects.afterTypeCheck [] RunTrigger.Keystroke graph ltState None [||]
     |> Expect.isNone "no effect when no symbols"
   }
 ]
@@ -5481,7 +5481,7 @@ let affectedExecutionTriggerTests = testList "AffectedTestsComputed execution tr
     let ps = mkPipelineState [| tc1; tc2; tc3 |]
     let effects = LiveTestPipelineState.triggerExecutionForAffected [| tc1.Id; tc2.Id |] RunTrigger.FileSave ps
     match effects with
-    | [ PipelineEffect.RunAffectedTests (tests, _, _, _, _) ] ->
+    | [ PipelineEffect.RunAffectedTests (tests, _, _, _, _, _) ] ->
       tests
       |> Array.length
       |> Expect.equal "should only include unit test" 1
@@ -5494,7 +5494,7 @@ let affectedExecutionTriggerTests = testList "AffectedTestsComputed execution tr
     let ps = mkPipelineState [| tc1; tc2; tc3 |]
     let effects = LiveTestPipelineState.triggerExecutionForAffected [| tc1.Id; tc2.Id |] RunTrigger.ExplicitRun ps
     match effects with
-    | [ PipelineEffect.RunAffectedTests (tests, _, _, _, _) ] ->
+    | [ PipelineEffect.RunAffectedTests (tests, _, _, _, _, _) ] ->
       tests
       |> Array.length
       |> Expect.equal "should include both unit and integration" 2

@@ -453,23 +453,30 @@ module SageFsUpdate =
           else
             [ Features.LiveTesting.PipelineEffect.RunAffectedTests(
                 tests, Features.LiveTesting.RunTrigger.ExplicitRun,
-                System.TimeSpan.Zero, System.TimeSpan.Zero, None)
+                System.TimeSpan.Zero, System.TimeSpan.Zero, None, lt.InstrumentationMaps)
               |> SageFsEffect.Pipeline ]
         { model with LiveTesting = lt }, effects
 
       | SageFsEvent.CoverageUpdated coverage ->
         let lt = model.LiveTesting
+        // Aggregate per file+line: multiple sequence points on same line → single annotation
         let annotations : Features.LiveTesting.CoverageAnnotation array =
           coverage.Slots
-          |> Array.mapi (fun i slot ->
+          |> Array.mapi (fun i slot -> slot, coverage.Hits.[i])
+          |> Array.groupBy (fun (slot, _) -> slot.File, slot.Line)
+          |> Array.map (fun ((file, line), slots) ->
+            let total = slots.Length
+            let covered = slots |> Array.filter snd |> Array.length
             let status =
-              if coverage.Hits.[i] then
-                Features.LiveTesting.CoverageStatus.Covered (1, Features.LiveTesting.CoverageHealth.AllPassing)
-              else
+              if covered = 0 then
                 Features.LiveTesting.CoverageStatus.NotCovered
-            { Symbol = sprintf "%s:%d" slot.File slot.Line
-              FilePath = slot.File
-              DefinitionLine = slot.Line
+              elif covered = total then
+                Features.LiveTesting.CoverageStatus.Covered (total, Features.LiveTesting.CoverageHealth.AllPassing)
+              else
+                Features.LiveTesting.CoverageStatus.Covered (covered, Features.LiveTesting.CoverageHealth.SomeFailing)
+            { Symbol = sprintf "%s:%d" file line
+              FilePath = file
+              DefinitionLine = line
               Status = status })
         { model with
             LiveTesting = { lt with TestState = { lt.TestState with CoverageAnnotations = annotations } } }, []
@@ -477,6 +484,10 @@ module SageFsUpdate =
       | SageFsEvent.RunPolicyChanged (category, policy) ->
         let lt = recomputeStatuses model.LiveTesting (fun s -> { s with RunPolicies = Map.add category policy s.RunPolicies })
         { model with LiveTesting = lt }, []
+
+      | SageFsEvent.InstrumentationMapsReady maps ->
+        let lt = model.LiveTesting
+        { model with LiveTesting = { lt with InstrumentationMaps = maps } }, []
 
       | SageFsEvent.ProvidersDetected providers ->
         let lt = model.LiveTesting
@@ -711,8 +722,9 @@ type EffectDeps = {
   ResolveSession: SessionId option -> Result<SessionOperations.SessionResolution, SageFsError>
   /// Get the proxy for a session
   GetProxy: SessionId -> SessionProxy option
-  /// Get a streaming test execution proxy for a session
-  GetStreamingTestProxy: SessionId -> (Features.LiveTesting.TestCase array -> int -> (Features.LiveTesting.TestRunResult -> unit) -> Async<unit>) option
+  /// Get a streaming test execution proxy for a session.
+  /// The proxy streams test results and IL coverage hits.
+  GetStreamingTestProxy: SessionId -> (Features.LiveTesting.TestCase array -> int -> (Features.LiveTesting.TestRunResult -> unit) -> (bool array -> unit) -> Async<unit>) option
   /// Create a new session
   CreateSession: string list -> string -> Async<Result<SessionInfo, SageFsError>>
   /// Stop a session
@@ -981,7 +993,7 @@ module SageFsEffectHandler =
                 dispatch (SageFsMsg.Event (SageFsEvent.PipelineTimingRecorded timing))
                 Instrumentation.succeedSpan span
             })
-        | Features.LiveTesting.PipelineEffect.RunAffectedTests (tests, trigger, tsElapsed, fcsElapsed, targetSession) ->
+        | Features.LiveTesting.PipelineEffect.RunAffectedTests (tests, trigger, tsElapsed, fcsElapsed, targetSession, instrumentationMaps) ->
           if Array.isEmpty tests then ()
           else
             let testIds = tests |> Array.map (fun tc -> tc.Id)
@@ -999,8 +1011,14 @@ module SageFsEffectHandler =
                   let sid = SessionOperations.sessionId resolution
                   match deps.GetStreamingTestProxy sid with
                   | Some streamProxy ->
-                    do! streamProxy tests 4 (fun result ->
-                      dispatch (SageFsMsg.Event (SageFsEvent.TestResultsBatch [| result |])))
+                    let onResult result =
+                      dispatch (SageFsMsg.Event (SageFsEvent.TestResultsBatch [| result |]))
+                    let onCoverage (hits: bool array) =
+                      let mergedMap = Features.LiveTesting.InstrumentationMap.merge instrumentationMaps
+                      if mergedMap.TotalProbes > 0 && hits.Length = mergedMap.TotalProbes then
+                        let coverage = Features.LiveTesting.InstrumentationMap.toCoverageState hits mergedMap
+                        dispatch (SageFsMsg.Event (SageFsEvent.CoverageUpdated coverage))
+                    do! streamProxy tests 4 onResult onCoverage
                   | None ->
                     let notRunResults =
                       tests |> Array.map (fun tc ->

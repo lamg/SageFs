@@ -22,6 +22,7 @@
     <PackageVersion Include="Lib.Harmony" Version="2.4.2" />
     <PackageVersion Include="Marten" Version="8.21.0" />
     <PackageVersion Include="Microsoft.Extensions.Hosting" Version="9.0.1" />
+    <PackageVersion Include="Mono.Cecil" Version="0.11.6" />
     <PackageVersion Include="Microsoft.NET.StringTools" Version="18.0.2" />
     <PackageVersion Include="ModelContextProtocol" Version="0.9.0-preview.3" />
     <PackageVersion Include="ModelContextProtocol.AspNetCore" Version="0.9.0-preview.3" />

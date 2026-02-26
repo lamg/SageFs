@@ -230,6 +230,24 @@ module WorkerHttpTransport =
             keepReading <- false
 
         let doneBytes = Text.Encoding.UTF8.GetBytes("event: done\ndata: {}\n\n")
+
+        // Collect IL coverage hits from instrumented assemblies
+        let loadedAssemblies =
+          System.AppDomain.CurrentDomain.GetAssemblies()
+          |> Array.filter (fun a ->
+            try not a.IsDynamic && not (isNull a.Location) && a.Location <> ""
+            with _ -> false)
+        match Features.LiveTesting.CoverageInstrumenter.discoverAndCollectHits loadedAssemblies with
+        | Some hits ->
+          let coverageJson = Serialization.serialize {| hits = hits |}
+          let coverageLine = sprintf "event: coverage\ndata: %s\n\n" coverageJson
+          let coverageBytes = Text.Encoding.UTF8.GetBytes(coverageLine)
+          do! writer.WriteAsync(coverageBytes, 0, coverageBytes.Length)
+          do! writer.FlushAsync()
+          // Reset hits for next test run
+          Features.LiveTesting.CoverageInstrumenter.discoverAndResetHits loadedAssemblies
+        | None -> ()
+
         do! writer.WriteAsync(doneBytes, 0, doneBytes.Length)
         do! writer.FlushAsync()
       })) |> ignore

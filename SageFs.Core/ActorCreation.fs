@@ -51,6 +51,8 @@ type ActorResult = {
   ProjectDirectories: string list
   /// Shared hot-reload state — file watcher reads, API writes.
   HotReloadStateRef: HotReloadState.T ref
+  /// IL coverage instrumentation maps from shadow-copy instrumentation.
+  InstrumentationMaps: Features.LiveTesting.InstrumentationMap array
 }
 
 /// Phase 1: Create the actor and return callbacks immediately.
@@ -70,15 +72,22 @@ let createActorImmediate a =
       a.Logger.LogInfo "Project loading complete."
       sln
 
-  let shadowDir, sln =
+  let shadowDir, sln, instrumentationMaps =
     if List.isEmpty originalSln.Projects && List.isEmpty originalSln.References then
-      None, originalSln
+      None, originalSln, ([||] : Features.LiveTesting.InstrumentationMap array)
     else
       a.Logger.LogInfo "Creating shadow copies of assemblies..."
       let dir = ShadowCopy.createShadowDir ()
       let shadowSln = ShadowCopy.shadowCopySolution dir originalSln
       a.Logger.LogInfo (sprintf "  Shadow copies in %s" dir)
-      Some dir, shadowSln
+      a.Logger.LogInfo "  Instrumenting assemblies for IL coverage..."
+      let sw = System.Diagnostics.Stopwatch.StartNew()
+      let targetPaths = shadowSln.Projects |> List.map (fun po -> po.TargetPath)
+      let maps = Features.LiveTesting.CoverageInstrumenter.instrumentShadowSolution targetPaths
+      sw.Stop()
+      let totalProbes = maps |> Array.sumBy (fun m -> m.TotalProbes)
+      a.Logger.LogInfo (sprintf "  IL coverage: %d probes across %d assemblies in %.0fms" totalProbes maps.Length sw.Elapsed.TotalMilliseconds)
+      Some dir, shadowSln, maps
 
   AspireSetup.configureAspireIfNeeded a.Logger sln
 
@@ -87,7 +96,7 @@ let createActorImmediate a =
     mkAppStateActor a.Logger customData a.OutStream a.UseAsp originalSln shadowDir a.OnEvent sln
   let projDirs = projectDirectories originalSln
   let hotReloadStateRef = ref HotReloadState.empty
-  { Actor = appActor; DiagnosticsChanged = diagnosticsChanged; CancelEval = cancelEval; GetSessionState = getSessionState; GetEvalStats = getEvalStats; GetWarmupFailures = getWarmupFailures; GetWarmupContext = getWarmupContext; GetStartupConfig = getStartupConfig; GetStatusMessage = getStatusMessage; ProjectDirectories = projDirs; HotReloadStateRef = hotReloadStateRef }
+  { Actor = appActor; DiagnosticsChanged = diagnosticsChanged; CancelEval = cancelEval; GetSessionState = getSessionState; GetEvalStats = getEvalStats; GetWarmupFailures = getWarmupFailures; GetWarmupContext = getWarmupContext; GetStartupConfig = getStartupConfig; GetStatusMessage = getStatusMessage; ProjectDirectories = projDirs; HotReloadStateRef = hotReloadStateRef; InstrumentationMaps = instrumentationMaps }
 
 /// Phase 2: Add middleware — blocks until init() completes and the
 /// eval actor is ready to process messages in its main loop.

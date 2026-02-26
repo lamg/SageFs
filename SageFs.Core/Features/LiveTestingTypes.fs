@@ -284,6 +284,74 @@ type CoverageState = {
   Hits: bool array
 }
 
+/// Maps instrumented sequence point slots to source locations.
+/// Created once per assembly instrumentation, reused across test runs.
+type InstrumentationMap = {
+  Slots: SequencePoint array
+  TotalProbes: int
+  TrackerTypeName: string
+  HitsFieldName: string
+}
+
+module InstrumentationMap =
+  let empty =
+    { Slots = [||]
+      TotalProbes = 0
+      TrackerTypeName = "__SageFsCoverage"
+      HitsFieldName = "Hits" }
+
+  /// Convert raw hit data + instrumentation map → CoverageState.
+  let toCoverageState (hits: bool array) (map: InstrumentationMap) : CoverageState =
+    if hits.Length <> map.TotalProbes then
+      { Slots = [||]; Hits = [||] }
+    else
+      { Slots = map.Slots; Hits = hits }
+
+  /// Merge multiple maps into one (concatenates slots).
+  /// Worker collects concatenated hits across all assemblies,
+  /// so the merged map's slot order must match.
+  let merge (maps: InstrumentationMap array) : InstrumentationMap =
+    if maps.Length = 0 then empty
+    elif maps.Length = 1 then maps.[0]
+    else
+      let allSlots = maps |> Array.collect (fun m -> m.Slots)
+      { Slots = allSlots
+        TotalProbes = allSlots.Length
+        TrackerTypeName = "__SageFsCoverage"
+        HitsFieldName = "Hits" }
+
+/// Pure functions for computing line-level coverage from IL probe data.
+module ILCoverage =
+  /// Group sequence point hits by (file, line) → per-line coverage status.
+  let computeLineCoverage (state: CoverageState) : Map<string, Map<int, LineCoverage>> =
+    if state.Slots.Length = 0 || state.Slots.Length <> state.Hits.Length then
+      Map.empty
+    else
+      state.Slots
+      |> Array.mapi (fun i sp -> sp, state.Hits.[i])
+      |> Array.groupBy (fun (sp, _) -> sp.File)
+      |> Array.map (fun (file, points) ->
+        let lineMap =
+          points
+          |> Array.groupBy (fun (sp, _) -> sp.Line)
+          |> Array.map (fun (line, linePoints) ->
+            let total = linePoints.Length
+            let covered = linePoints |> Array.filter snd |> Array.length
+            let status =
+              if covered = total then LineCoverage.FullyCovered
+              elif covered > 0 then LineCoverage.PartiallyCovered(covered, total)
+              else LineCoverage.NotCovered
+            line, status)
+          |> Map.ofArray
+        file, lineMap)
+      |> Map.ofArray
+
+  /// Get coverage for a specific file.
+  let forFile (filePath: string) (coverage: Map<string, Map<int, LineCoverage>>) : (int * LineCoverage) array =
+    match Map.tryFind filePath coverage with
+    | None -> [||]
+    | Some lineMap -> lineMap |> Map.toArray
+
 /// Per-test coverage info for a specific symbol
 type CoveringTestInfo = {
   TestId: TestId
@@ -1519,7 +1587,7 @@ module PipelineDebounce =
 type PipelineEffect =
   | ParseTreeSitter of content: string * filePath: string
   | RequestFcsTypeCheck of filePath: string * treeSitterElapsed: System.TimeSpan
-  | RunAffectedTests of tests: TestCase array * trigger: RunTrigger * treeSitterElapsed: System.TimeSpan * fcsElapsed: System.TimeSpan * sessionId: string option
+  | RunAffectedTests of tests: TestCase array * trigger: RunTrigger * treeSitterElapsed: System.TimeSpan * fcsElapsed: System.TimeSpan * sessionId: string option * instrumentationMaps: InstrumentationMap array
 
 module PipelineEffects =
   let fromTick
@@ -1543,6 +1611,7 @@ module PipelineEffects =
     (depGraph: TestDependencyGraph)
     (state: LiveTestState)
     (lastTiming: PipelineTiming option)
+    (instrumentationMaps: InstrumentationMap array)
     : PipelineEffect option =
     if state.Activation = LiveTestingActivation.Inactive
        || TestRunPhase.isRunning state.RunPhase then None
@@ -1561,7 +1630,7 @@ module PipelineEffects =
         else
           let tsElapsed = PipelineTiming.accumulatedTsElapsed lastTiming
           let fcsElapsed = PipelineTiming.accumulatedFcsElapsed lastTiming
-          Some (PipelineEffect.RunAffectedTests(filtered, trigger, tsElapsed, fcsElapsed, None))
+          Some (PipelineEffect.RunAffectedTests(filtered, trigger, tsElapsed, fcsElapsed, None, instrumentationMaps))
 
 /// Adaptive debounce configuration.
 type AdaptiveDebounceConfig = {
@@ -1728,6 +1797,8 @@ type LiveTestPipelineState = {
   AdaptiveDebounce: AdaptiveDebounce
   LastTrigger: RunTrigger
   LastTiming: PipelineTiming option
+  /// IL coverage instrumentation map for the current shadow-copied assemblies.
+  InstrumentationMaps: InstrumentationMap array
 }
 
 module LiveTestPipelineState =
@@ -1742,6 +1813,7 @@ module LiveTestPipelineState =
     AdaptiveDebounce = AdaptiveDebounce.createDefault()
     LastTrigger = RunTrigger.Keystroke
     LastTiming = None
+    InstrumentationMaps = [||]
   }
 
   let liveTestingStatusBarForSession (activeSessionId: string) (state: LiveTestPipelineState) : string =
@@ -1818,7 +1890,7 @@ module LiveTestPipelineState =
     | FcsTypeCheckResult.Success (filePath, refs) ->
       let s1 = onFcsComplete filePath refs s
       let trigger = s.LastTrigger
-      let effect = PipelineEffects.afterTypeCheck s1.ChangedSymbols trigger s1.DepGraph s1.TestState s1.LastTiming
+      let effect = PipelineEffects.afterTypeCheck s1.ChangedSymbols trigger s1.DepGraph s1.TestState s1.LastTiming s1.InstrumentationMaps
       let effects = effect |> Option.toList
       effects, s1
     | FcsTypeCheckResult.Failed _ ->
@@ -1848,7 +1920,7 @@ module LiveTestPipelineState =
         |> TestPrioritization.prioritize s.TestState.LastResults
       if Array.isEmpty filtered then []
       else
-        [ PipelineEffect.RunAffectedTests(filtered, trigger, System.TimeSpan.Zero, System.TimeSpan.Zero, None) ]
+        [ PipelineEffect.RunAffectedTests(filtered, trigger, System.TimeSpan.Zero, System.TimeSpan.Zero, None, s.InstrumentationMaps) ]
 
   /// Filter tests by optional criteria for explicit MCP-triggered runs.
   /// All filters are AND'd. None = no filter = match all.
