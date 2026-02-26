@@ -15,6 +15,9 @@ open SageFs.Features.Replay
 open SageFs.Features.Events
 open SageFs.Features.Diagnostics
 open SageFs
+open SageFs.SessionManager
+open SageFs.StandbyPool
+open SageFs.Features.LiveTesting
 open System
 open System.Text.Json
 
@@ -1982,6 +1985,261 @@ let paneIdTests = testList "PaneId" [
   ]
 ]
 
+// ═══════════════════════════════════════════════════════════
+// SessionManager — computeStandbyInfo state machine
+// ═══════════════════════════════════════════════════════════
+
+let private mkStandbyKey wd name =
+  { StandbyKey.Projects = [name]; WorkingDir = wd }
+
+let private mkStandbySession state progress =
+  { StandbySession.Process = Unchecked.defaultof<_>
+    Proxy = None
+    State = state
+    WarmupProgress = progress
+    Projects = ["test"]
+    WorkingDir = "C:\\test"
+    CreatedAt = DateTime.UtcNow }
+
+let computeStandbyInfoTests = testList "computeStandbyInfo" [
+  test "disabled pool returns NoPool" {
+    let pool = { PoolState.Standbys = Map.empty; Enabled = false }
+    computeStandbyInfo pool |> Expect.equal "nopool" StandbyInfo.NoPool
+  }
+  test "enabled empty standbys returns NoPool" {
+    let pool = { PoolState.Standbys = Map.empty; Enabled = true }
+    computeStandbyInfo pool |> Expect.equal "nopool" StandbyInfo.NoPool
+  }
+  test "all Ready returns Ready" {
+    let pool =
+      { PoolState.Standbys =
+          Map.ofList [
+            mkStandbyKey "C:\\a" "p1", mkStandbySession StandbyState.Ready None
+            mkStandbyKey "C:\\b" "p2", mkStandbySession StandbyState.Ready None ]
+        Enabled = true }
+    computeStandbyInfo pool |> Expect.equal "ready" StandbyInfo.Ready
+  }
+  test "any Invalidated returns Invalidated" {
+    let pool =
+      { PoolState.Standbys =
+          Map.ofList [
+            mkStandbyKey "C:\\a" "p1", mkStandbySession StandbyState.Ready None
+            mkStandbyKey "C:\\b" "p2", mkStandbySession StandbyState.Invalidated None ]
+        Enabled = true }
+    computeStandbyInfo pool |> Expect.equal "invalidated" StandbyInfo.Invalidated
+  }
+  test "Warming with progress returns Warming msg" {
+    let pool =
+      { PoolState.Standbys =
+          Map.ofList [
+            mkStandbyKey "C:\\a" "p1", mkStandbySession StandbyState.Warming (Some "loading refs") ]
+        Enabled = true }
+    match computeStandbyInfo pool with
+    | StandbyInfo.Warming msg -> msg |> Expect.stringContains "has loading" "loading"
+    | other -> failwithf "Expected Warming, got %A" other
+  }
+  test "Warming without progress returns Warming" {
+    let pool =
+      { PoolState.Standbys =
+          Map.ofList [
+            mkStandbyKey "C:\\a" "p1", mkStandbySession StandbyState.Warming None ]
+        Enabled = true }
+    match computeStandbyInfo pool with
+    | StandbyInfo.Warming _ -> ()
+    | other -> failwithf "Expected Warming, got %A" other
+  }
+  test "Invalidated takes priority over Warming" {
+    let pool =
+      { PoolState.Standbys =
+          Map.ofList [
+            mkStandbyKey "C:\\a" "p1", mkStandbySession StandbyState.Warming (Some "x")
+            mkStandbyKey "C:\\b" "p2", mkStandbySession StandbyState.Invalidated None ]
+        Enabled = true }
+    computeStandbyInfo pool |> Expect.equal "invalidated wins" StandbyInfo.Invalidated
+  }
+  test "Invalidated takes priority over Ready" {
+    let pool =
+      { PoolState.Standbys =
+          Map.ofList [
+            mkStandbyKey "C:\\a" "p1", mkStandbySession StandbyState.Ready None
+            mkStandbyKey "C:\\b" "p2", mkStandbySession StandbyState.Invalidated None
+            mkStandbyKey "C:\\c" "p3", mkStandbySession StandbyState.Ready None ]
+        Enabled = true }
+    computeStandbyInfo pool |> Expect.equal "invalidated wins" StandbyInfo.Invalidated
+  }
+]
+
+// ═══════════════════════════════════════════════════════════
+// ManagerState — empty state safety
+// ═══════════════════════════════════════════════════════════
+
+let managerStateTests = testList "ManagerState" [
+  test "empty has no sessions" {
+    ManagerState.empty.Sessions |> Expect.isEmpty "no sessions"
+  }
+  test "empty tryGetSession returns None" {
+    ManagerState.empty |> ManagerState.tryGetSession "nonexistent"
+    |> Expect.isNone "no session"
+  }
+  test "removeSession on empty is safe" {
+    let result = ManagerState.empty |> ManagerState.removeSession "x"
+    result.Sessions |> Expect.isEmpty "still empty"
+  }
+  test "empty pool is enabled by default" {
+    ManagerState.empty.Pool.Enabled |> Expect.isTrue "enabled"
+  }
+  test "empty pool has no standbys" {
+    ManagerState.empty.Pool.Standbys |> Expect.isEmpty "no standbys"
+  }
+]
+
+// ═══════════════════════════════════════════════════════════
+// StandbyInfo.label — display string for each state
+// ═══════════════════════════════════════════════════════════
+
+let standbyInfoLabelTests = testList "StandbyInfo.label" [
+  test "NoPool is empty" {
+    StandbyInfo.label StandbyInfo.NoPool |> Expect.equal "empty" ""
+  }
+  test "Ready shows checkmark" {
+    StandbyInfo.label StandbyInfo.Ready |> Expect.stringContains "has check" "✓"
+  }
+  test "Invalidated shows warning" {
+    StandbyInfo.label StandbyInfo.Invalidated |> Expect.stringContains "has warning" "⚠"
+  }
+  test "Warming with message shows phase" {
+    StandbyInfo.label (StandbyInfo.Warming "loading") |> Expect.stringContains "has phase" "loading"
+  }
+  test "Warming with empty message shows standby" {
+    StandbyInfo.label (StandbyInfo.Warming "") |> Expect.stringContains "has standby" "standby"
+  }
+]
+
+// ═══════════════════════════════════════════════════════════
+// GutterRender — gutter width, lookup, and icon colors
+// ═══════════════════════════════════════════════════════════
+
+let gutterRenderTests = testList "GutterRender" [
+  test "gutterWidth is 0 for empty annotations" {
+    GutterRender.gutterWidth [||] |> Expect.equal "zero" 0
+  }
+  test "gutterWidth is 2 for non-empty annotations" {
+    let ann = [| { LineAnnotation.Line = 1; Icon = GutterIcon.TestPassed; Tooltip = "" } |]
+    GutterRender.gutterWidth ann |> Expect.equal "two" 2
+  }
+  test "buildLookup maps line to annotation" {
+    let ann = [|
+      { LineAnnotation.Line = 5; Icon = GutterIcon.TestPassed; Tooltip = "pass" }
+      { LineAnnotation.Line = 10; Icon = GutterIcon.TestFailed; Tooltip = "fail" }
+    |]
+    let lookup = GutterRender.buildLookup ann
+    lookup.Count |> Expect.equal "two entries" 2
+    lookup.[5].Icon |> Expect.equal "line 5" GutterIcon.TestPassed
+    lookup.[10].Icon |> Expect.equal "line 10" GutterIcon.TestFailed
+  }
+  test "buildLookup last wins for duplicate lines" {
+    let ann = [|
+      { LineAnnotation.Line = 1; Icon = GutterIcon.TestPassed; Tooltip = "first" }
+      { LineAnnotation.Line = 1; Icon = GutterIcon.TestFailed; Tooltip = "second" }
+    |]
+    let lookup = GutterRender.buildLookup ann
+    lookup.[1].Icon |> Expect.equal "last wins" GutterIcon.TestFailed
+  }
+  test "buildLookup empty input gives empty map" {
+    GutterRender.buildLookup [||] |> Expect.isEmpty "empty"
+  }
+  test "iconFgColor maps each icon to a color byte" {
+    let theme = Theme.defaults
+    let icons = [
+      GutterIcon.TestPassed; GutterIcon.TestFailed; GutterIcon.TestDiscovered
+      GutterIcon.TestRunning; GutterIcon.TestSkipped; GutterIcon.TestFlaky
+      GutterIcon.Covered; GutterIcon.NotCovered
+    ]
+    for icon in icons do
+      let color = GutterRender.iconFgColor theme icon
+      (int color, 0) |> Expect.isGreaterThanOrEqual "non-negative color"
+  }
+  test "TestPassed and Covered share same color" {
+    let theme = Theme.defaults
+    GutterRender.iconFgColor theme GutterIcon.Covered
+    |> Expect.equal "same success color" (GutterRender.iconFgColor theme GutterIcon.TestPassed)
+  }
+  test "TestFailed uses different color than TestPassed" {
+    let theme = Theme.defaults
+    GutterRender.iconFgColor theme GutterIcon.TestFailed
+    |> Expect.notEqual "different colors" (GutterRender.iconFgColor theme GutterIcon.TestPassed)
+  }
+]
+
+// ═══════════════════════════════════════════════════════════
+// McpAdapter — file classification and JSON formatting
+// ═══════════════════════════════════════════════════════════
+
+let mcpAdapterPureTests = testList "McpAdapter pure" [
+  testList "isSolutionFile" [
+    test "sln" { McpAdapter.isSolutionFile "foo.sln" |> Expect.isTrue ".sln" }
+    test "slnx" { McpAdapter.isSolutionFile "foo.slnx" |> Expect.isTrue ".slnx" }
+    test "fsproj is not" { McpAdapter.isSolutionFile "foo.fsproj" |> Expect.isFalse "not sln" }
+    test "empty" { McpAdapter.isSolutionFile "" |> Expect.isFalse "empty" }
+    test "case sensitive" { McpAdapter.isSolutionFile "foo.SLN" |> Expect.isFalse "case matters" }
+  ]
+  testList "isProjectFile" [
+    test "fsproj" { McpAdapter.isProjectFile "foo.fsproj" |> Expect.isTrue ".fsproj" }
+    test "sln is not" { McpAdapter.isProjectFile "foo.sln" |> Expect.isFalse "not proj" }
+    test "csproj is not" { McpAdapter.isProjectFile "foo.csproj" |> Expect.isFalse "not csproj" }
+    test "case sensitive" { McpAdapter.isProjectFile "foo.FSPROJ" |> Expect.isFalse "case matters" }
+  ]
+  testList "formatAvailableProjects" [
+    test "lists projects and solutions" {
+      let result = McpAdapter.formatAvailableProjects "C:\\test" [|"a.fsproj"|] [|"b.sln"|]
+      result |> Expect.stringContains "has project" "a.fsproj"
+      result |> Expect.stringContains "has solution" "b.sln"
+      result |> Expect.stringContains "has dir" "C:\\test"
+    }
+    test "empty arrays show none found" {
+      let result = McpAdapter.formatAvailableProjects "C:\\test" [||] [||]
+      result |> Expect.stringContains "no projects" "(none found)"
+    }
+    test "multiple projects listed" {
+      let result = McpAdapter.formatAvailableProjects "C:\\test" [|"a.fsproj";"b.fsproj"|] [||]
+      result |> Expect.stringContains "has a" "a.fsproj"
+      result |> Expect.stringContains "has b" "b.fsproj"
+    }
+  ]
+  testList "formatDiagnosticsResultJson" [
+    test "empty diagnostics produces valid JSON" {
+      let json = McpAdapter.formatDiagnosticsResultJson [||]
+      let doc = JsonDocument.Parse(json)
+      doc.RootElement.GetProperty("count").GetInt32() |> Expect.equal "count" 0
+    }
+    test "single diagnostic has required JSON fields" {
+      let diag = {
+        Diagnostic.Message = "test error"
+        Severity = DiagnosticSeverity.Error
+        Range = { StartLine = 1; StartColumn = 0; EndLine = 1; EndColumn = 10 }
+        Subcategory = ""
+      }
+      let json = McpAdapter.formatDiagnosticsResultJson [| diag |]
+      let doc = JsonDocument.Parse(json)
+      doc.RootElement.GetProperty("count").GetInt32() |> Expect.equal "count" 1
+      let first = doc.RootElement.GetProperty("diagnostics").EnumerateArray() |> Seq.head
+      first.GetProperty("message").GetString() |> Expect.equal "msg" "test error"
+      first.GetProperty("severity").GetString() |> Expect.equal "sev" "error"
+    }
+    test "count matches array length" {
+      let mkDiag msg = {
+        Diagnostic.Message = msg
+        Severity = DiagnosticSeverity.Warning
+        Range = { StartLine = 1; StartColumn = 0; EndLine = 1; EndColumn = 5 }
+        Subcategory = ""
+      }
+      let json = McpAdapter.formatDiagnosticsResultJson [| mkDiag "a"; mkDiag "b"; mkDiag "c" |]
+      let doc = JsonDocument.Parse(json)
+      doc.RootElement.GetProperty("count").GetInt32() |> Expect.equal "count" 3
+    }
+  ]
+]
+
 [<Tests>]
 let allPureFunctionCoverageTests = testList "Pure function coverage" [
   testList "HotReloading" [
@@ -2084,5 +2342,12 @@ let allPureFunctionCoverageTests = testList "Pure function coverage" [
     keyMapParseTests
     layoutComputeTests
     paneIdTests
+  ]
+  testList "SessionManager, StandbyPool, GutterRender, McpAdapter" [
+    computeStandbyInfoTests
+    managerStateTests
+    standbyInfoLabelTests
+    gutterRenderTests
+    mcpAdapterPureTests
   ]
 ]
