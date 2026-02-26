@@ -340,6 +340,7 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                 logging.AddFilter("Microsoft.AspNetCore.Server.Kestrel", LogLevel.Warning) |> ignore
                 logging.AddFilter("Microsoft.Hosting", LogLevel.Warning) |> ignore
                 logging.AddFilter("ModelContextProtocol.Server.McpServer", fun level -> level > LogLevel.Information) |> ignore
+                logging.AddFilter("ModelContextProtocol.AspNetCore.SseHandler", LogLevel.Warning) |> ignore
                 // Let SageFs-namespaced logs flow through at Information+ for OTEL
                 logging.AddFilter("SageFs", LogLevel.Information) |> ignore
             ) |> ignore
