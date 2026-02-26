@@ -420,21 +420,12 @@ module SageFsUpdate =
         { model with LiveTesting = lt }, []
 
       | SageFsEvent.TestRunCompleted ->
-        let testState = model.LiveTesting.TestState
-        let needsRetrigger =
-          match testState.RunPhase with
-          | Features.LiveTesting.TestRunPhase.RunningButEdited _ -> true
-          | _ -> false
-        let affectedIds = testState.AffectedTests |> Set.toArray
+        // Transition to Idle unconditionally. If RunningButEdited, the results are stale
+        // but the debounced pipeline (already queued from the keystrokes that caused the edit)
+        // will handle re-triggering. NO immediate retrigger — that causes infinite loops.
         let lt = recomputeStatuses model.LiveTesting (fun s ->
           { s with RunPhase = Features.LiveTesting.TestRunPhase.Idle; AffectedTests = Set.empty })
-        let effects =
-          if needsRetrigger && affectedIds.Length > 0 then
-            Features.LiveTesting.LiveTestPipelineState.triggerExecutionForAffected
-              affectedIds Features.LiveTesting.RunTrigger.FileSave lt
-            |> List.map SageFsEffect.Pipeline
-          else []
-        { model with LiveTesting = lt }, effects
+        { model with LiveTesting = lt }, []
 
       | SageFsEvent.LiveTestingEnabled ->
         let lt = recomputeStatuses model.LiveTesting (fun s -> { s with Activation = Features.LiveTesting.LiveTestingActivation.Active })
