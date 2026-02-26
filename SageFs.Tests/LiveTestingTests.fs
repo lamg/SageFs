@@ -5817,3 +5817,152 @@ let coverageCorrelationTests = testList "CoverageCorrelation" [
     |> Expect.equal "annotation but no graph entry" CoverageDetail.NotCovered
   }
 ]
+
+// --- CoverageBitmap Tests ---
+
+let coverageBitmapTests = testList "CoverageBitmap" [
+  testList "ofBoolArray/toBoolArray round-trip" [
+    test "empty array round-trips" {
+      let bm = CoverageBitmap.ofBoolArray [||]
+      bm |> CoverageBitmap.toBoolArray |> Expect.equal "should round-trip empty" [||]
+    }
+
+    test "single true round-trips" {
+      let hits = [| true |]
+      hits |> CoverageBitmap.ofBoolArray |> CoverageBitmap.toBoolArray
+      |> Expect.equal "should round-trip [true]" hits
+    }
+
+    test "single false round-trips" {
+      let hits = [| false |]
+      hits |> CoverageBitmap.ofBoolArray |> CoverageBitmap.toBoolArray
+      |> Expect.equal "should round-trip [false]" hits
+    }
+
+    test "64 elements round-trips (exact word boundary)" {
+      let hits = Array.init 64 (fun i -> i % 3 = 0)
+      hits |> CoverageBitmap.ofBoolArray |> CoverageBitmap.toBoolArray
+      |> Expect.equal "should round-trip 64 elements" hits
+    }
+
+    test "65 elements round-trips (crosses word boundary)" {
+      let hits = Array.init 65 (fun i -> i % 2 = 0)
+      hits |> CoverageBitmap.ofBoolArray |> CoverageBitmap.toBoolArray
+      |> Expect.equal "should round-trip 65 elements" hits
+    }
+
+    test "256 elements round-trips (4 words)" {
+      let hits = Array.init 256 (fun i -> i % 5 = 0 || i % 7 = 0)
+      hits |> CoverageBitmap.ofBoolArray |> CoverageBitmap.toBoolArray
+      |> Expect.equal "should round-trip 256 elements" hits
+    }
+
+    testProperty "round-trip preserves any bool array" (fun (hits: bool array) ->
+      hits |> CoverageBitmap.ofBoolArray |> CoverageBitmap.toBoolArray = hits)
+  ]
+
+  testList "equivalent" [
+    test "identical bitmaps are equivalent" {
+      let bm = CoverageBitmap.ofBoolArray [| true; false; true; true |]
+      CoverageBitmap.equivalent bm bm |> Expect.isTrue "same bitmap should be equivalent"
+    }
+
+    test "different bitmaps are not equivalent" {
+      let a = CoverageBitmap.ofBoolArray [| true; false |]
+      let b = CoverageBitmap.ofBoolArray [| false; true |]
+      CoverageBitmap.equivalent a b |> Expect.isFalse "different bitmaps should not be equivalent"
+    }
+
+    test "different sizes are not equivalent" {
+      let a = CoverageBitmap.ofBoolArray [| true |]
+      let b = CoverageBitmap.ofBoolArray [| true; true |]
+      CoverageBitmap.equivalent a b |> Expect.isFalse "different sizes should not be equivalent"
+    }
+
+    test "empty bitmaps are equivalent" {
+      CoverageBitmap.equivalent CoverageBitmap.empty CoverageBitmap.empty
+      |> Expect.isTrue "empty bitmaps should be equivalent"
+    }
+  ]
+
+  testList "popCount" [
+    test "empty bitmap has 0 population" {
+      CoverageBitmap.empty |> CoverageBitmap.popCount |> Expect.equal "should be 0" 0
+    }
+
+    test "all-true bitmap has count = length" {
+      let bm = CoverageBitmap.ofBoolArray (Array.create 100 true)
+      bm |> CoverageBitmap.popCount |> Expect.equal "should be 100" 100
+    }
+
+    test "all-false bitmap has count = 0" {
+      let bm = CoverageBitmap.ofBoolArray (Array.create 100 false)
+      bm |> CoverageBitmap.popCount |> Expect.equal "should be 0" 0
+    }
+
+    testProperty "popCount equals count of true values" (fun (hits: bool array) ->
+      let expected = hits |> Array.filter id |> Array.length
+      hits |> CoverageBitmap.ofBoolArray |> CoverageBitmap.popCount = expected)
+  ]
+
+  testList "intersect" [
+    test "AND of identical bitmaps is same bitmap" {
+      let bm = CoverageBitmap.ofBoolArray [| true; false; true |]
+      let result = CoverageBitmap.intersect bm bm
+      CoverageBitmap.equivalent result bm |> Expect.isTrue "AND with self should be self"
+    }
+
+    test "AND with all-false yields all-false" {
+      let a = CoverageBitmap.ofBoolArray [| true; true; true |]
+      let b = CoverageBitmap.ofBoolArray [| false; false; false |]
+      let result = CoverageBitmap.intersect a b
+      result |> CoverageBitmap.popCount |> Expect.equal "AND with zeros should be 0" 0
+    }
+  ]
+
+  testList "xorDiff" [
+    test "XOR of identical bitmaps is all zeros" {
+      let bm = CoverageBitmap.ofBoolArray [| true; false; true |]
+      let result = CoverageBitmap.xorDiff bm bm
+      result |> CoverageBitmap.popCount |> Expect.equal "XOR with self should be 0" 0
+    }
+
+    test "XOR finds differences" {
+      let a = CoverageBitmap.ofBoolArray [| true;  false; true;  false |]
+      let b = CoverageBitmap.ofBoolArray [| true;  true;  false; false |]
+      let result = CoverageBitmap.xorDiff a b
+      result |> CoverageBitmap.popCount |> Expect.equal "should have 2 differences" 2
+    }
+  ]
+
+  testList "isSet" [
+    test "returns true for set bit" {
+      let bm = CoverageBitmap.ofBoolArray [| false; true; false |]
+      bm |> CoverageBitmap.isSet 1 |> Expect.isTrue "bit 1 should be set"
+    }
+
+    test "returns false for unset bit" {
+      let bm = CoverageBitmap.ofBoolArray [| false; true; false |]
+      bm |> CoverageBitmap.isSet 0 |> Expect.isFalse "bit 0 should not be set"
+    }
+
+    test "out of range returns false" {
+      let bm = CoverageBitmap.ofBoolArray [| true |]
+      bm |> CoverageBitmap.isSet 5 |> Expect.isFalse "out of range should be false"
+    }
+  ]
+
+  testList "memory efficiency" [
+    test "bitmap uses 8x less memory than bool array" {
+      let hits = Array.create 256 true
+      let bm = CoverageBitmap.ofBoolArray hits
+      bm.Bits.Length |> Expect.equal "should use 4 uint64 words" 4
+    }
+
+    test "2608 probes fits in 41 uint64 words" {
+      let hits = Array.create 2608 false
+      let bm = CoverageBitmap.ofBoolArray hits
+      bm.Bits.Length |> Expect.equal "should use 41 words for 2608 probes" 41
+    }
+  ]
+]

@@ -560,15 +560,29 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
     loop emptySnapshot
   )
 
+  // CQRS snapshot: volatile ref for lock-free reads of query state.
+  // Writers: publishSnapshot (called by main actor on every state change).
+  // Readers: getSessionState, getEvalStats, etc. — zero mailbox round-trip.
+  let mutable latestSnapshot : QuerySnapshot = {
+    AppState = Unchecked.defaultof<AppState>
+    SessionState = SessionState.WarmingUp
+    EvalStats = Affordances.EvalStats.empty
+    StartupConfig = None
+    WarmupFailures = []
+    StatusMessage = None
+  }
+
   let publishSnapshot st sessionState evalStats =
-    queryActor.Post(UpdateSnapshot {
+    let snap = {
       AppState = st
       SessionState = sessionState
       EvalStats = evalStats
       StartupConfig = st.StartupConfig
       WarmupFailures = st.WarmupFailures
       StatusMessage = None
-    })
+    }
+    System.Threading.Volatile.Write(&latestSnapshot, snap)
+    queryActor.Post(UpdateSnapshot snap)
 
   // Shared refs for cancellation + thread interruption.
   // Readable by both the eval actor (to set) and router actor (to cancel/interrupt).
@@ -1081,25 +1095,26 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
     loop ()
   )
 
-  // Bypass closures read from query actor — no mutable state
+  // CQRS reads: volatile snapshot — zero blocking, zero mailbox round-trip
   let getSessionState () =
-    queryActor.PostAndAsyncReply(fun reply -> QueryGetSessionState reply)
-    |> Async.RunSynchronously
+    let snap = System.Threading.Volatile.Read(&latestSnapshot)
+    snap.SessionState
   let getEvalStats () =
-    queryActor.PostAndAsyncReply(fun reply -> QueryGetEvalStats reply)
-    |> Async.RunSynchronously
+    let snap = System.Threading.Volatile.Read(&latestSnapshot)
+    snap.EvalStats
   let getWarmupFailures () =
-    queryActor.PostAndAsyncReply(fun reply -> QueryGetWarmupFailures reply)
-    |> Async.RunSynchronously
+    let snap = System.Threading.Volatile.Read(&latestSnapshot)
+    snap.WarmupFailures
   let getWarmupContext () =
-    queryActor.PostAndAsyncReply(fun reply -> QueryGetWarmupContext reply)
-    |> Async.RunSynchronously
+    let snap = System.Threading.Volatile.Read(&latestSnapshot)
+    if obj.ReferenceEquals(snap.AppState, null) then WarmupContext.empty
+    else snap.AppState.WarmupContext
   let getStartupConfig () =
-    queryActor.PostAndAsyncReply(fun reply -> QueryGetStartupConfig reply)
-    |> Async.RunSynchronously
+    let snap = System.Threading.Volatile.Read(&latestSnapshot)
+    snap.StartupConfig
   let getStatusMessage () =
-    queryActor.PostAndAsyncReply(fun reply -> QueryGetStatusMessage reply)
-    |> Async.RunSynchronously
+    let snap = System.Threading.Volatile.Read(&latestSnapshot)
+    snap.StatusMessage
   let cancelCurrentEval () =
     actor.PostAndAsyncReply(fun reply -> CancelEval reply)
     |> Async.RunSynchronously

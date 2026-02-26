@@ -352,6 +352,83 @@ module ILCoverage =
     | None -> [||]
     | Some lineMap -> lineMap |> Map.toArray
 
+/// Packed bit-vector representation of coverage data.
+/// Uses uint64[] instead of bool[] for 8× memory reduction and SIMD-friendly comparison.
+/// Designed for efficient equivalence checks in many-worlds mutation testing (Molina).
+type CoverageBitmap = {
+  Bits: uint64 array
+  Count: int
+}
+
+module CoverageBitmap =
+  let inline private wordsNeeded count = (count + 63) / 64
+
+  let empty = { Bits = [||]; Count = 0 }
+
+  /// Pack a bool array into a CoverageBitmap.
+  let ofBoolArray (hits: bool array) : CoverageBitmap =
+    let count = hits.Length
+    if count = 0 then empty
+    else
+      let words = wordsNeeded count
+      let bits = Array.zeroCreate<uint64> words
+      for i in 0 .. count - 1 do
+        if hits.[i] then
+          let word = i / 64
+          let bit = i % 64
+          bits.[word] <- bits.[word] ||| (1UL <<< bit)
+      { Bits = bits; Count = count }
+
+  /// Unpack a CoverageBitmap back to a bool array.
+  let toBoolArray (bm: CoverageBitmap) : bool array =
+    if bm.Count = 0 then [||]
+    else
+      let result = Array.zeroCreate<bool> bm.Count
+      for i in 0 .. bm.Count - 1 do
+        let word = i / 64
+        let bit = i % 64
+        result.[i] <- (bm.Bits.[word] &&& (1UL <<< bit)) <> 0UL
+      result
+
+  /// Check if two bitmaps have identical coverage (same size + same bits).
+  /// JIT auto-vectorizes this comparison loop.
+  let equivalent (a: CoverageBitmap) (b: CoverageBitmap) : bool =
+    if a.Count <> b.Count then false
+    else
+      let mutable eq = true
+      let mutable i = 0
+      while eq && i < a.Bits.Length do
+        eq <- a.Bits.[i] = b.Bits.[i]
+        i <- i + 1
+      eq
+
+  /// Count number of set bits (covered probes).
+  let popCount (bm: CoverageBitmap) : int =
+    let mutable total = 0
+    for w in bm.Bits do
+      total <- total + (System.Numerics.BitOperations.PopCount(w) |> int)
+    total
+
+  /// Bitwise AND — intersection of two coverage bitmaps.
+  let intersect (a: CoverageBitmap) (b: CoverageBitmap) : CoverageBitmap =
+    if a.Count <> b.Count then failwith "CoverageBitmap size mismatch"
+    let bits = Array.init a.Bits.Length (fun i -> a.Bits.[i] &&& b.Bits.[i])
+    { Bits = bits; Count = a.Count }
+
+  /// Bitwise XOR — symmetric difference of two coverage bitmaps.
+  let xorDiff (a: CoverageBitmap) (b: CoverageBitmap) : CoverageBitmap =
+    if a.Count <> b.Count then failwith "CoverageBitmap size mismatch"
+    let bits = Array.init a.Bits.Length (fun i -> a.Bits.[i] ^^^ b.Bits.[i])
+    { Bits = bits; Count = a.Count }
+
+  /// Check if a specific probe index is set.
+  let isSet (index: int) (bm: CoverageBitmap) : bool =
+    if index < 0 || index >= bm.Count then false
+    else
+      let word = index / 64
+      let bit = index % 64
+      (bm.Bits.[word] &&& (1UL <<< bit)) <> 0UL
+
 /// Per-test coverage info for a specific symbol
 type CoveringTestInfo = {
   TestId: TestId
