@@ -8,7 +8,10 @@ open SageFs.Middleware.HotReloading
 open SageFs.Features.AutoCompletion
 open SageFs.AppState
 open SageFs.FileWatcher
+open SageFs.McpAdapter
+open SageFs.FsiRewrite
 open System
+open System.Text.Json
 
 // ═══════════════════════════════════════════════════════════
 // HotReloading — isTopLevelFunctionBinding
@@ -498,6 +501,329 @@ let reformatPassthroughOnNonExpecto =
       reformatExpectoSummary plain = plain
 
 // ═══════════════════════════════════════════════════════════
+// McpAdapter — escapeJson (RFC 8259 §7 compliance)
+//
+// WHY: escapeJson is used at 14+ call sites to serialize
+// arbitrary text into JSON strings for MCP clients and
+// browser dashboards. If control characters slip through,
+// JSON parsing fails silently in downstream consumers.
+// ═══════════════════════════════════════════════════════════
+
+let escapeJsonPropertyCfg = { FsCheckConfig.defaultConfig with maxTest = 500 }
+
+let escapeJsonProducesValidJson =
+  testPropertyWithConfig escapeJsonPropertyCfg
+    "escapeJson: output always produces parseable JSON string"
+    <| fun (s: NonEmptyString) ->
+      let escaped = escapeJson s.Get
+      let json = sprintf "\"%s\"" escaped
+      try
+        use doc = JsonDocument.Parse(json)
+        doc.RootElement.GetString() |> ignore
+        true
+      with _ -> false
+
+let escapeJsonRoundtripPreservesContent =
+  testPropertyWithConfig escapeJsonPropertyCfg
+    "escapeJson: JSON parse roundtrip preserves original content"
+    <| fun (s: NonEmptyString) ->
+      let escaped = escapeJson s.Get
+      let json = sprintf "\"%s\"" escaped
+      use doc = JsonDocument.Parse(json)
+      doc.RootElement.GetString() = s.Get
+
+let escapeJsonControlCharExamples = testList "escapeJson: control character examples" [
+  test "backspace is escaped" {
+    let result = escapeJson "hello\bworld"
+    use doc = JsonDocument.Parse(sprintf "\"%s\"" result)
+    doc.RootElement.GetString() |> Expect.equal "roundtrip" "hello\bworld"
+  }
+  test "form feed is escaped" {
+    let result = escapeJson "page\x0Cbreak"
+    use doc = JsonDocument.Parse(sprintf "\"%s\"" result)
+    doc.RootElement.GetString() |> Expect.equal "roundtrip" "page\x0Cbreak"
+  }
+  test "null byte is escaped" {
+    let result = escapeJson "null\x00here"
+    use doc = JsonDocument.Parse(sprintf "\"%s\"" result)
+    doc.RootElement.GetString() |> Expect.equal "roundtrip" "null\x00here"
+  }
+  test "all standard escapes present" {
+    let input = "\"\\\n\r\t\b\x0C"
+    let escaped = escapeJson input
+    escaped |> Expect.stringContains "has quote" "\\\""
+    escaped |> Expect.stringContains "has backslash" "\\\\"
+    escaped |> Expect.stringContains "has newline" "\\n"
+    escaped |> Expect.stringContains "has return" "\\r"
+    escaped |> Expect.stringContains "has tab" "\\t"
+  }
+]
+
+// ═══════════════════════════════════════════════════════════
+// FsiRewrite — rewriteInlineUseStatements
+//
+// WHY: FSI doesn't support `use` at top level. The rewrite
+// replaces leading `use ` with `let ` for FSI eval. A bug
+// that replaces ALL occurrences of "use " in the line
+// corrupts string literals containing "use ".
+// ═══════════════════════════════════════════════════════════
+
+let rewriteInlineUseStatementTests = testList "rewriteInlineUseStatements" [
+  test "leading use becomes let" {
+    let input = "    use svc = createService()"
+    let result = rewriteInlineUseStatements input
+    result |> Expect.equal "rewritten" "    let svc = createService()"
+  }
+  test "use inside string literal is NOT replaced" {
+    let input = """    use svc = create "use this service" """
+    let result = rewriteInlineUseStatements input
+    result |> Expect.stringContains "string preserved" "\"use this service\""
+  }
+  test "line without use is unchanged" {
+    let input = "    let x = 42"
+    let result = rewriteInlineUseStatements input
+    result |> Expect.equal "unchanged" "    let x = 42"
+  }
+  test "use! is not rewritten" {
+    let input = "    use! conn = getConnectionAsync()"
+    let result = rewriteInlineUseStatements input
+    result |> Expect.equal "use! unchanged" "    use! conn = getConnectionAsync()"
+  }
+  test "multiple lines only rewrites the use lines" {
+    let input = "    use x = a()\n    let y = 42\n    use z = b()"
+    let result = rewriteInlineUseStatements input
+    result |> Expect.stringContains "first rewritten" "    let x = a()"
+    result |> Expect.stringContains "middle unchanged" "    let y = 42"
+    result |> Expect.stringContains "third rewritten" "    let z = b()"
+  }
+  test "idempotent — rewriting twice gives same result" {
+    let input = "    use svc = createService()"
+    let once = rewriteInlineUseStatements input
+    let twice = rewriteInlineUseStatements once
+    twice |> Expect.equal "idempotent" once
+  }
+]
+
+// ═══════════════════════════════════════════════════════════
+// McpAdapter — splitStatements (gap-closing examples)
+//
+// WHY: splitStatements parses F# code on `;;` boundaries
+// for FSI evaluation. Incorrect splitting inside strings,
+// comments, or nested constructs would send broken code
+// to the compiler.
+// ═══════════════════════════════════════════════════════════
+
+let splitStatementsGapTests = testList "splitStatements: gap-closing examples" [
+  test "double-semicolon inside string literal is not a boundary" {
+    let code = """let x = "hello;; world";; """
+    let parts = splitStatements code
+    parts.Length |> Expect.equal "one statement" 1
+  }
+  test "double-semicolon inside line comment is not a boundary" {
+    let code = "// this is a comment with ;;\nlet x = 1;;"
+    let parts = splitStatements code
+    parts.Length |> Expect.equal "one statement" 1
+  }
+  test "double-semicolon inside block comment is not a boundary" {
+    let code = "(* comment with ;; inside *)\nlet x = 1;;"
+    let parts = splitStatements code
+    parts.Length |> Expect.equal "one statement" 1
+  }
+  test "multiple real boundaries produce multiple statements" {
+    let code = "let x = 1;;\nlet y = 2;;"
+    let parts = splitStatements code
+    parts.Length |> Expect.equal "two statements" 2
+  }
+  test "nested parentheses don't confuse parser" {
+    let code = "let f (x: (int * int)) = fst x;;"
+    let parts = splitStatements code
+    parts.Length |> Expect.equal "one statement" 1
+  }
+  test "triple-quoted string with semicolons" {
+    let code = "let x = \"\"\"a;;b;;c\"\"\";;"
+    let parts = splitStatements code
+    parts.Length |> Expect.equal "one statement" 1
+  }
+  test "empty input produces no statements" {
+    let parts = splitStatements ""
+    parts.Length |> Expect.equal "no statements" 0
+  }
+  test "whitespace-only input produces no statements" {
+    let parts = splitStatements "   \n  \n  "
+    parts.Length |> Expect.equal "no statements" 0
+  }
+]
+
+// ═══════════════════════════════════════════════════════════
+// KeyMap — parseConfigLines
+//
+// WHY: parseConfigLines reads user keybinding configs. Zero
+// coverage means we don't know if the hand-rolled parser
+// handles edge cases (empty input, malformed lines, unknown
+// keys). A crash here blocks SageFs startup.
+// ═══════════════════════════════════════════════════════════
+
+let parseConfigLinesTests = testList "SageFs.KeyMap.parseConfigLines contracts" [
+  test "valid two-binding config produces two entries" {
+    let lines = [|
+      "let keybindings = ["
+      "  \"Ctrl+Q\", \"Quit\""
+      "  \"Ctrl+S\", \"CycleFocus\""
+      "]"
+    |]
+    let result = SageFs.KeyMap.parseConfigLines lines
+    result.Count |> Expect.equal "two bindings" 2
+  }
+  test "lines before 'let keybindings' are ignored" {
+    let lines = [|
+      "// this is a comment"
+      "let x = 42"
+      "let keybindings = ["
+      "  \"Ctrl+Q\", \"Quit\""
+      "]"
+    |]
+    let result = SageFs.KeyMap.parseConfigLines lines
+    result.Count |> Expect.equal "one binding" 1
+  }
+  test "empty keybindings block produces empty map" {
+    let lines = [| "let keybindings = ["; "]" |]
+    let result = SageFs.KeyMap.parseConfigLines lines
+    result.Count |> Expect.equal "no bindings" 0
+  }
+  test "unrecognized key combo is silently skipped" {
+    let lines = [|
+      "let keybindings = ["
+      "  \"NotAKey+Combo\", \"Quit\""
+      "  \"Ctrl+Q\", \"Quit\""
+      "]"
+    |]
+    let result = SageFs.KeyMap.parseConfigLines lines
+    result.Count |> Expect.equal "only valid binding" 1
+  }
+  test "unrecognized action is silently skipped" {
+    let lines = [|
+      "let keybindings = ["
+      "  \"Ctrl+Q\", \"NotAnAction\""
+      "  \"Ctrl+Q\", \"Quit\""
+      "]"
+    |]
+    let result = SageFs.KeyMap.parseConfigLines lines
+    result.Count |> Expect.equal "only valid binding" 1
+  }
+  test "never crashes on empty input" {
+    let result = SageFs.KeyMap.parseConfigLines [||]
+    result.Count |> Expect.equal "empty" 0
+  }
+  test "never crashes on arbitrary non-config text" {
+    let lines = [| "random text"; "more stuff"; "123"; "" |]
+    let result = SageFs.KeyMap.parseConfigLines lines
+    result.Count |> Expect.equal "no bindings" 0
+  }
+  test "closing bracket stops parsing" {
+    let lines = [|
+      "let keybindings = ["
+      "  \"Ctrl+Q\", \"Quit\""
+      "]"
+      "  \"Ctrl+S\", \"CycleFocus\""
+    |]
+    let result = SageFs.KeyMap.parseConfigLines lines
+    result.Count |> Expect.equal "stops at bracket" 1
+  }
+  test "case-insensitive 'Keybindings' detection" {
+    let lines = [|
+      "let Keybindings = ["
+      "  \"Ctrl+Q\", \"Quit\""
+      "]"
+    |]
+    let result = SageFs.KeyMap.parseConfigLines lines
+    result.Count |> Expect.equal "case insensitive" 1
+  }
+]
+
+let parseConfigLinesNeverCrashes =
+  testPropertyWithConfig { FsCheckConfig.defaultConfig with maxTest = 300 }
+    "parseConfigLines: never crashes on arbitrary string arrays"
+    <| fun (lines: string[]) ->
+      let safeLines = lines |> Array.filter (not << isNull)
+      try
+        SageFs.KeyMap.parseConfigLines safeLines |> ignore
+        true
+      with _ -> false
+
+// ═══════════════════════════════════════════════════════════
+// McpAdapter — formatEventsJson / formatCompletionsJson
+// (MCP protocol contract tests)
+//
+// WHY: These functions serialize data for MCP clients. If the
+// JSON shape changes, all MCP consumers (VS Code, Neovim,
+// Visual Studio) break silently.
+// ═══════════════════════════════════════════════════════════
+
+let formatEventsJsonTests = testList "formatEventsJson: MCP protocol contract" [
+  test "empty events produces valid JSON with count 0" {
+    let result = formatEventsJson []
+    use doc = JsonDocument.Parse(result)
+    let root = doc.RootElement
+    root.GetProperty("count").GetInt32() |> Expect.equal "count" 0
+    root.GetProperty("events").GetArrayLength() |> Expect.equal "array" 0
+  }
+  test "single event produces correct JSON shape" {
+    let ts = DateTime(2025, 1, 15, 10, 30, 0, DateTimeKind.Utc)
+    let result = formatEventsJson [(ts, "mcp:test", "hello world")]
+    use doc = JsonDocument.Parse(result)
+    let root = doc.RootElement
+    root.GetProperty("count").GetInt32() |> Expect.equal "count" 1
+    let ev = root.GetProperty("events").[0]
+    ev.GetProperty("source").GetString() |> Expect.equal "source" "mcp:test"
+    ev.GetProperty("text").GetString() |> Expect.equal "text" "hello world"
+    ev.GetProperty("timestamp").GetString().Length > 0 |> Expect.isTrue "has timestamp"
+  }
+  test "special characters in text are properly escaped" {
+    let ts = DateTime(2025, 1, 15, 10, 30, 0, DateTimeKind.Utc)
+    let result = formatEventsJson [(ts, "src", "line1\nline2\ttab\"quote")]
+    use doc = JsonDocument.Parse(result)
+    let text = doc.RootElement.GetProperty("events").[0].GetProperty("text").GetString()
+    text |> Expect.equal "roundtrip" "line1\nline2\ttab\"quote"
+  }
+]
+
+let formatCompletionsJsonTests = testList "formatCompletionsJson: MCP protocol contract" [
+  test "empty completions produces valid JSON with count 0" {
+    let result = formatCompletionsJson []
+    use doc = JsonDocument.Parse(result)
+    let root = doc.RootElement
+    root.GetProperty("count").GetInt32() |> Expect.equal "count" 0
+    root.GetProperty("completions").GetArrayLength() |> Expect.equal "array" 0
+  }
+  test "completion item has label, kind, insertText fields" {
+    let item = {
+      DisplayText = "myFunction"
+      ReplacementText = "myFunction"
+      Kind = CompletionKind.Method
+      GetDescription = None
+    }
+    let result = formatCompletionsJson [item]
+    use doc = JsonDocument.Parse(result)
+    let comp = doc.RootElement.GetProperty("completions").[0]
+    comp.GetProperty("label").GetString() |> Expect.equal "label" "myFunction"
+    comp.GetProperty("kind").GetString() |> Expect.equal "kind" "Method"
+    comp.GetProperty("insertText").GetString() |> Expect.equal "insert" "myFunction"
+  }
+  test "special characters in display text are properly escaped" {
+    let item = {
+      DisplayText = "func<'a>"
+      ReplacementText = "func"
+      Kind = CompletionKind.Union
+      GetDescription = None
+    }
+    let result = formatCompletionsJson [item]
+    use doc = JsonDocument.Parse(result)
+    let label = doc.RootElement.GetProperty("completions").[0].GetProperty("label").GetString()
+    label |> Expect.equal "roundtrip" "func<'a>"
+  }
+]
+
+// ═══════════════════════════════════════════════════════════
 // Combined
 // ═══════════════════════════════════════════════════════════
 
@@ -553,6 +879,29 @@ let allPureFunctionCoverageTests = testList "Pure function coverage" [
     ]
     testList "reformatExpectoSummary" [
       reformatPassthroughOnNonExpecto
+    ]
+  ]
+  testList "Expert-guided priority tests" [
+    testList "escapeJson" [
+      escapeJsonProducesValidJson
+      escapeJsonRoundtripPreservesContent
+      escapeJsonControlCharExamples
+    ]
+    testList "rewriteInlineUseStatements" [
+      rewriteInlineUseStatementTests
+    ]
+    testList "splitStatements" [
+      splitStatementsGapTests
+    ]
+    testList "parseConfigLines" [
+      parseConfigLinesTests
+      parseConfigLinesNeverCrashes
+    ]
+    testList "formatEventsJson" [
+      formatEventsJsonTests
+    ]
+    testList "formatCompletionsJson" [
+      formatCompletionsJsonTests
     ]
   ]
 ]
