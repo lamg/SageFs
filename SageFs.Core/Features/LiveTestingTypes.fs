@@ -2127,3 +2127,48 @@ module FileAnnotations =
       CoverageAnnotations = coverageAnnotations
       InlineFailures = inlineFailures
       CodeLenses = codeLenses }
+
+  /// Synthesize coverage annotations from dep graph + analysis cache when
+  /// no explicit CoverageUpdated events have been dispatched.
+  let private synthesizeCoverage
+    (filePath: string)
+    (analysisCache: FileAnalysisCache)
+    (depGraph: TestDependencyGraph)
+    (lastResults: Map<TestId, TestRunResult>)
+    : CoverageAnnotation array =
+    match Map.tryFind filePath analysisCache.FileSymbols with
+    | None -> [||]
+    | Some refs ->
+      refs
+      |> List.choose (fun ref ->
+        match Map.tryFind ref.SymbolFullName depGraph.SymbolToTests with
+        | None -> None
+        | Some [||] -> None
+        | Some testIds ->
+          let passCount = testIds |> Array.filter (fun tid -> match Map.tryFind tid lastResults with | Some { Result = TestResult.Passed _ } -> true | _ -> false) |> Array.length
+          let failCount = testIds |> Array.filter (fun tid -> match Map.tryFind tid lastResults with | Some { Result = TestResult.Failed _ } -> true | _ -> false) |> Array.length
+          let health = if failCount > 0 then CoverageHealth.SomeFailing else CoverageHealth.AllPassing
+          let status = if passCount + failCount > 0 then CoverageStatus.Covered(passCount + failCount, health) else CoverageStatus.Pending
+          Some { Symbol = ref.SymbolFullName; FilePath = filePath; DefinitionLine = ref.Line; Status = status })
+      |> Array.ofList
+
+  /// Project file annotations with coverage synthesized from the dependency graph.
+  /// Use this instead of `project` when the full pipeline state is available.
+  let projectWithCoverage (filePath: string) (pipelineState: LiveTestPipelineState) : FileAnnotations =
+    let depGraph = Some pipelineState.DepGraph
+    let base' = project filePath depGraph pipelineState.TestState
+    if base'.CoverageAnnotations.Length > 0 then
+      base'
+    else
+      let synthesized = synthesizeCoverage filePath pipelineState.AnalysisCache pipelineState.DepGraph pipelineState.TestState.LastResults
+      let coverageLineAnnotations =
+        synthesized
+        |> Array.map (fun ca ->
+          { Line = ca.DefinitionLine
+            Detail = ca.Status
+            CoveringTestIds =
+              match Map.tryFind ca.Symbol pipelineState.DepGraph.SymbolToTests with
+              | Some ids -> ids
+              | None -> [||] })
+        |> Array.sortBy (fun c -> c.Line)
+      { base' with CoverageAnnotations = coverageLineAnnotations }

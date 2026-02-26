@@ -526,9 +526,10 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                         | TestOrigin.SourceMapped (f, _) -> Some f
                         | _ -> None)
                       |> Array.distinct
+                    let pipeline = model.LiveTesting
                     for file in files do
-                      let fa = FileAnnotations.project file None lt
-                      if fa.TestAnnotations.Length > 0 || fa.CodeLenses.Length > 0 then
+                      let fa = FileAnnotations.projectWithCoverage file pipeline
+                      if fa.TestAnnotations.Length > 0 || fa.CodeLenses.Length > 0 || fa.CoverageAnnotations.Length > 0 then
                         let faBytes = System.Text.Encoding.UTF8.GetBytes(
                           SageFs.SseWriter.formatFileAnnotationsEvent sseJsonOpts fa)
                         body.WriteAsync(faBytes).AsTask()
@@ -828,7 +829,7 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                                System.StringComparison.OrdinalIgnoreCase))
                       match matchingFiles |> Array.tryHead with
                       | Some fullPath ->
-                        let fa = FileAnnotations.project fullPath None lt
+                        let fa = FileAnnotations.projectWithCoverage fullPath model.LiveTesting
                         let json = System.Text.Json.JsonSerializer.Serialize(fa, sseJsonOpts)
                         do! jsonResponse ctx 200 json
                       | None ->
@@ -1052,8 +1053,8 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                               | _ -> None)
                             |> Array.distinct
                           for file in files do
-                            let fa = SageFs.Features.LiveTesting.FileAnnotations.project file None lt
-                            if fa.TestAnnotations.Length > 0 || fa.CodeLenses.Length > 0 then
+                            let fa = SageFs.Features.LiveTesting.FileAnnotations.projectWithCoverage file model.LiveTesting
+                            if fa.TestAnnotations.Length > 0 || fa.CodeLenses.Length > 0 || fa.CoverageAnnotations.Length > 0 then
                               testEventBroadcast.Trigger(
                                 SageFs.SseWriter.formatFileAnnotationsEvent sseJsonOpts fa)
                     | None -> ()
