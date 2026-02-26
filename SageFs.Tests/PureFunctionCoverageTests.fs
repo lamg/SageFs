@@ -10,6 +10,10 @@ open SageFs.AppState
 open SageFs.FileWatcher
 open SageFs.McpAdapter
 open SageFs.FsiRewrite
+open SageFs.FrameDiff
+open SageFs.Features.Replay
+open SageFs.Features.Events
+open SageFs.Features.Diagnostics
 open System
 open System.Text.Json
 
@@ -824,8 +828,269 @@ let formatCompletionsJsonTests = testList "formatCompletionsJson: MCP protocol c
 ]
 
 // ═══════════════════════════════════════════════════════════
-// Combined
+// FrameDiff — parsePositionedLines / diff
 // ═══════════════════════════════════════════════════════════
+
+let moveTo row col = sprintf "\x1b[%d;%dH" row col
+
+let parsePositionedLinesTests = testList "parsePositionedLines" [
+  test "empty string produces empty map" {
+    parsePositionedLines "" |> Expect.isEmpty "no rows"
+  }
+  test "single row with moveTo" {
+    let frame = moveTo 1 1 + "Hello"
+    let result = parsePositionedLines frame
+    result |> Map.find 1 |> Expect.stringContains "should have content" "Hello"
+  }
+  test "multiple distinct rows" {
+    let frame = moveTo 1 1 + "Row1" + moveTo 3 1 + "Row3"
+    let result = parsePositionedLines frame
+    result |> Map.count |> Expect.equal "two rows" 2
+    result |> Map.find 1 |> Expect.stringContains "row 1" "Row1"
+    result |> Map.find 3 |> Expect.stringContains "row 3" "Row3"
+  }
+  test "same row appearing twice appends content" {
+    let frame = moveTo 2 1 + "Part1" + moveTo 2 10 + "Part2"
+    let result = parsePositionedLines frame
+    result |> Map.count |> Expect.equal "one row key" 1
+    let content = result |> Map.find 2
+    content |> Expect.stringContains "has Part1" "Part1"
+    content |> Expect.stringContains "has Part2" "Part2"
+  }
+  test "color codes preserved in row content" {
+    let frame = moveTo 1 1 + "\x1b[32mGreen\x1b[0m"
+    let result = parsePositionedLines frame
+    let content = result |> Map.find 1
+    content |> Expect.stringContains "has green" "\x1b[32m"
+    content |> Expect.stringContains "has reset" "\x1b[0m"
+  }
+  test "erase K code preserved in row" {
+    let frame = moveTo 1 1 + "\x1b[K"
+    let result = parsePositionedLines frame
+    let content = result |> Map.find 1
+    content |> Expect.stringContains "has K seq" "\x1b[K"
+  }
+  test "text before any moveTo is discarded" {
+    let frame = "OrphanText" + moveTo 1 1 + "Hello"
+    let result = parsePositionedLines frame
+    result |> Map.find 1 |> Expect.stringContains "has Hello" "Hello"
+    let content = result |> Map.find 1
+    content.Contains("Orphan") |> Expect.isFalse "orphan discarded"
+  }
+  test "row-only moveTo uses row with default col" {
+    let frame = "\x1b[5H" + "Content"
+    let result = parsePositionedLines frame
+    result |> Map.containsKey 5 |> Expect.isTrue "row 5 exists"
+  }
+]
+
+let frameDiffExampleTests = testList "diff examples" [
+  test "identical frames produce empty diff" {
+    let frame = moveTo 1 1 + "Hello" + moveTo 2 1 + "World"
+    diff frame frame |> Expect.equal "no changes" ""
+  }
+  test "changed rows only in diff" {
+    let prev = moveTo 1 1 + "Same" + moveTo 2 1 + "Old"
+    let next = moveTo 1 1 + "Same" + moveTo 2 1 + "New"
+    let result = diff prev next
+    result.Contains("New") |> Expect.isTrue "has new content"
+    result.Contains("Same") |> Expect.isFalse "no unchanged rows"
+  }
+  test "new rows appear in diff" {
+    let prev = moveTo 1 1 + "Row1"
+    let next = moveTo 1 1 + "Row1" + moveTo 3 1 + "Row3"
+    let result = diff prev next
+    result.Contains("Row3") |> Expect.isTrue "has new row"
+    result.Contains("Row1") |> Expect.isFalse "no unchanged"
+  }
+  test "empty previous means all rows appear" {
+    let next = moveTo 1 1 + "Hello"
+    let result = diff "" next
+    result.Contains("Hello") |> Expect.isTrue "has all content"
+  }
+  test "both empty gives empty diff" {
+    diff "" "" |> Expect.equal "empty" ""
+  }
+]
+
+let frameDiffProperties = testList "diff properties" [
+  testProperty "diffing identical frames always produces empty string" <| fun (s: string) ->
+    let s = if isNull s then "" else s
+    let frame = moveTo 1 1 + s
+    diff frame frame = ""
+]
+
+// ═══════════════════════════════════════════════════════════
+// Replay — SessionReplayState / DaemonReplayState
+// ═══════════════════════════════════════════════════════════
+
+let replayTs = DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero)
+let mkDiag sev msg : DiagnosticEvent =
+  { Severity = sev; Message = msg; StartLine = 1; StartColumn = 1; EndLine = 1; EndColumn = 5 }
+
+let sessionReplayTests = testList "SessionReplayState.applyEvent" [
+  test "SessionStarted sets WarmingUp and StartedAt" {
+    let evt = SessionStarted {| Config = Map.empty; StartedAt = replayTs |}
+    let s = SessionReplayState.applyEvent replayTs SessionReplayState.empty evt
+    s.Status |> Expect.equal "status" WarmingUp
+    s.StartedAt |> Expect.equal "started" (Some replayTs)
+    s.LastActivity |> Expect.equal "activity" (Some replayTs)
+  }
+  test "SessionWarmUpCompleted stores errors" {
+    let evt = SessionWarmUpCompleted {| Duration = TimeSpan.FromSeconds 1.0; Errors = ["err1"] |}
+    let s = SessionReplayState.applyEvent replayTs SessionReplayState.empty evt
+    s.WarmupErrors |> Expect.equal "errors" ["err1"]
+  }
+  test "SessionWarmUpProgress updates LastActivity" {
+    let evt = SessionWarmUpProgress {| Step = 1; Total = 5; Message = "step" |}
+    let s = SessionReplayState.applyEvent replayTs SessionReplayState.empty evt
+    s.LastActivity |> Expect.equal "activity" (Some replayTs)
+  }
+  test "SessionReady sets Ready" {
+    let s = SessionReplayState.applyEvent replayTs SessionReplayState.empty SessionReady
+    s.Status |> Expect.equal "status" Ready
+  }
+  test "SessionFaulted sets Faulted with error" {
+    let evt = SessionFaulted {| Error = "boom"; StackTrace = None |}
+    let s = SessionReplayState.applyEvent replayTs SessionReplayState.empty evt
+    s.Status |> Expect.equal "status" (Faulted "boom")
+  }
+  test "SessionReset increments ResetCount and sets WarmingUp" {
+    let s = SessionReplayState.applyEvent replayTs SessionReplayState.empty SessionReset
+    s.Status |> Expect.equal "status" WarmingUp
+    s.ResetCount |> Expect.equal "count" 1
+  }
+  test "SessionHardReset increments HardResetCount" {
+    let evt = SessionHardReset {| Rebuild = true |}
+    let s = SessionReplayState.applyEvent replayTs SessionReplayState.empty evt
+    s.HardResetCount |> Expect.equal "count" 1
+    s.Status |> Expect.equal "status" WarmingUp
+  }
+  test "EvalRequested sets Evaluating" {
+    let evt = EvalRequested {| Code = "1+1"; Source = EventSource.Console |}
+    let s = SessionReplayState.applyEvent replayTs SessionReplayState.empty evt
+    s.Status |> Expect.equal "status" Evaluating
+  }
+  test "EvalCompleted increments count and records history" {
+    let evt = EvalCompleted {| Code = "1+1"; Result = "2"; TypeSignature = Some "int"; Duration = TimeSpan.FromMilliseconds 50.0 |}
+    let s = SessionReplayState.applyEvent replayTs SessionReplayState.empty evt
+    s.EvalCount |> Expect.equal "count" 1
+    s.LastEvalResult |> Expect.equal "result" (Some "2")
+    s.EvalHistory |> Expect.hasLength "history" 1
+    s.Status |> Expect.equal "status" Ready
+  }
+  test "EvalFailed increments failed count and stores diagnostics" {
+    let evt = EvalFailed {| Code = "bad"; Error = "oops"; Diagnostics = [mkDiag DiagnosticSeverity.Error "oops"] |}
+    let s = SessionReplayState.applyEvent replayTs SessionReplayState.empty evt
+    s.FailedEvalCount |> Expect.equal "count" 1
+    s.LastDiagnostics |> Expect.hasLength "diags" 1
+    s.Status |> Expect.equal "status" Ready
+  }
+  test "DiagnosticsChecked stores diagnostics" {
+    let evt = DiagnosticsChecked {| Code = "x"; Diagnostics = [mkDiag DiagnosticSeverity.Warning "warn"]; Source = EventSource.Console |}
+    let s = SessionReplayState.applyEvent replayTs SessionReplayState.empty evt
+    s.LastDiagnostics |> Expect.hasLength "diags" 1
+  }
+  test "DiagnosticsCleared empties diagnostics" {
+    let init = { SessionReplayState.empty with LastDiagnostics = [mkDiag DiagnosticSeverity.Error "e"] }
+    let s = SessionReplayState.applyEvent replayTs init DiagnosticsCleared
+    s.LastDiagnostics |> Expect.isEmpty "cleared"
+  }
+  test "ScriptLoaded updates activity only" {
+    let evt = ScriptLoaded {| FilePath = "test.fsx"; StatementCount = 3; Source = EventSource.Console |}
+    let s = SessionReplayState.applyEvent replayTs SessionReplayState.empty evt
+    s.LastActivity |> Expect.equal "activity" (Some replayTs)
+    s.Status |> Expect.equal "status unchanged" NotStarted
+  }
+  test "ScriptLoadFailed updates activity only" {
+    let evt = ScriptLoadFailed {| FilePath = "bad.fsx"; Error = "parse error" |}
+    let s = SessionReplayState.applyEvent replayTs SessionReplayState.empty evt
+    s.LastActivity |> Expect.equal "activity" (Some replayTs)
+  }
+  test "McpInputReceived updates activity only" {
+    let evt = McpInputReceived {| Source = EventSource.Console; Content = "hello" |}
+    let s = SessionReplayState.applyEvent replayTs SessionReplayState.empty evt
+    s.LastActivity |> Expect.equal "activity" (Some replayTs)
+  }
+  test "McpOutputSent updates activity only" {
+    let evt = McpOutputSent {| Source = EventSource.Console; Content = "result" |}
+    let s = SessionReplayState.applyEvent replayTs SessionReplayState.empty evt
+    s.LastActivity |> Expect.equal "activity" (Some replayTs)
+  }
+  test "DaemonSessionCreated is ignored by session replay" {
+    let evt = DaemonSessionCreated {| SessionId = "s1"; Projects = ["p.fsproj"]; WorkingDir = "/tmp"; CreatedAt = replayTs |}
+    let s = SessionReplayState.applyEvent replayTs SessionReplayState.empty evt
+    s |> Expect.equal "unchanged" SessionReplayState.empty
+  }
+]
+
+let daemonReplayTests = testList "DaemonReplayState.applyEvent" [
+  test "DaemonSessionCreated adds session and sets active" {
+    let evt = DaemonSessionCreated {| SessionId = "s1"; Projects = ["p.fsproj"]; WorkingDir = "/tmp"; CreatedAt = replayTs |}
+    let s = DaemonReplayState.applyEvent DaemonReplayState.empty evt
+    s.Sessions |> Map.containsKey "s1" |> Expect.isTrue "session added"
+    s.ActiveSessionId |> Expect.equal "active" (Some "s1")
+  }
+  test "DaemonSessionStopped picks next alive session as active" {
+    let created1 = DaemonSessionCreated {| SessionId = "s1"; Projects = []; WorkingDir = "/"; CreatedAt = replayTs |}
+    let created2 = DaemonSessionCreated {| SessionId = "s2"; Projects = []; WorkingDir = "/"; CreatedAt = replayTs |}
+    let stopped = DaemonSessionStopped {| SessionId = "s1"; StoppedAt = replayTs.AddHours(1.0) |}
+    let s =
+      DaemonReplayState.empty
+      |> fun s -> DaemonReplayState.applyEvent s created1
+      |> fun s -> DaemonReplayState.applyEvent s created2
+      |> fun s -> DaemonReplayState.applyEvent s stopped
+    s.Sessions.["s1"].StoppedAt.IsSome |> Expect.isTrue "s1 stopped"
+    s.ActiveSessionId |> Expect.equal "s2 now active" (Some "s2")
+  }
+  test "DaemonSessionSwitched sets active" {
+    let evt = DaemonSessionSwitched {| FromId = Some "s1"; ToId = "s2"; SwitchedAt = replayTs |}
+    let s = DaemonReplayState.applyEvent DaemonReplayState.empty evt
+    s.ActiveSessionId |> Expect.equal "active" (Some "s2")
+  }
+  test "non-daemon events are ignored" {
+    let s = DaemonReplayState.applyEvent DaemonReplayState.empty SessionReady
+    s |> Expect.equal "unchanged" DaemonReplayState.empty
+  }
+  test "aliveSessions filters out stopped" {
+    let created1 = DaemonSessionCreated {| SessionId = "s1"; Projects = []; WorkingDir = "/"; CreatedAt = replayTs |}
+    let created2 = DaemonSessionCreated {| SessionId = "s2"; Projects = []; WorkingDir = "/"; CreatedAt = replayTs |}
+    let stopped = DaemonSessionStopped {| SessionId = "s1"; StoppedAt = replayTs.AddHours(1.0) |}
+    let s =
+      DaemonReplayState.empty
+      |> fun s -> DaemonReplayState.applyEvent s created1
+      |> fun s -> DaemonReplayState.applyEvent s created2
+      |> fun s -> DaemonReplayState.applyEvent s stopped
+    let alive = s.Sessions |> Map.filter (fun _ r -> r.StoppedAt.IsNone)
+    alive |> Map.count |> Expect.equal "one alive" 1
+    alive |> Map.containsKey "s2" |> Expect.isTrue "s2 alive"
+  }
+]
+
+let replayStreamIntegrationTests = testList "replayStream integration" [
+  test "full lifecycle produces correct final state" {
+    let events = [
+      replayTs, SessionStarted {| Config = Map.empty; StartedAt = replayTs |}
+      replayTs.AddSeconds(1.0), SessionWarmUpCompleted {| Duration = TimeSpan.FromSeconds 1.0; Errors = [] |}
+      replayTs.AddSeconds(2.0), SessionReady
+      replayTs.AddSeconds(3.0), EvalRequested {| Code = "1+1;;"; Source = EventSource.Console |}
+      replayTs.AddSeconds(4.0), EvalCompleted {| Code = "1+1;;"; Result = "2"; TypeSignature = Some "int"; Duration = TimeSpan.FromMilliseconds 50.0 |}
+      replayTs.AddSeconds(5.0), EvalRequested {| Code = "bad;;"; Source = EventSource.Console |}
+      replayTs.AddSeconds(6.0), EvalFailed {| Code = "bad;;"; Error = "not defined"; Diagnostics = [] |}
+      replayTs.AddSeconds(7.0), SessionReset
+      replayTs.AddSeconds(8.0), SessionReady
+    ]
+    let final = SessionReplayState.replayStream events
+    final.Status |> Expect.equal "status" Ready
+    final.EvalCount |> Expect.equal "evals" 1
+    final.FailedEvalCount |> Expect.equal "failed" 1
+    final.ResetCount |> Expect.equal "resets" 1
+    final.HardResetCount |> Expect.equal "hard resets" 0
+    final.EvalHistory |> Expect.hasLength "history" 1
+    final.StartedAt |> Expect.equal "started" (Some replayTs)
+    final.LastActivity |> Expect.isSome "has last activity"
+  }
+]
 
 [<Tests>]
 let allPureFunctionCoverageTests = testList "Pure function coverage" [
@@ -902,6 +1167,18 @@ let allPureFunctionCoverageTests = testList "Pure function coverage" [
     ]
     testList "formatCompletionsJson" [
       formatCompletionsJsonTests
+    ]
+  ]
+  testList "FrameDiff and Replay tests" [
+    testList "FrameDiff" [
+      parsePositionedLinesTests
+      frameDiffExampleTests
+      frameDiffProperties
+    ]
+    testList "Replay" [
+      sessionReplayTests
+      daemonReplayTests
+      replayStreamIntegrationTests
     ]
   ]
 ]
