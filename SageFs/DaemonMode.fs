@@ -267,7 +267,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
       with _ -> return None
     }
   let effectDeps =
-    { ElmDaemon.createEffectDeps sessionManager with
+    { ElmDaemon.createEffectDeps sessionManager readSnapshot with
         GetWarmupContext = Some getWarmupContextForElm }
   let elmRuntime =
     ElmDaemon.start effectDeps (fun model _regions ->
@@ -375,68 +375,57 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
   // Start dashboard web server on MCP port + 1
   let dashboardPort = mcpPort + 1
   let connectionTracker = ConnectionTracker()
-  // Dashboard status helpers — route through session proxy by explicit session ID
-  // These are called from SSE handlers; pipe errors must not crash Kestrel.
-  let tryGetSessionSnapshot (sid: string) =
+  // Dashboard status helpers — read from CQRS snapshot (non-blocking, lock-free).
+  // Only proxy calls (eval stats) go async; state/workingDir/statusMsg/workerBaseUrl use snapshot.
+  let tryGetSessionSnapshotAsync (sid: string) = task {
     try
-      let proxy =
+      let! managed =
         sessionManager.PostAndAsyncReply(fun reply ->
           SessionManager.SessionCommand.GetSession(sid, reply))
-        |> Async.RunSynchronously
-      match proxy with
+        |> Async.StartAsTask
+      match managed with
       | Some s ->
-        let resp =
+        let! resp =
           s.Proxy (WorkerProtocol.WorkerMessage.GetStatus "dash")
-          |> Async.RunSynchronously
+          |> Async.StartAsTask
         match resp with
-        | WorkerProtocol.WorkerResponse.StatusResult(_, snap) -> Some snap
-        | _ -> None
-      | None -> None
+        | WorkerProtocol.WorkerResponse.StatusResult(_, snap) -> return Some snap
+        | _ -> return None
+      | None -> return None
     with
-    | :? System.IO.IOException -> None
+    | :? System.IO.IOException -> return None
     | :? System.AggregateException as ae
-        when (ae.InnerException :? System.IO.IOException) -> None
-    | :? System.ObjectDisposedException -> None
+        when (ae.InnerException :? System.IO.IOException) -> return None
+    | :? System.ObjectDisposedException -> return None
     | :? System.AggregateException as ae
-        when (ae.InnerException :? System.ObjectDisposedException) -> None
+        when (ae.InnerException :? System.ObjectDisposedException) -> return None
+  }
 
   let getSessionState (sid: string) =
     if String.IsNullOrEmpty(sid) then SessionState.Uninitialized
     else
-      // First try the pipe for live status; fall back to session manager's stored status
-      match tryGetSessionSnapshot sid with
-      | Some snap -> WorkerProtocol.SessionStatus.toSessionState snap.Status
-      | None ->
-        try
-          let managed =
-            sessionManager.PostAndAsyncReply(fun reply ->
-              SessionManager.SessionCommand.GetSession(sid, reply))
-            |> Async.RunSynchronously
-          match managed with
-          | Some s -> WorkerProtocol.SessionStatus.toSessionState s.Info.Status
-          | None -> SessionState.Uninitialized // session removed; Dashboard filters as "stopped"
-        with _ -> SessionState.Faulted
+      let snapshot = readSnapshot()
+      match SessionManager.QuerySnapshot.tryGetSession sid snapshot with
+      | Some info -> WorkerProtocol.SessionStatus.toSessionState info.Status
+      | None -> SessionState.Uninitialized
 
-  let getEvalStats (sid: string) =
-    match tryGetSessionSnapshot sid with
+  let getEvalStatsAsync (sid: string) = task {
+    match! tryGetSessionSnapshotAsync sid with
     | Some snap ->
-      { EvalCount = snap.EvalCount
-        TotalDuration = TimeSpan.FromMilliseconds(float snap.AvgDurationMs * float snap.EvalCount)
-        MinDuration = TimeSpan.FromMilliseconds(float snap.MinDurationMs)
-        MaxDuration = TimeSpan.FromMilliseconds(float snap.MaxDurationMs) }
-      : Affordances.EvalStats
-    | None -> Affordances.EvalStats.empty
+      return
+        { EvalCount = snap.EvalCount
+          TotalDuration = TimeSpan.FromMilliseconds(float snap.AvgDurationMs * float snap.EvalCount)
+          MinDuration = TimeSpan.FromMilliseconds(float snap.MinDurationMs)
+          MaxDuration = TimeSpan.FromMilliseconds(float snap.MaxDurationMs) }
+        : Affordances.EvalStats
+    | None -> return Affordances.EvalStats.empty
+  }
 
   let getSessionWorkingDir (sid: string) =
-    try
-      let managed =
-        sessionManager.PostAndAsyncReply(fun reply ->
-          SessionManager.SessionCommand.GetSession(sid, reply))
-        |> Async.RunSynchronously
-      match managed with
-      | Some s -> s.Info.WorkingDirectory
-      | None -> ""
-    with _ -> ""
+    let snapshot = readSnapshot()
+    match SessionManager.QuerySnapshot.tryGetSession sid snapshot with
+    | Some info -> info.WorkingDirectory
+    | None -> ""
 
   let getAllSessions () = task {
     let! sessions =
@@ -447,25 +436,16 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
   }
 
   let getStatusMsg (sid: string) =
-    match tryGetSessionSnapshot sid with
-    | Some snap -> snap.StatusMessage
-    | None ->
-      // Fall back to warmup progress from CQRS snapshot (available before proxy)
-      let snapshot = readSnapshot()
-      match Map.tryFind sid snapshot.WarmupProgress with
-      | Some progress -> Some progress
-      | None -> None
+    let snapshot = readSnapshot()
+    match Map.tryFind sid snapshot.WarmupProgress with
+    | Some progress -> Some progress
+    | None -> None
 
   let getWorkerBaseUrl (sid: string) =
-    try
-      let managed =
-        sessionManager.PostAndAsyncReply(fun reply ->
-          SessionManager.SessionCommand.GetSession(sid, reply))
-        |> Async.RunSynchronously
-      match managed with
-      | Some s when s.WorkerBaseUrl.Length > 0 -> Some s.WorkerBaseUrl
-      | _ -> None
-    with _ -> None
+    let snapshot = readSnapshot()
+    match Map.tryFind sid snapshot.WorkerBaseUrls with
+    | Some url when url.Length > 0 -> Some url
+    | _ -> None
 
   let sessionThemes = Dashboard.loadThemes DaemonState.SageFsDir
 
@@ -474,7 +454,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
       version
       getSessionState
       getStatusMsg
-      getEvalStats
+      getEvalStatsAsync
       getSessionWorkingDir
       (fun () ->
         let model = elmRuntime.GetModel()
@@ -579,13 +559,10 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
       (Some (fun () -> cts.Cancel()))
       // Previous sessions for picker — merge active + historical from Marten
       (fun () ->
-        // Active sessions from SessionManager
-        let activeInfos =
-          sessionManager.PostAndAsyncReply(fun reply ->
-            SessionManager.SessionCommand.ListSessions reply)
-          |> Async.RunSynchronously
+        // Active sessions from CQRS snapshot (non-blocking)
+        let snapshot = readSnapshot()
         let activeSessions =
-          activeInfos
+          SessionManager.QuerySnapshot.allSessions snapshot
           |> List.map (fun (info: WorkerProtocol.SessionInfo) ->
             { Dashboard.PreviousSession.Id = info.Id
               Dashboard.PreviousSession.WorkingDir = info.WorkingDirectory

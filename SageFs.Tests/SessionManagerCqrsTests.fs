@@ -25,7 +25,7 @@ open SageFs.SessionManager
 
 // ── Test helpers ──────────────────────────────────────────────
 
-let private mkSessionInfo id status =
+let mkSessionInfo id status =
   {
     Id = id
     Name = None
@@ -38,7 +38,7 @@ let private mkSessionInfo id status =
     WorkerPid = None
   }
 
-let private mkManagedSession id status =
+let mkManagedSession id status =
   let proxy : SessionProxy =
     fun _ -> async {
       return WorkerResponse.WorkerError (SageFsError.WorkerSpawnFailed "test")
@@ -55,13 +55,13 @@ let private mkManagedSession id status =
 
 // ── Simulated actor for pattern testing ──────────────────────
 
-type private SimCommand =
+type SimCommand =
   | SlowWrite of id: string * AsyncReplyChannel<string>
   | MailboxRead of id: string * AsyncReplyChannel<string option>
 
-type private SimState = { Items: Map<string, string> }
+type SimState = { Items: Map<string, string> }
 
-let private createSimActor (slowMs: int) (initial: SimState) =
+let createSimActor (slowMs: int) (initial: SimState) =
   let snapshotRef = ref initial
   let agent = MailboxProcessor<SimCommand>.Start(fun inbox ->
     let rec loop (state: SimState) = async {
@@ -326,6 +326,95 @@ let warmupProgressTests = testList "Warmup progress in QuerySnapshot" [
   }
 ]
 
+// ── WorkerBaseUrls projection tests ──────────────────────────
+
+let workerBaseUrlTests = testList "WorkerBaseUrls in QuerySnapshot" [
+
+  test "fromState projects WorkerBaseUrls from managed sessions" {
+    let s1 = { mkManagedSession "s1" SessionStatus.Ready with WorkerBaseUrl = "http://localhost:5001" }
+    let s2 = { mkManagedSession "s2" SessionStatus.Starting with WorkerBaseUrl = "http://localhost:5002" }
+    let state =
+      ManagerState.empty
+      |> ManagerState.addSession "s1" s1
+      |> ManagerState.addSession "s2" s2
+    let snap = QuerySnapshot.fromState state StandbyInfo.NoPool
+    snap.WorkerBaseUrls |> Map.count |> Expect.equal "should have 2 URLs" 2
+    snap.WorkerBaseUrls |> Map.find "s1" |> Expect.equal "s1 URL" "http://localhost:5001"
+    snap.WorkerBaseUrls |> Map.find "s2" |> Expect.equal "s2 URL" "http://localhost:5002"
+  }
+
+  test "empty state has empty WorkerBaseUrls" {
+    let snap = QuerySnapshot.fromState ManagerState.empty StandbyInfo.NoPool
+    snap.WorkerBaseUrls |> Map.isEmpty |> Expect.isTrue "should be empty"
+  }
+
+  test "WorkerBaseUrls updates when session removed" {
+    let s1 = { mkManagedSession "s1" SessionStatus.Ready with WorkerBaseUrl = "http://localhost:5001" }
+    let state = ManagerState.empty |> ManagerState.addSession "s1" s1
+    let snap1 = QuerySnapshot.fromState state StandbyInfo.NoPool
+    snap1.WorkerBaseUrls |> Map.containsKey "s1" |> Expect.isTrue "should have s1"
+
+    let state2 = state |> ManagerState.removeSession "s1"
+    let snap2 = QuerySnapshot.fromState state2 StandbyInfo.NoPool
+    snap2.WorkerBaseUrls |> Map.containsKey "s1" |> Expect.isFalse "should not have s1 after removal"
+  }
+
+  test "QuerySnapshot.empty has empty WorkerBaseUrls" {
+    QuerySnapshot.empty.WorkerBaseUrls |> Map.isEmpty |> Expect.isTrue "should be empty"
+  }
+]
+
+// ── Snapshot-based dashboard helper tests ────────────────────
+
+let snapshotDashboardTests = testList "Snapshot dashboard helpers" [
+
+  test "getSessionState from snapshot returns correct state" {
+    let s1 = mkManagedSession "s1" SessionStatus.Ready
+    let state = ManagerState.empty |> ManagerState.addSession "s1" s1
+    let snap = QuerySnapshot.fromState state StandbyInfo.NoPool
+    let info = QuerySnapshot.tryGetSession "s1" snap
+    let sessionState =
+      info
+      |> Option.map (fun i -> SessionStatus.toSessionState i.Status)
+      |> Option.defaultValue SessionState.Uninitialized
+    sessionState |> Expect.equal "should be Ready" SessionState.Ready
+  }
+
+  test "getSessionWorkingDir from snapshot returns correct dir" {
+    let s1 = { mkManagedSession "s1" SessionStatus.Ready with
+                 Info = { (mkSessionInfo "s1" SessionStatus.Ready) with WorkingDirectory = "/my/project" } }
+    let state = ManagerState.empty |> ManagerState.addSession "s1" s1
+    let snap = QuerySnapshot.fromState state StandbyInfo.NoPool
+    let dir =
+      QuerySnapshot.tryGetSession "s1" snap
+      |> Option.map (fun i -> i.WorkingDirectory)
+      |> Option.defaultValue ""
+    dir |> Expect.equal "should be /my/project" "/my/project"
+  }
+
+  test "getStatusMsg from snapshot returns warmup progress" {
+    let state = {
+      ManagerState.empty with
+        WarmupProgress = Map.ofList [ "s1", "2/4 Loading assemblies" ]
+    }
+    let snap = QuerySnapshot.fromManagerState state
+    let msg = snap.WarmupProgress |> Map.tryFind "s1"
+    msg |> Expect.equal "should have warmup msg" (Some "2/4 Loading assemblies")
+  }
+
+  test "snapshot read is non-blocking (performance)" {
+    let s1 = mkManagedSession "s1" SessionStatus.Ready
+    let state = ManagerState.empty |> ManagerState.addSession "s1" s1
+    let snap = QuerySnapshot.fromState state StandbyInfo.NoPool
+    let sw = Stopwatch.StartNew()
+    for _ in 1..1000 do
+      QuerySnapshot.tryGetSession "s1" snap |> ignore
+    sw.Stop()
+    (sw.ElapsedMilliseconds, 50L)
+    |> Expect.isLessThan "1000 snapshot reads in < 50ms"
+  }
+]
+
 // ── Combined test list ───────────────────────────────────────
 
 [<Tests>]
@@ -333,4 +422,6 @@ let allCqrsTests = testList "SessionManager CQRS" [
   cqrsPatternTests
   querySnapshotTests
   warmupProgressTests
+  workerBaseUrlTests
+  snapshotDashboardTests
 ]

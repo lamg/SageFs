@@ -4,15 +4,15 @@ open System.Threading
 
 /// Create EffectDeps from a SessionManager MailboxProcessor.
 /// This bridges the Elm domain to real infrastructure.
+/// readSnapshot provides lock-free CQRS reads for session lists (non-blocking).
 let createEffectDeps
   (sessionManager: MailboxProcessor<SessionManager.SessionCommand>)
+  (readSnapshot: unit -> SessionManager.QuerySnapshot)
   : EffectDeps =
   {
     ResolveSession = fun sessionIdOpt ->
-      let sessions =
-        sessionManager.PostAndAsyncReply(fun reply ->
-          SessionManager.SessionCommand.ListSessions reply)
-        |> Async.RunSynchronously
+      // Non-blocking: read from CQRS snapshot instead of mailbox
+      let sessions = SessionManager.QuerySnapshot.allSessions (readSnapshot())
       SessionOperations.resolveSession sessionIdOpt sessions
     GetProxy = fun sessionId ->
       let managed =

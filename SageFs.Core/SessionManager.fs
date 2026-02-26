@@ -96,6 +96,8 @@ module SessionManager =
     StandbyInfo: StandbyInfo
     /// Per-session warmup progress (e.g., "2/4 Scanned 12 files").
     WarmupProgress: Map<SessionId, string>
+    /// Per-session worker HTTP base URLs (for hot-reload proxy, etc.).
+    WorkerBaseUrls: Map<SessionId, string>
   }
 
   /// Compute standby info from pool state (pure function).
@@ -121,7 +123,11 @@ module SessionManager =
       let sessions =
         state.Sessions
         |> Map.map (fun _id ms -> ms.Info)
-      { Sessions = sessions; StandbyInfo = standby; WarmupProgress = state.WarmupProgress }
+      let workerUrls =
+        state.Sessions
+        |> Map.fold (fun acc id ms ->
+          if ms.WorkerBaseUrl.Length > 0 then Map.add id ms.WorkerBaseUrl acc else acc) Map.empty
+      { Sessions = sessions; StandbyInfo = standby; WarmupProgress = state.WarmupProgress; WorkerBaseUrls = workerUrls }
 
     /// Project a snapshot directly from ManagerState (computes standby info).
     let fromManagerState (state: ManagerState) : QuerySnapshot =
@@ -133,7 +139,7 @@ module SessionManager =
     let allSessions (snap: QuerySnapshot) : SessionInfo list =
       snap.Sessions |> Map.toList |> List.map snd
 
-    let empty = { Sessions = Map.empty; StandbyInfo = StandbyInfo.NoPool; WarmupProgress = Map.empty }
+    let empty = { Sessions = Map.empty; StandbyInfo = StandbyInfo.NoPool; WarmupProgress = Map.empty; WorkerBaseUrls = Map.empty }
 
   /// A proxy that rejects calls while the worker is still starting up.
   let pendingProxy : SessionProxy =

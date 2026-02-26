@@ -1291,7 +1291,7 @@ let renderSessionContextEmpty =
 let createStreamHandler
   (getSessionState: string -> SessionState)
   (getStatusMsg: string -> string option)
-  (getEvalStats: string -> SageFs.Affordances.EvalStats)
+  (getEvalStats: string -> Threading.Tasks.Task<SageFs.Affordances.EvalStats>)
   (getSessionWorkingDir: string -> string)
   (getActiveSessionId: unit -> string)
   (getElmRegions: unit -> RenderRegion list option)
@@ -1324,7 +1324,7 @@ let createStreamHandler
       if activeId.Length > 0 then
         currentSessionId <- activeId
       let state = getSessionState currentSessionId
-      let stats = getEvalStats currentSessionId
+      let! stats = getEvalStats currentSessionId
       let stateStr = SessionState.label state
       let workingDir = getSessionWorkingDir currentSessionId
       // Push sessionId signal so eval form can include it
@@ -1840,7 +1840,7 @@ let createCreateSessionHandler
 /// JSON SSE stream for TUI clients — pushes regions + model summary as JSON.
 let createApiStateHandler
   (getSessionStateForId: string -> SessionState)
-  (getEvalStatsForId: string -> SageFs.Affordances.EvalStats)
+  (getEvalStatsForId: string -> Threading.Tasks.Task<SageFs.Affordances.EvalStats>)
   (getActiveSessionId: unit -> string)
   (getSessionWorkingDirById: string -> string)
   (getAllSessions: unit -> Threading.Tasks.Task<WorkerProtocol.SessionInfo list>)
@@ -1869,7 +1869,7 @@ let createApiStateHandler
       let activeSid = getActiveSessionId ()
       let activeDir = getSessionWorkingDirById activeSid
       let state = getSessionStateForId activeSid
-      let stats = getEvalStatsForId activeSid
+      let! stats = getEvalStatsForId activeSid
       let regions =
         match getElmRegions () with
         | Some r ->
@@ -2038,7 +2038,7 @@ let createEndpoints
   (version: string)
   (getSessionState: string -> SessionState)
   (getStatusMsg: string -> string option)
-  (getEvalStats: string -> SageFs.Affordances.EvalStats)
+  (getEvalStats: string -> Threading.Tasks.Task<SageFs.Affordances.EvalStats>)
   (getSessionWorkingDir: string -> string)
   (getActiveSessionId: unit -> string)
   (getElmRegions: unit -> RenderRegion list option)

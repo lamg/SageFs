@@ -361,22 +361,18 @@ module RaylibMode =
           | _ -> ()
         | HotReloadWatchAll ->
           if lastSessionId.Length > 0 then
-            try
-              client.PostAsync(sprintf "%s/api/sessions/%s/hotreload/watch-all" baseUrl lastSessionId, new System.Net.Http.StringContent("{}", System.Text.Encoding.UTF8, "application/json")).Wait()
-            with _ -> ()
+            client.PostAsync(sprintf "%s/api/sessions/%s/hotreload/watch-all" baseUrl lastSessionId, new System.Net.Http.StringContent("{}", System.Text.Encoding.UTF8, "application/json")) |> ignore
         | HotReloadUnwatchAll ->
           if lastSessionId.Length > 0 then
-            try
-              client.PostAsync(sprintf "%s/api/sessions/%s/hotreload/unwatch-all" baseUrl lastSessionId, new System.Net.Http.StringContent("{}", System.Text.Encoding.UTF8, "application/json")).Wait()
-            with _ -> ()
+            client.PostAsync(sprintf "%s/api/sessions/%s/hotreload/unwatch-all" baseUrl lastSessionId, new System.Net.Http.StringContent("{}", System.Text.Encoding.UTF8, "application/json")) |> ignore
         | EnableLiveTesting ->
-          DaemonClient.dispatchAction client baseUrl "enableLiveTesting" None |> fun t -> t.Wait()
+          DaemonClient.dispatchAction client baseUrl "enableLiveTesting" None |> ignore
         | DisableLiveTesting ->
-          DaemonClient.dispatchAction client baseUrl "disableLiveTesting" None |> fun t -> t.Wait()
+          DaemonClient.dispatchAction client baseUrl "disableLiveTesting" None |> ignore
         | CycleRunPolicy ->
-          DaemonClient.dispatchAction client baseUrl "cycleRunPolicy" None |> fun t -> t.Wait()
+          DaemonClient.dispatchAction client baseUrl "cycleRunPolicy" None |> ignore
         | ToggleCoverage ->
-          DaemonClient.dispatchAction client baseUrl "toggleCoverage" None |> fun t -> t.Wait()
+          DaemonClient.dispatchAction client baseUrl "toggleCoverage" None |> ignore
         | Action action ->
           // When Sessions pane is focused, remap movement keys to session navigation
           let remappedAction =
@@ -389,7 +385,7 @@ module RaylibMode =
               | EditorAction.DeleteForward -> EditorAction.SessionDelete
               | other -> other
             else action
-          DaemonClient.dispatch client baseUrl remappedAction |> fun t -> t.Wait()
+          DaemonClient.dispatch client baseUrl remappedAction |> ignore
         keyCmd <- mapKey ()
 
       // Handle char input (typed text)
@@ -397,7 +393,7 @@ module RaylibMode =
       while running && charAction.IsSome do
         match charAction.Value with
         | action ->
-          DaemonClient.dispatch client baseUrl action |> fun t -> t.Wait()
+          DaemonClient.dispatch client baseUrl action |> ignore
         charAction <- getCharInput ()
 
       // Handle mouse → text selection (drag) + focus pane + cursor/session click
@@ -426,14 +422,14 @@ module RaylibMode =
               let scrollOff = scrollOffsets |> Map.tryFind PaneId.Editor |> Option.defaultValue 0
               let line = contentRow + scrollOff
               DaemonClient.dispatch client baseUrl (EditorAction.SetCursorPosition (line, contentCol))
-              |> fun t -> t.Wait()
+              |> ignore
           elif id = PaneId.Sessions then
             let contentRow = clickRow - r.Row - 1
             let scrollOff = scrollOffsets |> Map.tryFind PaneId.Sessions |> Option.defaultValue 0
             let sessionIdx = contentRow + scrollOff
             if contentRow >= 0 then
               DaemonClient.dispatch client baseUrl (EditorAction.SessionSetIndex sessionIdx)
-              |> fun t -> t.Wait()
+              |> ignore
         | None -> ()
       elif selecting && mouseDown Raylib_cs.MouseButton.Left then
         // Extend selection while dragging
