@@ -1574,6 +1574,414 @@ let themeTests = testList "Theme" [
   ]
 ]
 
+// --- Round 4: KeyCombo, UiAction, Layout, PaneId ---
+
+let rectsOverlap (a: Rect) (b: Rect) =
+  let r1 = max a.Row b.Row
+  let c1 = max a.Col b.Col
+  let r2 = min (a.Row + a.Height) (b.Row + b.Height)
+  let c2 = min (a.Col + a.Width) (b.Col + b.Width)
+  r2 > r1 && c2 > c1
+
+let rectWithin (outer: Rect) (inner: Rect) =
+  inner.Row >= outer.Row &&
+  inner.Col >= outer.Col &&
+  inner.Row + inner.Height <= outer.Row + outer.Height &&
+  inner.Col + inner.Width <= outer.Col + outer.Width
+
+let keyComboTests = testList "KeyCombo" [
+  testList "tryParse basics" [
+    test "single letter" {
+      KeyCombo.tryParse "A"
+      |> Expect.isSome "should parse single letter"
+    }
+    test "ctrl modifier" {
+      let kc = KeyCombo.tryParse "Ctrl+S" |> Option.get
+      kc.Modifiers.HasFlag(ConsoleModifiers.Control) |> Expect.isTrue "has Ctrl"
+    }
+    test "shift modifier" {
+      let kc = KeyCombo.tryParse "Shift+Tab" |> Option.get
+      kc.Modifiers.HasFlag(ConsoleModifiers.Shift) |> Expect.isTrue "has Shift"
+    }
+    test "alt modifier" {
+      let kc = KeyCombo.tryParse "Alt+A" |> Option.get
+      kc.Modifiers.HasFlag(ConsoleModifiers.Alt) |> Expect.isTrue "has Alt"
+    }
+    test "two modifiers" {
+      let kc = KeyCombo.tryParse "Ctrl+Shift+A" |> Option.get
+      kc.Modifiers.HasFlag(ConsoleModifiers.Control) |> Expect.isTrue "has Ctrl"
+      kc.Modifiers.HasFlag(ConsoleModifiers.Shift) |> Expect.isTrue "has Shift"
+    }
+    test "case insensitive" {
+      KeyCombo.tryParse "ctrl+s"
+      |> Expect.isSome "lowercase should parse"
+    }
+    test "control alias" {
+      let kc = KeyCombo.tryParse "Control+S" |> Option.get
+      kc.Modifiers.HasFlag(ConsoleModifiers.Control) |> Expect.isTrue "has Ctrl"
+    }
+    test "return alias for enter" {
+      let kc = KeyCombo.tryParse "Return" |> Option.get
+      kc.Key |> Expect.equal "maps to Enter" ConsoleKey.Enter
+    }
+    test "named keys parse" {
+      let cases = [
+        "Enter", ConsoleKey.Enter
+        "Tab", ConsoleKey.Tab
+        "Escape", ConsoleKey.Escape
+        "Space", ConsoleKey.Spacebar
+        "Backspace", ConsoleKey.Backspace
+        "Delete", ConsoleKey.Delete
+        "Up", ConsoleKey.UpArrow
+        "Down", ConsoleKey.DownArrow
+        "Left", ConsoleKey.LeftArrow
+        "Right", ConsoleKey.RightArrow
+        "Home", ConsoleKey.Home
+        "End", ConsoleKey.End
+        "PageUp", ConsoleKey.PageUp
+        "PageDown", ConsoleKey.PageDown
+      ]
+      for (name, expected) in cases do
+        let kc = KeyCombo.tryParse name |> Option.get
+        kc.Key |> Expect.equal (sprintf "%s should map" name) expected
+    }
+    test "digit keys parse" {
+      for c in '0'..'9' do
+        KeyCombo.tryParse (string c)
+        |> Expect.isSome (sprintf "%c should parse" c)
+    }
+    test "empty string returns None" {
+      KeyCombo.tryParse "" |> Expect.isNone "empty"
+    }
+    test "whitespace only returns None" {
+      KeyCombo.tryParse "   " |> Expect.isNone "whitespace"
+    }
+    test "modifier only returns None" {
+      KeyCombo.tryParse "Ctrl" |> Expect.isNone "just modifier"
+    }
+    test "unknown key returns None" {
+      KeyCombo.tryParse "Ctrl+Zzzzz" |> Expect.isNone "unknown"
+    }
+    test "f-keys are not supported" {
+      KeyCombo.tryParse "F1" |> Expect.isNone "F-keys not in parser"
+    }
+    test "modifier order does not matter" {
+      let a = KeyCombo.tryParse "Ctrl+Shift+A" |> Option.get
+      let b = KeyCombo.tryParse "Shift+Ctrl+A" |> Option.get
+      a.Key |> Expect.equal "same key" b.Key
+      a.Modifiers |> Expect.equal "same mods" b.Modifiers
+    }
+    test "whitespace around parts is trimmed" {
+      KeyCombo.tryParse " Ctrl + S "
+      |> Expect.isSome "trimmed"
+    }
+  ]
+  testList "format" [
+    test "single key" {
+      let kc = KeyCombo.tryParse "A" |> Option.get
+      KeyCombo.format kc |> Expect.equal "formats" "A"
+    }
+    test "ctrl+key" {
+      let kc = KeyCombo.tryParse "Ctrl+S" |> Option.get
+      KeyCombo.format kc |> Expect.equal "formats" "Ctrl+S"
+    }
+    test "shift+key" {
+      let kc = KeyCombo.tryParse "Shift+Tab" |> Option.get
+      KeyCombo.format kc |> Expect.equal "formats" "Shift+Tab"
+    }
+    test "two mods" {
+      let kc = KeyCombo.tryParse "Ctrl+Shift+A" |> Option.get
+      let fmt = KeyCombo.format kc
+      fmt |> Expect.stringContains "has Ctrl" "Ctrl"
+      fmt |> Expect.stringContains "has Shift" "Shift"
+      fmt |> Expect.stringContains "has A" "A"
+    }
+    test "round trip for named keys" {
+      let cases = ["A"; "Ctrl+S"; "Shift+Tab"; "Escape"; "Enter"; "Space"]
+      for c in cases do
+        let kc = KeyCombo.tryParse c |> Option.get
+        let fmt = KeyCombo.format kc
+        let kc2 = KeyCombo.tryParse fmt |> Option.get
+        kc2.Key |> Expect.equal (sprintf "round-trip key %s" c) kc.Key
+        kc2.Modifiers |> Expect.equal (sprintf "round-trip mods %s" c) kc.Modifiers
+    }
+    test "special key formatting" {
+      let cases = [
+        ConsoleKey.OemPlus, "="
+        ConsoleKey.OemMinus, "-"
+        ConsoleKey.UpArrow, "Up"
+        ConsoleKey.DownArrow, "Down"
+        ConsoleKey.Spacebar, "Space"
+      ]
+      for (key, expected) in cases do
+        let kc = { Key = key; Modifiers = enum<ConsoleModifiers> 0; Char = None }
+        KeyCombo.format kc |> Expect.equal (sprintf "%A formats" key) expected
+    }
+  ]
+]
+
+let uiActionParseTests = testList "UiAction.tryParse" [
+  test "Quit" {
+    UiAction.tryParse "Quit" |> Expect.equal "parses Quit" (Some UiAction.Quit)
+  }
+  test "CycleFocus" {
+    UiAction.tryParse "CycleFocus" |> Expect.equal "parses" (Some UiAction.CycleFocus)
+  }
+  test "FocusDir maps direction" {
+    UiAction.tryParse "FocusLeft" |> Expect.equal "parses" (Some (UiAction.FocusDir Direction.Left))
+    UiAction.tryParse "FocusUp" |> Expect.equal "parses" (Some (UiAction.FocusDir Direction.Up))
+  }
+  test "ScrollUp" {
+    UiAction.tryParse "ScrollUp" |> Expect.equal "parses" (Some UiAction.ScrollUp)
+  }
+  test "editor actions" {
+    UiAction.tryParse "Submit" |> Expect.equal "Submit" (Some (UiAction.Editor EditorAction.Submit))
+    UiAction.tryParse "Undo" |> Expect.equal "Undo" (Some (UiAction.Editor EditorAction.Undo))
+    UiAction.tryParse "DeleteBackward" |> Expect.equal "DeleteBackward" (Some (UiAction.Editor EditorAction.DeleteBackward))
+  }
+  test "TogglePane with suffix" {
+    UiAction.tryParse "TogglePane.Output"
+    |> Expect.equal "parses" (Some (UiAction.TogglePane "Output"))
+  }
+  test "LayoutPreset with suffix" {
+    UiAction.tryParse "Layout.focus"
+    |> Expect.equal "parses" (Some (UiAction.LayoutPreset "focus"))
+  }
+  test "ResizeH grow/shrink" {
+    UiAction.tryParse "ResizeHGrow" |> Expect.equal "grow" (Some (UiAction.ResizeH 1))
+    UiAction.tryParse "ResizeHShrink" |> Expect.equal "shrink" (Some (UiAction.ResizeH -1))
+  }
+  test "unknown returns None" {
+    UiAction.tryParse "NotARealAction" |> Expect.isNone "unknown"
+  }
+  test "empty returns None" {
+    UiAction.tryParse "" |> Expect.isNone "empty"
+  }
+  test "case sensitive" {
+    UiAction.tryParse "quit" |> Expect.isNone "lowercase Quit fails"
+  }
+  test "all simple actions parse" {
+    let simpleActions = [
+      "Quit"; "CycleFocus"; "ScrollUp"; "ScrollDown"; "Redraw"
+      "FontSizeUp"; "FontSizeDown"; "CycleTheme"
+      "HotReloadWatchAll"; "HotReloadUnwatchAll"
+      "EnableLiveTesting"; "DisableLiveTesting"; "CycleRunPolicy"; "ToggleCoverage"
+    ]
+    for a in simpleActions do
+      UiAction.tryParse a
+      |> Expect.isSome (sprintf "%s should parse" a)
+  }
+]
+
+let keyMapParseTests = testList "KeyMap.parseConfigLines examples" [
+  test "well-formed config" {
+    let lines = [|
+      """let keybindings = [ "Ctrl+Q", "Quit"; "Ctrl+S", "Submit" ]"""
+    |]
+    let result = KeyMap.parseConfigLines lines
+    result.Count |> Expect.equal "two bindings" 2
+  }
+  test "empty config" {
+    let result = KeyMap.parseConfigLines [||]
+    result |> Expect.isEmpty "no bindings"
+  }
+  test "no keybindings section" {
+    let lines = [| "let theme = \"dark\""; "let fontSize = 14" |]
+    let result = KeyMap.parseConfigLines lines
+    result |> Expect.isEmpty "nothing parsed"
+  }
+  test "invalid key skipped" {
+    let lines = [| """let keybindings = [ "Zzzzz", "Quit" ]""" |]
+    let result = KeyMap.parseConfigLines lines
+    result |> Expect.isEmpty "invalid key"
+  }
+  test "invalid action skipped" {
+    let lines = [| """let keybindings = [ "Ctrl+Q", "NotReal" ]""" |]
+    let result = KeyMap.parseConfigLines lines
+    result |> Expect.isEmpty "invalid action"
+  }
+  test "multi-line config" {
+    let lines = [|
+      """let keybindings = ["""
+      """  "Ctrl+Q", "Quit" """
+      """  "Ctrl+Z", "Undo" """
+      """]"""
+    |]
+    let result = KeyMap.parseConfigLines lines
+    result.Count |> Expect.equal "two bindings" 2
+  }
+]
+
+let layoutComputeTests = testList "Layout" [
+  testList "computeLayoutWith" [
+    test "default config produces non-empty panes" {
+      let panes, statusBar = Screen.computeLayoutWith LayoutConfig.defaults 40 120
+      panes |> Expect.isNonEmpty "should have panes"
+      statusBar.Height |> Expect.equal "status bar is 1 row" 1
+      statusBar.Row |> Expect.equal "status bar on last row" 39
+    }
+    test "all pane rects are within content area" {
+      let rows, cols = 40, 120
+      let contentArea = Rect.create 0 0 cols (rows - 1)
+      let panes, _ = Screen.computeLayoutWith LayoutConfig.defaults rows cols
+      for (pid, rect) in panes do
+        rectWithin contentArea rect
+        |> Expect.isTrue (sprintf "%A should be within content area" pid)
+    }
+    test "no two panes overlap" {
+      let panes, _ = Screen.computeLayoutWith LayoutConfig.defaults 40 120
+      let rects = panes |> List.map snd
+      for i in 0 .. rects.Length - 2 do
+        for j in i + 1 .. rects.Length - 1 do
+          rectsOverlap rects.[i] rects.[j]
+          |> Expect.isFalse (sprintf "panes %d and %d should not overlap" i j)
+    }
+    test "focus preset shows only output + editor" {
+      let panes, _ = Screen.computeLayoutWith LayoutConfig.focus 40 120
+      let ids = panes |> List.map fst |> Set.ofList
+      ids |> Expect.equal "output + editor" (Set.ofList [PaneId.Output; PaneId.Editor])
+    }
+    test "minimal preset shows only editor" {
+      let panes, _ = Screen.computeLayoutWith LayoutConfig.minimal 40 120
+      let ids = panes |> List.map fst |> Set.ofList
+      ids |> Expect.equal "editor only" (Set.singleton PaneId.Editor)
+    }
+    test "all five panes visible" {
+      let cfg = { LayoutConfig.defaults with VisiblePanes = Set.ofArray PaneId.all }
+      let panes, _ = Screen.computeLayoutWith cfg 40 120
+      let ids = panes |> List.map fst |> Set.ofList
+      ids |> Expect.equal "all panes" (Set.ofArray PaneId.all)
+    }
+    test "right-only layout uses full content area" {
+      let cfg = { LayoutConfig.defaults with VisiblePanes = Set.singleton PaneId.Sessions }
+      let panes, _ = Screen.computeLayoutWith cfg 40 120
+      panes |> Expect.hasLength "one pane" 1
+      let _, rect = panes.Head
+      rect.Width |> Expect.equal "full width" 120
+      rect.Height |> Expect.equal "full content height" 39
+    }
+  ]
+  testList "LayoutConfig.resizeH" [
+    test "grow increases split" {
+      let cfg2 = LayoutConfig.resizeH 1 LayoutConfig.defaults
+      Expect.isGreaterThan "split grew" (cfg2.LeftRightSplit, LayoutConfig.defaults.LeftRightSplit)
+    }
+    test "shrink decreases split" {
+      let cfg2 = LayoutConfig.resizeH -1 LayoutConfig.defaults
+      Expect.isLessThan "split shrank" (cfg2.LeftRightSplit, LayoutConfig.defaults.LeftRightSplit)
+    }
+    test "clamps at 0.2 minimum" {
+      let cfg = { LayoutConfig.defaults with LeftRightSplit = 0.2 }
+      let cfg2 = LayoutConfig.resizeH -10 cfg
+      Expect.isGreaterThanOrEqual "at least 0.2" (cfg2.LeftRightSplit, 0.2)
+    }
+    test "clamps at 0.9 maximum" {
+      let cfg = { LayoutConfig.defaults with LeftRightSplit = 0.9 }
+      let cfg2 = LayoutConfig.resizeH 10 cfg
+      Expect.isLessThanOrEqual "at most 0.9" (cfg2.LeftRightSplit, 0.9)
+    }
+  ]
+  testList "LayoutConfig.resizeV" [
+    test "grow increases editor rows" {
+      let cfg2 = LayoutConfig.resizeV 1 LayoutConfig.defaults
+      Expect.isGreaterThan "grew" (cfg2.OutputEditorSplit, LayoutConfig.defaults.OutputEditorSplit)
+    }
+    test "clamps at 2 minimum" {
+      let cfg = { LayoutConfig.defaults with OutputEditorSplit = 2 }
+      let cfg2 = LayoutConfig.resizeV -10 cfg
+      Expect.isGreaterThanOrEqual "at least 2" (cfg2.OutputEditorSplit, 2)
+    }
+  ]
+  testList "togglePane" [
+    test "toggle on adds pane" {
+      let cfg = { LayoutConfig.defaults with VisiblePanes = Set.empty }
+      let cfg2 = LayoutConfig.togglePane PaneId.Output cfg
+      cfg2.VisiblePanes |> Expect.contains "has Output" PaneId.Output
+    }
+    test "toggle off removes pane" {
+      let cfg2 = LayoutConfig.togglePane PaneId.Output LayoutConfig.defaults
+      cfg2.VisiblePanes.Contains PaneId.Output |> Expect.isFalse "removed"
+    }
+  ]
+]
+
+let paneIdTests = testList "PaneId" [
+  testList "toRegionId / fromRegionId" [
+    test "round-trip all panes" {
+      for p in PaneId.all do
+        let regionId = PaneId.toRegionId p
+        PaneId.fromRegionId regionId
+        |> Expect.equal (sprintf "%A round-trips" p) (Some p)
+    }
+    test "unknown regionId returns None" {
+      PaneId.fromRegionId "unknown" |> Expect.isNone "unknown"
+    }
+  ]
+  testList "next" [
+    test "cycles through all panes" {
+      let mutable current = PaneId.Output
+      for _ in 1 .. PaneId.all.Length do
+        current <- PaneId.next current
+      current |> Expect.equal "wraps to Output" PaneId.Output
+    }
+    test "every pane has a next" {
+      for p in PaneId.all do
+        let n = PaneId.next p
+        PaneId.all |> Expect.contains (sprintf "%A.next is valid" p) n
+    }
+  ]
+  testList "nextVisible" [
+    test "cycles within visible set" {
+      let visible = Set.ofList [PaneId.Output; PaneId.Editor]
+      PaneId.nextVisible visible PaneId.Output
+      |> Expect.equal "next visible" PaneId.Editor
+      PaneId.nextVisible visible PaneId.Editor
+      |> Expect.equal "wraps" PaneId.Output
+    }
+    test "returns current if visible is empty" {
+      PaneId.nextVisible Set.empty PaneId.Output
+      |> Expect.equal "stays" PaneId.Output
+    }
+    test "returns first visible if current not in set" {
+      let visible = Set.ofList [PaneId.Sessions; PaneId.Diagnostics]
+      PaneId.nextVisible visible PaneId.Output
+      |> Expect.equal "jumps to first visible" PaneId.Sessions
+    }
+  ]
+  testList "navigate" [
+    test "navigate right from left column" {
+      let panes, _ = Screen.computeLayoutWith LayoutConfig.defaults 40 120
+      let result = PaneId.navigate Direction.Right PaneId.Output panes
+      result |> Expect.notEqual "moves right" PaneId.Output
+    }
+    test "navigate left from right column" {
+      let panes, _ = Screen.computeLayoutWith LayoutConfig.defaults 40 120
+      let result = PaneId.navigate Direction.Left PaneId.Sessions panes
+      result |> Expect.equal "moves to Output" PaneId.Output
+    }
+    test "navigate returns current when no neighbor" {
+      let panes = [(PaneId.Output, Rect.create 0 0 120 39)]
+      PaneId.navigate Direction.Right PaneId.Output panes
+      |> Expect.equal "stays" PaneId.Output
+    }
+    test "navigate returns current when pane not in layout" {
+      PaneId.navigate Direction.Right PaneId.Output []
+      |> Expect.equal "stays" PaneId.Output
+    }
+  ]
+  testList "firstVisible" [
+    test "returns first in canonical order" {
+      let visible = Set.ofList [PaneId.Editor; PaneId.Sessions; PaneId.Output]
+      PaneId.firstVisible visible
+      |> Expect.equal "Output is first canonical" PaneId.Output
+    }
+    test "defaults to Output for empty set" {
+      PaneId.firstVisible Set.empty
+      |> Expect.equal "defaults" PaneId.Output
+    }
+  ]
+]
+
 [<Tests>]
 let allPureFunctionCoverageTests = testList "Pure function coverage" [
   testList "HotReloading" [
@@ -1669,5 +2077,12 @@ let allPureFunctionCoverageTests = testList "Pure function coverage" [
     restartPolicyTests
     cellGridTests
     themeTests
+  ]
+  testList "KeyCombo, UiAction, Layout, PaneId" [
+    keyComboTests
+    uiActionParseTests
+    keyMapParseTests
+    layoutComputeTests
+    paneIdTests
   ]
 ]
