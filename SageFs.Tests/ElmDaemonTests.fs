@@ -33,6 +33,7 @@ module ElmDaemonTestHelpers =
           SessionOperations.SessionResolution.DefaultSingle "test-session")
       GetProxy = fun id ->
         if id = "test-session" then Some proxy else None
+      GetStreamingTestProxy = fun _ -> None
       CreateSession = fun projects _ ->
         async { return Result.Ok sessionInfo }
       StopSession = fun _ ->

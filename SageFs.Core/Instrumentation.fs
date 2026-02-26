@@ -11,9 +11,11 @@ module Instrumentation =
 
   let sessionSource = new ActivitySource("SageFs.SessionManager")
   let pipelineSource = new ActivitySource("SageFs.Pipeline")
+  let mcpSource = new ActivitySource("SageFs.Mcp")
 
   let sessionMeter = new Meter("SageFs.SessionManager")
   let pipelineMeter = new Meter("SageFs.Pipeline")
+  let mcpMeter = new Meter("SageFs.Mcp")
 
   let sessionsCreated =
     sessionMeter.CreateCounter<int64>("sagefs.sessions.created_total", description = "Total sessions created")
@@ -30,12 +32,28 @@ module Instrumentation =
 
   let pipelineEndToEnd =
     pipelineMeter.CreateHistogram<float>("sagefs.pipeline.end_to_end_ms", unit = "ms", description = "Pipeline end-to-end latency")
+  let fcsTypecheckMs =
+    pipelineMeter.CreateHistogram<float>("sagefs.pipeline.fcs_typecheck_ms", unit = "ms", description = "FCS type-check latency")
+  let treeSitterParseMs =
+    pipelineMeter.CreateHistogram<float>("sagefs.pipeline.treesitter_parse_ms", unit = "ms", description = "Tree-sitter parse latency")
+  let testExecutionMs =
+    pipelineMeter.CreateHistogram<float>("sagefs.pipeline.test_execution_ms", unit = "ms", description = "Test execution latency")
+
+  let mcpToolInvocations =
+    mcpMeter.CreateCounter<int64>("sagefs.mcp.tool_invocations_total", description = "Total MCP tool invocations")
+  let fsiEvals =
+    mcpMeter.CreateCounter<int64>("sagefs.fsi.evals_total", description = "Total FSI eval calls")
+  let fsiStatements =
+    mcpMeter.CreateCounter<int64>("sagefs.fsi.statements_total", description = "Total FSI statements evaluated")
+  let sseConnectionsActive =
+    mcpMeter.CreateUpDownCounter<int64>("sagefs.sse.connections_active", description = "Currently active SSE connections")
 
   /// All ActivitySource names for OTel registration in McpServer.
   let allSources =
     [ "SageFs.SessionManager"
       "SageFs.Pipeline"
       "SageFs.LiveTesting"
+      "SageFs.Mcp"
       "Marten" ]
 
   /// All Meter names for OTel registration in McpServer.
@@ -43,6 +61,7 @@ module Instrumentation =
     [ "SageFs.SessionManager"
       "SageFs.Pipeline"
       "SageFs.LiveTesting"
+      "SageFs.Mcp"
       "Marten" ]
 
   /// Start an Activity with initial tags. Returns null when no listener attached.
@@ -118,6 +137,56 @@ module Instrumentation =
           activity.SetTag("error.type", ex.GetType().Name) |> ignore
           activity.SetTag("error.message", ex.Message) |> ignore
           activity.SetTag("duration_ms", sw.Elapsed.TotalMilliseconds) |> ignore
+          activity.SetStatus(ActivityStatusCode.Error, ex.Message) |> ignore
+          activity.Stop()
+          activity.Dispose()
+        return raise ex
+    }
+
+  /// Wrap an MCP tool invocation with tracing and counting.
+  let tracedMcpTool (toolName: string) (agentName: string) (f: unit -> System.Threading.Tasks.Task<string>) : System.Threading.Tasks.Task<string> =
+    task {
+      mcpToolInvocations.Add(1L)
+      let activity = mcpSource.StartActivity("mcp.tool.invoke")
+      try
+        if not (isNull activity) then
+          activity.SetTag("mcp.tool.name", toolName) |> ignore
+          activity.SetTag("mcp.agent.name", agentName) |> ignore
+        let! result = f ()
+        if not (isNull activity) then
+          activity.Stop()
+          activity.Dispose()
+        return result
+      with ex ->
+        if not (isNull activity) then
+          activity.SetTag("error", true) |> ignore
+          activity.SetTag("error.message", ex.Message) |> ignore
+          activity.SetStatus(ActivityStatusCode.Error, ex.Message) |> ignore
+          activity.Stop()
+          activity.Dispose()
+        return raise ex
+    }
+
+  /// Wrap an FSI eval call with tracing and counting.
+  let tracedFsiEval (agentName: string) (statementCount: int) (sessionId: string) (f: unit -> System.Threading.Tasks.Task<string>) : System.Threading.Tasks.Task<string> =
+    task {
+      fsiEvals.Add(1L)
+      fsiStatements.Add(int64 statementCount)
+      let activity = mcpSource.StartActivity("fsi.eval")
+      try
+        if not (isNull activity) then
+          activity.SetTag("fsi.agent.name", agentName) |> ignore
+          activity.SetTag("fsi.statement.count", statementCount) |> ignore
+          activity.SetTag("fsi.session.id", sessionId) |> ignore
+        let! result = f ()
+        if not (isNull activity) then
+          activity.Stop()
+          activity.Dispose()
+        return result
+      with ex ->
+        if not (isNull activity) then
+          activity.SetTag("error", true) |> ignore
+          activity.SetTag("error.message", ex.Message) |> ignore
           activity.SetStatus(ActivityStatusCode.Error, ex.Message) |> ignore
           activity.Stop()
           activity.Dispose()

@@ -55,6 +55,7 @@ module TestDeps =
           SessionOperations.SessionResolution.DefaultSingle "test-session")
       GetProxy = fun id ->
         if id = "test-session" then Some proxy else None
+      GetStreamingTestProxy = fun _ -> None
       CreateSession = fun projects dir ->
         async {
           log.SessionCreateCalls <-
@@ -80,6 +81,7 @@ module TestDeps =
       ResolveSession = fun _ ->
         Result.Error (SageFsError.NoActiveSessions)
       GetProxy = fun _ -> None
+      GetStreamingTestProxy = fun _ -> None
       CreateSession = fun projects dir ->
         async {
           let info : SessionInfo = {
@@ -426,6 +428,7 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
       ResolveSession = fun _ ->
         Result.Error (SageFsError.NoActiveSessions)
       GetProxy = fun _ -> None
+      GetStreamingTestProxy = fun _ -> None
       CreateSession = fun _ _ ->
         async { return Result.Error (SageFsError.NoActiveSessions) }
       StopSession = fun _ ->
@@ -452,6 +455,7 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
       ResolveSession = fun _ ->
         Result.Error (SageFsError.NoActiveSessions)
       GetProxy = fun _ -> None
+      GetStreamingTestProxy = fun _ -> None
       CreateSession = fun _ _ ->
         async { return Result.Error (SageFsError.NoActiveSessions) }
       StopSession = fun _ ->
@@ -484,6 +488,7 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
       ResolveSession = fun _ ->
         Result.Error (SageFsError.NoActiveSessions)
       GetProxy = fun _ -> None
+      GetStreamingTestProxy = fun _ -> None
       CreateSession = fun _ _ ->
         async { return Result.Error (SageFsError.NoActiveSessions) }
       StopSession = fun _ ->

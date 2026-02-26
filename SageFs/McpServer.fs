@@ -297,23 +297,19 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                         ]) |> ignore
                 )
                 .WithTracing(fun tracing ->
-                    tracing
-                        .AddSource("SageFs.LiveTesting")
-                        .AddSource("SageFs.SessionManager")
-                        .AddSource("SageFs.Pipeline")
-                        .AddSource("Marten")
-                        .AddAspNetCoreInstrumentation()
-                        .AddHttpClientInstrumentation() |> ignore
+                    let t = tracing
+                    for source in SageFs.Instrumentation.allSources do
+                      t.AddSource(source) |> ignore
+                    t.AddAspNetCoreInstrumentation()
+                      .AddHttpClientInstrumentation() |> ignore
                     if otelConfigured then tracing.AddOtlpExporter() |> ignore
                 )
                 .WithMetrics(fun metrics ->
-                    metrics
-                        .AddMeter("SageFs.LiveTesting")
-                        .AddMeter("SageFs.SessionManager")
-                        .AddMeter("SageFs.Pipeline")
-                        .AddMeter("Marten")
-                        .AddAspNetCoreInstrumentation()
-                        .AddHttpClientInstrumentation() |> ignore
+                    let m = metrics
+                    for meter in SageFs.Instrumentation.allMeters do
+                      m.AddMeter(meter) |> ignore
+                    m.AddAspNetCoreInstrumentation()
+                      .AddHttpClientInstrumentation() |> ignore
                     if otelConfigured then metrics.AddOtlpExporter() |> ignore
                 )
 
@@ -456,6 +452,7 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
             // GET /diagnostics — SSE stream of diagnostics updates
             app.MapGet("/diagnostics", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
                 task {
+                    SageFs.Instrumentation.sseConnectionsActive.Add(1L)
                     ctx.Response.ContentType <- "text/event-stream"
                     ctx.Response.Headers.["Cache-Control"] <- Microsoft.Extensions.Primitives.StringValues("no-cache")
                     ctx.Response.Headers.["Connection"] <- Microsoft.Extensions.Primitives.StringValues("keep-alive")
@@ -475,12 +472,14 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                         |> fun t -> t.ContinueWith(fun (_: Task) -> ctx.Response.Body.FlushAsync()) |> ignore
                     )
                     do! tcs.Task
+                    SageFs.Instrumentation.sseConnectionsActive.Add(-1L)
                 } :> Task
             ) |> ignore
 
             // GET /events — SSE stream of Elm state changes
             app.MapGet("/events", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
                 task {
+                    SageFs.Instrumentation.sseConnectionsActive.Add(1L)
                     ctx.Response.ContentType <- "text/event-stream"
                     ctx.Response.Headers.["Cache-Control"] <- Microsoft.Extensions.Primitives.StringValues("no-cache")
                     ctx.Response.Headers.["Connection"] <- Microsoft.Extensions.Primitives.StringValues("keep-alive")
@@ -511,6 +510,7 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                                 |> fun t -> t.ContinueWith(fun (_: Task) -> ctx.Response.Body.FlushAsync()) |> ignore
                             with _ -> ())
                         do! tcs.Task
+                        SageFs.Instrumentation.sseConnectionsActive.Add(-1L)
                     | None ->
                         ctx.Response.StatusCode <- 501
                         let msg = System.Text.Encoding.UTF8.GetBytes("event: error\ndata: {\"error\":\"No Elm loop available\"}\n\n")

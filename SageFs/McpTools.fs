@@ -11,10 +11,14 @@ open SageFs.McpTools
 /// Echo MCP tool results to the SageFs console for visibility
 let withEcho (toolName: string) (t: Task<string>) : Task<string> =
   task {
+    SageFs.Instrumentation.mcpToolInvocations.Add(1L)
+    let span = SageFs.Instrumentation.startSpan SageFs.Instrumentation.mcpSource "mcp.tool.invoke"
+                 ["mcp.tool.name", box toolName]
     let! result = t
     let normalized = result.Replace("\r\n", "\n").Replace("\n", "\r\n")
     eprintfn "\u001b[90m>> %s\u001b[0m" toolName
     eprintfn "\u001b[90m%s\u001b[0m" normalized
+    SageFs.Instrumentation.succeedSpan span
     return result
   }
 
@@ -50,6 +54,7 @@ WORKFLOW: Use this tool instead of dotnet build or dotnet run. SageFs IS your co
     ) : Task<string> =
         let wd = if System.String.IsNullOrWhiteSpace working_directory then None else Some working_directory
         logger.LogDebug("MCP-TOOL: send_fsharp_code called by {AgentName}: {Code}", agentName, code)
+        SageFs.Instrumentation.mcpToolInvocations.Add(1L)
         sendFSharpCode ctx agentName code OutputFormat.Text None wd
     
     [<McpServerTool>]

@@ -3,6 +3,7 @@ namespace SageFs
 open System
 open System.IO
 open System.Text.Json
+open System.Threading
 open System.Threading.Tasks
 open Microsoft.AspNetCore.Builder
 open Microsoft.AspNetCore.Hosting
@@ -53,6 +54,7 @@ module WorkerHttpTransport =
     (hotReloadStateRef: HotReloadState.T ref)
     (projectFiles: string list)
     (getWarmupContext: unit -> WarmupContext)
+    (getRunTest: unit -> Features.LiveTesting.TestCase -> Async<Features.LiveTesting.TestResult>)
     (port: int)
     : Task<HttpWorkerServer> =
     task {
@@ -136,6 +138,63 @@ module WorkerHttpTransport =
         let maxParallelism = (jsonProp doc "maxParallelism").GetInt32()
         let rid = (jsonProp doc "replyId").GetString()
         return! respond' ctx (WorkerMessage.RunTests(tests, maxParallelism, rid))
+      })) |> ignore
+
+      app.MapPost("/run-tests-stream", Func<HttpContext, Task>(fun ctx -> task {
+        let! body = readBody ctx
+        use doc = JsonDocument.Parse(body)
+        let testsJson = (jsonProp doc "tests").GetRawText()
+        let tests = Serialization.deserialize<Features.LiveTesting.TestCase array> testsJson
+        let maxParallelism = (jsonProp doc "maxParallelism").GetInt32()
+
+        ctx.Response.ContentType <- "text/event-stream"
+        ctx.Response.Headers["Cache-Control"] <- "no-cache"
+        ctx.Response.Headers["Connection"] <- "keep-alive"
+
+        let channel = System.Threading.Channels.Channel.CreateUnbounded<Features.LiveTesting.TestRunResult>()
+
+        let executionTask = task {
+          let onResult (result: Features.LiveTesting.TestRunResult) =
+            channel.Writer.TryWrite(result) |> ignore
+          let runTest = getRunTest()
+          use cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(float (30_000 + 100 * tests.Length)))
+          try
+            do! Features.LiveTesting.TestOrchestrator.executeFiltered
+                  runTest onResult maxParallelism tests cts.Token
+                |> Async.StartAsTask
+          with ex ->
+            eprintfn "[worker] Test execution error: %s" ex.Message
+          channel.Writer.Complete()
+        }
+        let _ = executionTask
+
+        let writer = ctx.Response.Body
+        let mutable keepReading = true
+        while keepReading do
+          let! canRead = channel.Reader.WaitToReadAsync(ctx.RequestAborted)
+          if canRead then
+            let mutable hasItem = true
+            while hasItem do
+              let (success, result) = channel.Reader.TryRead()
+              if success then
+                let json = Serialization.serialize result
+                let line = sprintf "data: %s\n\n" json
+                let bytes = Text.Encoding.UTF8.GetBytes(line)
+                do! writer.WriteAsync(bytes, 0, bytes.Length)
+                do! writer.FlushAsync()
+              else
+                hasItem <- false
+          else
+            keepReading <- false
+
+        let doneBytes = Text.Encoding.UTF8.GetBytes("event: done\ndata: {}\n\n")
+        do! writer.WriteAsync(doneBytes, 0, doneBytes.Length)
+        do! writer.FlushAsync()
+      })) |> ignore
+
+      app.MapGet("/test-discovery", Func<HttpContext, Task>(fun ctx -> task {
+        let rid = ctx.Request.Query["replyId"].ToString()
+        return! respond' ctx (WorkerMessage.GetTestDiscovery rid)
       })) |> ignore
 
       app.MapPost("/shutdown", Func<HttpContext, Task>(fun ctx ->

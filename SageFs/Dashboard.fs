@@ -1306,6 +1306,7 @@ let createStreamHandler
   (getWarmupProgress: string -> string)
   : HttpHandler =
   fun ctx -> task {
+    SageFs.Instrumentation.sseConnectionsActive.Add(1L)
     Response.sseStartResponse ctx |> ignore
 
     let clientId = Guid.NewGuid().ToString("N").[..7]
@@ -1468,6 +1469,7 @@ let createStreamHandler
           with
           | :? OperationCanceledException -> ()
     finally
+      SageFs.Instrumentation.sseConnectionsActive.Add(-1L)
       connectionTracker |> Option.iter (fun t -> t.Unregister(clientId))
   }
 
@@ -1851,6 +1853,7 @@ let createApiStateHandler
   (getLiveTestingStatus: unit -> string)
   : HttpHandler =
   fun ctx -> task {
+    SageFs.Instrumentation.sseConnectionsActive.Add(1L)
     ctx.Response.ContentType <- "text/event-stream"
     ctx.Response.Headers.["Cache-Control"] <- Microsoft.Extensions.Primitives.StringValues "no-cache"
     ctx.Response.Headers.["Connection"] <- Microsoft.Extensions.Primitives.StringValues "keep-alive"
@@ -1932,6 +1935,7 @@ let createApiStateHandler
           | :? OperationCanceledException -> ()
           | _ -> () // Pipe broken or write error — ignore
     finally
+      SageFs.Instrumentation.sseConnectionsActive.Add(-1L)
       connectionTracker |> Option.iter (fun t -> t.Unregister(clientId))
   }
 

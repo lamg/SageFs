@@ -38,14 +38,15 @@ let instrumentationTests = testSequenced (testList "Instrumentation" [
     Instrumentation.pipelineEndToEnd |> Expect.isNotNull "pipelineEndToEnd"
   }
   test "allSources has expected entries" {
-    Instrumentation.allSources |> Expect.hasLength "4 sources" 4
+    Instrumentation.allSources |> Expect.hasLength "5 sources" 5
     Instrumentation.allSources |> Expect.contains "has SessionManager" "SageFs.SessionManager"
     Instrumentation.allSources |> Expect.contains "has Pipeline" "SageFs.Pipeline"
     Instrumentation.allSources |> Expect.contains "has LiveTesting" "SageFs.LiveTesting"
+    Instrumentation.allSources |> Expect.contains "has Mcp" "SageFs.Mcp"
     Instrumentation.allSources |> Expect.contains "has Marten" "Marten"
   }
   test "allMeters has expected entries" {
-    Instrumentation.allMeters |> Expect.hasLength "4 meters" 4
+    Instrumentation.allMeters |> Expect.hasLength "5 meters" 5
   }
 
   test "traced returns correct value" {
@@ -189,5 +190,92 @@ let instrumentationTests = testSequenced (testList "Instrumentation" [
     capturedName |> Expect.equal "activity name" "pipeline.run"
     capturedTagKeys |> Expect.contains "has trigger" "trigger"
     capturedTagKeys |> Expect.contains "has duration_ms" "duration_ms"
+  }
+
+  // New Mcp source and meter tests
+  test "Mcp source name" {
+    Instrumentation.mcpSource.Name
+    |> Expect.equal "name" "SageFs.Mcp"
+  }
+  test "Mcp meter name" {
+    Instrumentation.mcpMeter.Name
+    |> Expect.equal "name" "SageFs.Mcp"
+  }
+  test "MCP and FSI counters are not null" {
+    Instrumentation.mcpToolInvocations |> Expect.isNotNull "mcpToolInvocations"
+    Instrumentation.fsiEvals |> Expect.isNotNull "fsiEvals"
+    Instrumentation.fsiStatements |> Expect.isNotNull "fsiStatements"
+    Instrumentation.sseConnectionsActive |> Expect.isNotNull "sseConnectionsActive"
+  }
+  test "pipeline histograms are not null" {
+    Instrumentation.fcsTypecheckMs |> Expect.isNotNull "fcsTypecheckMs"
+    Instrumentation.treeSitterParseMs |> Expect.isNotNull "treeSitterParseMs"
+    Instrumentation.testExecutionMs |> Expect.isNotNull "testExecutionMs"
+  }
+  test "tracedMcpTool creates span with tool name tag" {
+    let mutable captured : Activity option = None
+    use listener = new ActivityListener(
+      ShouldListenTo = (fun s -> s.Name = "SageFs.Mcp"),
+      Sample = (fun _ -> ActivitySamplingResult.AllDataAndRecorded),
+      ActivityStopped = (fun a -> if a.OperationName = "mcp.tool.invoke" then captured <- Some a))
+    ActivitySource.AddActivityListener(listener)
+
+    let result =
+      Instrumentation.tracedMcpTool "send_fsharp_code" "copilot" (fun () ->
+        System.Threading.Tasks.Task.FromResult "ok")
+      |> fun t -> t.Result
+
+    result |> Expect.equal "should return result" "ok"
+    captured |> Expect.isSome "should have captured activity"
+    let a = captured.Value
+    a.TagObjects |> Seq.tryFind (fun kv -> kv.Key = "mcp.tool.name")
+    |> Option.map (fun kv -> kv.Value :?> string)
+    |> Expect.equal "tool name tag" (Some "send_fsharp_code")
+    a.TagObjects |> Seq.tryFind (fun kv -> kv.Key = "mcp.agent.name")
+    |> Option.map (fun kv -> kv.Value :?> string)
+    |> Expect.equal "agent name tag" (Some "copilot")
+  }
+  test "tracedFsiEval creates span with session and statement tags" {
+    let mutable captured : Activity option = None
+    use listener = new ActivityListener(
+      ShouldListenTo = (fun s -> s.Name = "SageFs.Mcp"),
+      Sample = (fun _ -> ActivitySamplingResult.AllDataAndRecorded),
+      ActivityStopped = (fun a -> if a.OperationName = "fsi.eval" then captured <- Some a))
+    ActivitySource.AddActivityListener(listener)
+
+    let result =
+      Instrumentation.tracedFsiEval "test-agent" 3 "sess-123" (fun () ->
+        System.Threading.Tasks.Task.FromResult "evaluated")
+      |> fun t -> t.Result
+
+    result |> Expect.equal "should return result" "evaluated"
+    captured |> Expect.isSome "should have captured activity"
+    let a = captured.Value
+    a.TagObjects |> Seq.tryFind (fun kv -> kv.Key = "fsi.statement.count")
+    |> Option.map (fun kv -> kv.Value :?> int)
+    |> Expect.equal "statement count tag" (Some 3)
+    a.TagObjects |> Seq.tryFind (fun kv -> kv.Key = "fsi.session.id")
+    |> Option.map (fun kv -> kv.Value :?> string)
+    |> Expect.equal "session id tag" (Some "sess-123")
+  }
+  test "tracedMcpTool sets error status on exception" {
+    let mutable captured : Activity option = None
+    use listener = new ActivityListener(
+      ShouldListenTo = (fun s -> s.Name = "SageFs.Mcp"),
+      Sample = (fun _ -> ActivitySamplingResult.AllDataAndRecorded),
+      ActivityStopped = (fun a -> if a.OperationName = "mcp.tool.invoke" then captured <- Some a))
+    ActivitySource.AddActivityListener(listener)
+
+    let threw =
+      try
+        Instrumentation.tracedMcpTool "bad_tool" "copilot" (fun () ->
+          failwith "test error" |> System.Threading.Tasks.Task.FromResult)
+        |> fun t -> t.Result |> ignore
+        false
+      with _ -> true
+
+    threw |> Expect.isTrue "should have thrown"
+    captured |> Expect.isSome "should have captured activity"
+    captured.Value.Status |> Expect.equal "should be error status" ActivityStatusCode.Error
   }
 ])

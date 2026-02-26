@@ -264,7 +264,7 @@ module McpAdapter =
     |> List.map (fun (timestamp, source, text) -> $"[{timestamp:O}] %s{source}: %s{text}")
     |> String.concat "\n"
 
-  let private escapeJson (s: string) =
+  let escapeJson (s: string) =
     s.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\n", "\\n").Replace("\r", "\\r").Replace("\t", "\\t")
 
   let formatEventsJson (events: list<DateTime * string * string>) : string =
@@ -812,6 +812,10 @@ module McpTools =
   let sendFSharpCode (ctx: McpContext) (agentName: string) (code: string) (format: OutputFormat) (sessionId: string option) (workingDirectory: string option) : Task<string> =
     withSession ctx agentName sessionId workingDirectory (fun sid -> task {
       let statements = McpAdapter.splitStatements code
+      Instrumentation.fsiEvals.Add(1L)
+      Instrumentation.fsiStatements.Add(int64 statements.Length)
+      let span = Instrumentation.startSpan Instrumentation.mcpSource "fsi.eval"
+                   ["fsi.agent.name", box agentName; "fsi.statement.count", box statements.Length; "fsi.session.id", box sid]
       do! EventTracking.trackInput ctx.Store sid (Features.Events.McpAgent agentName) code
 
       let mutable allOutputs = []
@@ -833,7 +837,7 @@ module McpTools =
               | Some json ->
                 try
                   let hookResult =
-                    WorkerProtocol.Serialization.deserialize<Features.LiveTesting.LiveTestHookResult> json
+                    WorkerProtocol.Serialization.deserialize<Features.LiveTesting.LiveTestHookResultDto> json
                   if not (List.isEmpty hookResult.DetectedProviders) then
                     notifyElm ctx (SageFsEvent.ProvidersDetected hookResult.DetectedProviders)
                   if not (Array.isEmpty hookResult.DiscoveredTests) then
@@ -872,6 +876,7 @@ module McpTools =
         | _ -> allOutputs |> List.tryHead |> Option.defaultValue ""
 
       do! EventTracking.trackOutput ctx.Store sid (Features.Events.McpAgent agentName) finalOutput
+      Instrumentation.succeedSpan span
       return finalOutput
     })
 
@@ -1213,7 +1218,7 @@ module McpTools =
 
   // ── Live Testing MCP Tools ──────────────────────────────────
 
-  let private liveTestJsonOpts =
+  let liveTestJsonOpts =
     let o = JsonSerializerOptions(WriteIndented = false)
     o.Converters.Add(JsonFSharpConverter())
     o

@@ -45,6 +45,9 @@ let handleMessage
   (getState: unit -> SessionState)
   (getStats: unit -> Affordances.EvalStats)
   (getStatusMessage: unit -> string option)
+  (getRunTest: unit -> (Features.LiveTesting.TestCase -> Async<Features.LiveTesting.TestResult>))
+  (setRunTest: (Features.LiveTesting.TestCase -> Async<Features.LiveTesting.TestResult>) -> unit)
+  (getInitialDiscovery: unit -> Features.LiveTesting.TestCase array * Features.LiveTesting.ProviderDescription list)
   (msg: WorkerMessage)
   : Async<WorkerResponse> =
   async {
@@ -63,9 +66,20 @@ let handleMessage
         response.Metadata
         |> Map.fold (fun acc k v ->
           match v with
-          | :? SageFs.Features.LiveTesting.LiveTestHookResult as hookResult ->
-            acc |> Map.add k (WorkerProtocol.Serialization.serialize hookResult)
+          | :? SageFs.Features.LiveTesting.LiveTestHookResultDto as dto ->
+            acc |> Map.add k (WorkerProtocol.Serialization.serialize dto)
           | _ -> acc) Map.empty
+      // Capture RunTest closure from the latest discovery
+      let metaKeys = response.Metadata |> Map.toList |> List.map fst |> String.concat ", "
+      eprintfn "[WorkerMain] Metadata keys after eval: [%s]" metaKeys
+      match response.Metadata |> Map.tryFind "liveTestRunTest" with
+      | Some (:? (Features.LiveTesting.TestCase -> Async<Features.LiveTesting.TestResult>) as runTest) ->
+        eprintfn "[WorkerMain] ✅ RunTest captured from eval metadata"
+        setRunTest runTest
+      | Some v ->
+        eprintfn "[WorkerMain] ⚠️ liveTestRunTest found but wrong type: %s" (v.GetType().FullName)
+      | None ->
+        eprintfn "[WorkerMain] ❌ liveTestRunTest NOT found in metadata"
       return WorkerResponse.EvalResult(replyId, result |> Result.mapError SageFsError.EvalFailed, diags, metadata)
 
     | WorkerMessage.CheckCode(code, replyId) ->
@@ -117,12 +131,17 @@ let handleMessage
       return WorkerResponse.StatusResult(replyId, toStatusSnapshot state stats (getStatusMessage()))
 
     | WorkerMessage.RunTests(tests, maxParallelism, replyId) ->
-      let executors = Features.LiveTesting.BuiltInExecutors.builtIn
+      let runTest = getRunTest()
+      let results = System.Collections.Concurrent.ConcurrentBag<Features.LiveTesting.TestRunResult>()
       use cts = new CancellationTokenSource(TimeSpan.FromSeconds(float (30 + tests.Length / 10)))
-      let! results =
+      do!
         Features.LiveTesting.TestOrchestrator.executeFiltered
-          executors maxParallelism tests cts.Token
-      return WorkerResponse.TestRunResults(replyId, results)
+          runTest (fun r -> results.Add r) maxParallelism tests cts.Token
+      return WorkerResponse.TestRunResults(replyId, results.ToArray())
+
+    | WorkerMessage.GetTestDiscovery(replyId) ->
+      let tests, providers = getInitialDiscovery()
+      return WorkerResponse.InitialTestDiscovery(tests, providers)
 
     | WorkerMessage.Shutdown ->
       return WorkerResponse.WorkerShuttingDown
@@ -157,6 +176,74 @@ let run (sessionId: string) (port: int) (args: Args.Arguments list) = async {
     ActorCreation.createActor actorArgs |> Async.AwaitTask
   let actor = result.Actor
 
+  // Two-layer RunTest: project assemblies (stable) + dynamic FSI assemblies (updated per eval).
+  // Warm-up evals go through the middleware (which discovers tests and builds a RunTest closure),
+  // but the response metadata is consumed internally by the actor — handleMessage never sees it.
+  // We discover tests directly from loaded assemblies after actor creation.
+  let testFrameworkMarkers = [| "Expecto"; "xunit.core"; "nunit.framework"; "Microsoft.VisualStudio.TestPlatform.TestFramework"; "TUnit.Core" |]
+  let testAssemblies =
+    System.AppDomain.CurrentDomain.GetAssemblies()
+    |> Array.filter (fun a ->
+      try
+        a.GetReferencedAssemblies()
+        |> Array.exists (fun r -> testFrameworkMarkers |> Array.contains r.Name)
+      with _ -> false)
+  let projectDiscoveryResults =
+    testAssemblies
+    |> Array.choose (fun asm ->
+      try
+        let hr =
+          Features.LiveTesting.LiveTestingHook.afterReload
+            Features.LiveTesting.BuiltInExecutors.builtIn asm []
+        if hr.DiscoveredTests.Length > 0 then Some hr
+        else None
+      with _ -> None)
+
+  let initialDiscoveredTests =
+    projectDiscoveryResults |> Array.collect (fun r -> r.DiscoveredTests)
+  let initialProviders =
+    projectDiscoveryResults
+    |> Array.collect (fun r -> r.DetectedProviders |> List.toArray)
+    |> Array.distinctBy (fun p ->
+      match p with
+      | Features.LiveTesting.ProviderDescription.AttributeBased a -> a.Name
+      | Features.LiveTesting.ProviderDescription.Custom c -> c.Name)
+    |> Array.toList
+
+  let projectRunTest =
+    let runTests = projectDiscoveryResults |> Array.map (fun r -> r.RunTest)
+    if runTests.Length = 0 then
+      Features.LiveTesting.LiveTestHookResult.noOp
+    elif runTests.Length = 1 then
+      runTests.[0]
+    else
+      fun (tc: Features.LiveTesting.TestCase) ->
+        let rec tryRunners (idx: int) remaining = async {
+          match remaining with
+          | [] -> return Features.LiveTesting.TestResult.NotRun
+          | rt :: rest ->
+            let! result = rt tc
+            match result with
+            | Features.LiveTesting.TestResult.NotRun -> return! tryRunners (idx + 1) rest
+            | found -> return found }
+        tryRunners 0 (runTests |> Array.toList)
+
+  // Dynamic RunTest from FSI evals (updated on each eval via handleMessage.EvalCode)
+  let mutable latestDynamicRunTest : (Features.LiveTesting.TestCase -> Async<Features.LiveTesting.TestResult>) option =
+    None
+
+  // Composed RunTest: try dynamic first (for interactively defined tests), fall back to project
+  let getRunTest () =
+    match latestDynamicRunTest with
+    | Some dynamicRt ->
+      fun (tc: Features.LiveTesting.TestCase) -> async {
+        let! result = dynamicRt tc
+        match result with
+        | Features.LiveTesting.TestResult.NotRun -> return! projectRunTest tc
+        | found -> return found }
+    | None -> projectRunTest
+  let setDynamicRunTest v = latestDynamicRunTest <- Some v
+
   // Start file watcher unless --no-watch was passed
   let noWatch = args |> List.exists (function Args.No_Watch -> true | _ -> false)
   let fileWatcher =
@@ -178,6 +265,11 @@ let run (sessionId: string) (port: int) (args: Args.Arguments list) = async {
               actor.PostAndAsyncReply(fun rc -> Eval(request, localCts.Token, rc))
             match response.EvaluationResult with
             | Ok _ ->
+              // Capture RunTest from hot-reload discovery
+              match response.Metadata |> Map.tryFind "liveTestRunTest" with
+              | Some (:? (Features.LiveTesting.TestCase -> Async<Features.LiveTesting.TestResult>) as runTest) ->
+                setDynamicRunTest runTest
+              | _ -> ()
               let reloaded =
                 response.Metadata
                 |> Map.tryFind "reloadedMethods"
@@ -202,7 +294,9 @@ let run (sessionId: string) (port: int) (args: Args.Arguments list) = async {
       Some (FileWatcher.start config onFileChanged)
 
   // Signal readiness over the pipe
-  let handler = handleMessage actor result.GetSessionState result.GetEvalStats result.GetStatusMessage
+  let handler =
+    handleMessage actor result.GetSessionState result.GetEvalStats result.GetStatusMessage
+      getRunTest setDynamicRunTest (fun () -> initialDiscoveredTests, initialProviders)
 
   let readyHandler (msg: WorkerMessage) = async {
     match msg with
@@ -237,7 +331,7 @@ let run (sessionId: string) (port: int) (args: Args.Arguments list) = async {
             not (n.Contains("/obj/") || n.Contains("/bin/")))
         else [])
     let! server =
-      WorkerHttpTransport.startServer handler result.HotReloadStateRef projectFiles result.GetWarmupContext port
+      WorkerHttpTransport.startServer handler result.HotReloadStateRef projectFiles result.GetWarmupContext getRunTest port
       |> Async.AwaitTask
     // Print actual port to stdout so daemon can discover it
     printfn "WORKER_PORT=%s" server.BaseUrl

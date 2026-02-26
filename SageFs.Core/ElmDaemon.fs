@@ -42,6 +42,7 @@ let createEffectDeps
           sessionManager.PostAndAsyncReply(fun reply ->
             SessionManager.SessionCommand.ListSessions reply)
       }
+    GetStreamingTestProxy = fun _sessionId -> None
     GetWarmupContext = None
     PipelineCancellation = Features.LiveTesting.PipelineCancellation.create ()
   }

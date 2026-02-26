@@ -89,7 +89,7 @@ module SageFsUpdate =
 
   /// Every LiveTestState mutation that affects test lifecycle MUST recompute StatusEntries.
   /// This helper encodes that invariant in one place.
-  let private recomputeStatuses (lt: Features.LiveTesting.LiveTestPipelineState) (updateState: Features.LiveTesting.LiveTestState -> Features.LiveTesting.LiveTestState) =
+  let recomputeStatuses (lt: Features.LiveTesting.LiveTestPipelineState) (updateState: Features.LiveTesting.LiveTestState -> Features.LiveTesting.LiveTestState) =
     let previous =
       lt.TestState.StatusEntries
       |> Array.map (fun e -> e.TestId, e.Status)
@@ -380,7 +380,15 @@ module SageFsUpdate =
             if Array.isEmpty s.SourceLocations then disc
             else Features.LiveTesting.SourceMapping.mergeSourceLocations s.SourceLocations disc
           { s with DiscoveredTests = merged })
-        { model with LiveTesting = lt }, []
+        let effects =
+          if lt.TestState.Activation = Features.LiveTesting.LiveTestingActivation.Active
+             && not (Array.isEmpty lt.TestState.DiscoveredTests) then
+            let allIds = lt.TestState.DiscoveredTests |> Array.map (fun tc -> tc.Id)
+            Features.LiveTesting.LiveTestPipelineState.triggerExecutionForAffected
+              allIds Features.LiveTesting.RunTrigger.FileSave lt
+            |> List.map SageFsEffect.Pipeline
+          else []
+        { model with LiveTesting = lt }, effects
 
       | SageFsEvent.TestRunStarted testIds ->
         let lt = recomputeStatuses model.LiveTesting (fun s ->
@@ -399,6 +407,11 @@ module SageFsUpdate =
             |> List.map SageFsEffect.Pipeline
           else []
         { model with LiveTesting = lt }, effects
+
+      | SageFsEvent.TestRunCompleted ->
+        let lt = recomputeStatuses model.LiveTesting (fun s ->
+          { s with RunPhase = Features.LiveTesting.TestRunPhase.Idle })
+        { model with LiveTesting = lt }, []
 
       | SageFsEvent.LiveTestingEnabled ->
         let lt = recomputeStatuses model.LiveTesting (fun s -> { s with Activation = Features.LiveTesting.LiveTestingActivation.Active })
@@ -684,6 +697,8 @@ type EffectDeps = {
   ResolveSession: SessionId option -> Result<SessionOperations.SessionResolution, SageFsError>
   /// Get the proxy for a session
   GetProxy: SessionId -> SessionProxy option
+  /// Get a streaming test execution proxy for a session
+  GetStreamingTestProxy: SessionId -> (Features.LiveTesting.TestCase array -> int -> (Features.LiveTesting.TestRunResult -> unit) -> Async<unit>) option
   /// Create a new session
   CreateSession: string list -> string -> Async<Result<SessionInfo, SageFsError>>
   /// Stop a session
@@ -897,6 +912,7 @@ module SageFsEffectHandler =
       async {
         match pipelineEffect with
         | Features.LiveTesting.PipelineEffect.ParseTreeSitter (content, filePath) ->
+          let span = Instrumentation.startSpan Instrumentation.pipelineSource "pipeline.treesitter.parse" ["file", box filePath]
           let (locations, elapsed) =
             Features.LiveTesting.LiveTestingInstrumentation.traced
               "SageFs.LiveTesting.TreeSitterParse"
@@ -906,7 +922,9 @@ module SageFsEffectHandler =
                 let locs = Features.LiveTesting.TestTreeSitter.discover filePath content
                 sw.Stop()
                 (locs, sw.Elapsed))
+          Instrumentation.treeSitterParseMs.Record(elapsed.TotalMilliseconds)
           Features.LiveTesting.LiveTestingInstrumentation.treeSitterHistogram.Record(elapsed.TotalMilliseconds)
+          Instrumentation.succeedSpan span
           dispatch (SageFsMsg.Event (SageFsEvent.TestLocationsDetected locations))
           let timing : Features.LiveTesting.PipelineTiming = {
             Depth = Features.LiveTesting.PipelineDepth.TreeSitterOnly elapsed
@@ -916,6 +934,7 @@ module SageFsEffectHandler =
           }
           dispatch (SageFsMsg.Event (SageFsEvent.PipelineTimingRecorded timing))
         | Features.LiveTesting.PipelineEffect.RequestFcsTypeCheck (filePath, tsElapsed) ->
+          let span = Instrumentation.startSpan Instrumentation.pipelineSource "pipeline.fcs.typecheck" ["file", box filePath]
           let fcsStopwatch = System.Diagnostics.Stopwatch.StartNew()
           do! withSession deps dispatch None (fun _sid proxy ->
             async {
@@ -926,6 +945,7 @@ module SageFsEffectHandler =
                 let replyId = newReplyId ()
                 let! resp = proxy (WorkerMessage.TypeCheckWithSymbols(code, filePath, replyId))
                 fcsStopwatch.Stop()
+                Instrumentation.fcsTypecheckMs.Record(fcsStopwatch.Elapsed.TotalMilliseconds)
                 Features.LiveTesting.LiveTestingInstrumentation.fcsHistogram.Record(fcsStopwatch.Elapsed.TotalMilliseconds)
                 let result =
                   match resp with
@@ -945,6 +965,7 @@ module SageFsEffectHandler =
                   Timestamp = System.DateTimeOffset.UtcNow
                 }
                 dispatch (SageFsMsg.Event (SageFsEvent.PipelineTimingRecorded timing))
+                Instrumentation.succeedSpan span
             })
         | Features.LiveTesting.PipelineEffect.RunAffectedTests (tests, trigger, tsElapsed, fcsElapsed) ->
           if Array.isEmpty tests then ()
@@ -952,56 +973,48 @@ module SageFsEffectHandler =
             let testIds = tests |> Array.map (fun tc -> tc.Id)
             dispatch (SageFsMsg.Event (SageFsEvent.TestRunStarted testIds))
             let ct = deps.PipelineCancellation.TestRun.next()
+            let pipelineSpan = Instrumentation.startSpan Instrumentation.pipelineSource "pipeline.test.execution" ["test.count", box tests.Length; "trigger", box (sprintf "%A" trigger)]
             Async.Start(async {
               use activity =
                 Features.LiveTesting.LiveTestingInstrumentation.activitySource.StartActivity(
                   "SageFs.LiveTesting.TestExecution")
               let sw = System.Diagnostics.Stopwatch.StartNew()
               try
-                // Route test execution to the WORKER process where the reflection
-                // cache (snapshot) is populated. The host process cannot execute tests
-                // because BuiltInExecutors.builtIn.snapshot is always None here.
-                let! results =
-                  async {
-                    match deps.ResolveSession None with
-                    | Ok resolution ->
-                      let sid = SessionOperations.sessionId resolution
-                      match deps.GetProxy sid with
-                      | Some proxy ->
-                        let replyId = newReplyId ()
-                        let! resp = proxy (WorkerMessage.RunTests(tests, 4, replyId))
-                        match resp with
-                        | WorkerResponse.TestRunResults (_, workerResults) ->
-                          return workerResults
-                        | _ ->
-                          return tests |> Array.map (fun tc ->
-                            { TestId = tc.Id
-                              TestName = tc.FullName
-                              Result = Features.LiveTesting.TestResult.NotRun
-                              Timestamp = System.DateTimeOffset.UtcNow }
-                            : Features.LiveTesting.TestRunResult)
-                      | None ->
-                        return tests |> Array.map (fun tc ->
-                          { TestId = tc.Id
-                            TestName = tc.FullName
-                            Result = Features.LiveTesting.TestResult.NotRun
-                            Timestamp = System.DateTimeOffset.UtcNow }
-                          : Features.LiveTesting.TestRunResult)
-                    | Error _ ->
-                      return tests |> Array.map (fun tc ->
+                match deps.ResolveSession None with
+                | Ok resolution ->
+                  let sid = SessionOperations.sessionId resolution
+                  match deps.GetStreamingTestProxy sid with
+                  | Some streamProxy ->
+                    do! streamProxy tests 4 (fun result ->
+                      dispatch (SageFsMsg.Event (SageFsEvent.TestResultsBatch [| result |])))
+                  | None ->
+                    let notRunResults =
+                      tests |> Array.map (fun tc ->
                         { TestId = tc.Id
                           TestName = tc.FullName
                           Result = Features.LiveTesting.TestResult.NotRun
                           Timestamp = System.DateTimeOffset.UtcNow }
                         : Features.LiveTesting.TestRunResult)
-                  }
+                    dispatch (SageFsMsg.Event (SageFsEvent.TestResultsBatch notRunResults))
+                | Error _ ->
+                  let notRunResults =
+                    tests |> Array.map (fun tc ->
+                      { TestId = tc.Id
+                        TestName = tc.FullName
+                        Result = Features.LiveTesting.TestResult.NotRun
+                        Timestamp = System.DateTimeOffset.UtcNow }
+                      : Features.LiveTesting.TestRunResult)
+                  dispatch (SageFsMsg.Event (SageFsEvent.TestResultsBatch notRunResults))
                 sw.Stop()
+                Instrumentation.testExecutionMs.Record(sw.Elapsed.TotalMilliseconds)
+                let endToEndMs = tsElapsed.TotalMilliseconds + fcsElapsed.TotalMilliseconds + sw.Elapsed.TotalMilliseconds
+                Instrumentation.pipelineEndToEnd.Record(endToEndMs)
                 Features.LiveTesting.LiveTestingInstrumentation.executionHistogram.Record(sw.Elapsed.TotalMilliseconds)
                 if activity <> null then
                   activity.SetTag("test_count", tests.Length) |> ignore
                   activity.SetTag("trigger", sprintf "%A" trigger) |> ignore
                   activity.SetTag("duration_ms", sw.Elapsed.TotalMilliseconds) |> ignore
-                dispatch (SageFsMsg.Event (SageFsEvent.TestResultsBatch results))
+                dispatch (SageFsMsg.Event SageFsEvent.TestRunCompleted)
                 let timing : Features.LiveTesting.PipelineTiming = {
                   Depth = Features.LiveTesting.PipelineDepth.ThroughExecution(
                             tsElapsed, fcsElapsed, sw.Elapsed)
@@ -1011,8 +1024,10 @@ module SageFsEffectHandler =
                   Timestamp = System.DateTimeOffset.UtcNow
                 }
                 dispatch (SageFsMsg.Event (SageFsEvent.PipelineTimingRecorded timing))
+                Instrumentation.succeedSpan pipelineSpan
               with ex ->
                 sw.Stop()
+                Instrumentation.failSpan pipelineSpan ex.Message
                 let errResults =
                   tests |> Array.map (fun tc ->
                     ({ TestId = tc.Id
@@ -1026,6 +1041,7 @@ module SageFsEffectHandler =
                        Timestamp = System.DateTimeOffset.UtcNow }
                      : Features.LiveTesting.TestRunResult))
                 dispatch (SageFsMsg.Event (SageFsEvent.TestResultsBatch errResults))
+                dispatch (SageFsMsg.Event SageFsEvent.TestRunCompleted)
             }, ct)
       }
 
