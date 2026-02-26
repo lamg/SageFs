@@ -2,10 +2,13 @@ module SageFs.Tests.PureFunctionCoverageTests
 
 open Expecto
 open Expecto.Flip
+open FsCheck
 open FSharp.Compiler.EditorServices
 open SageFs.Middleware.HotReloading
 open SageFs.Features.AutoCompletion
 open SageFs.AppState
+open SageFs.FileWatcher
+open System
 
 // ═══════════════════════════════════════════════════════════
 // HotReloading — isTopLevelFunctionBinding
@@ -189,6 +192,312 @@ let reformatExpectoSummaryTests = testList "reformatExpectoSummary" [
 ]
 
 // ═══════════════════════════════════════════════════════════
+// Behavioral contract properties (FsCheck)
+//
+// These test WHY each function exists — the invariants that
+// callers depend on. If any of these break, something upstream
+// (hot-reload, dashboard, autocomplete, file watcher) will
+// silently misbehave.
+// ═══════════════════════════════════════════════════════════
+
+let cfg = { FsCheckConfig.defaultConfig with maxTest = 200 }
+
+// --- stripAnsi: the output pipeline depends on these ---
+
+/// Callers may process text multiple times (cleanStdout then display).
+/// If stripping mutates already-clean text, re-processing corrupts output.
+let stripAnsiIdempotent =
+  testPropertyWithConfig cfg
+    "stripAnsi: stripping twice equals stripping once (idempotent)"
+    <| fun (s: NonEmptyString) ->
+      let once = stripAnsi s.Get
+      stripAnsi once = once
+
+/// Dashboard and MCP tool output must be free of ANSI CSI sequences.
+/// A surviving CSI renders as garbage in HTML and JSON contexts.
+let stripAnsiNoCompleteCsiSurvives =
+  testPropertyWithConfig cfg
+    "stripAnsi: no complete ANSI CSI sequence survives"
+    <| fun (s: NonEmptyString) ->
+      let cleaned = stripAnsi s.Get
+      not (Text.RegularExpressions.Regex.IsMatch(cleaned, @"\x1b\[[0-9;]*[a-zA-Z]"))
+
+/// OSC sequences (title changes, hyperlinks) must also be stripped.
+let stripAnsiNoOscSurvives =
+  testPropertyWithConfig cfg
+    "stripAnsi: no OSC sequence (ESC]...BEL) survives"
+    <| fun (s: NonEmptyString) ->
+      let cleaned = stripAnsi s.Get
+      not (Text.RegularExpressions.Regex.IsMatch(cleaned, @"\x1b\].*?\x07"))
+
+/// Most text passing through cleanStdout is already plain ASCII.
+/// If the regex accidentally mutates non-ANSI text, real output is corrupted.
+let stripAnsiIdentityOnPlainText =
+  testPropertyWithConfig cfg
+    "stripAnsi: plain ASCII text passes through unchanged"
+    <| fun (s: NonEmptyString) ->
+      let plain = Text.RegularExpressions.Regex.Replace(s.Get, @"[^\x20-\x7E]", "")
+      plain.Length = 0 || stripAnsi plain = plain
+
+// --- cleanStdout: dashboard SSE handler depends on these ---
+
+/// The dashboard applies cleanStdout on every state change. During
+/// state replay or snapshot rebuild, output may be re-processed.
+/// Idempotency guarantees stability across replays.
+let cleanStdoutIdempotent =
+  testPropertyWithConfig cfg
+    "cleanStdout: cleaning already-clean text is stable (idempotent)"
+    <| fun (s: NonEmptyString) ->
+      let once = cleanStdout s.Get
+      cleanStdout once = once
+
+/// Same rationale as stripAnsi — dashboard HTML must not contain ANSI.
+let cleanStdoutNoAnsi =
+  testPropertyWithConfig cfg
+    "cleanStdout: output never contains complete ANSI sequences"
+    <| fun (s: NonEmptyString) ->
+      let cleaned = cleanStdout s.Get
+      not (Text.RegularExpressions.Regex.IsMatch(cleaned, @"\x1b\[[0-9;]*[a-zA-Z]"))
+
+// --- isTopLevelFunctionBinding: hot-reload patch safety ---
+
+/// Hot reload only needs NoInlining on TOP-LEVEL functions.
+/// Nested bindings (inside match/if/function bodies) are never
+/// Harmony patch targets. Injecting attributes on them would
+/// change indentation semantics and potentially break compilation.
+let topLevelRejectsIndented =
+  testPropertyWithConfig cfg
+    "isTopLevelFunctionBinding: any leading whitespace means not top-level"
+    <| fun (NonNegativeInt indent) (name: NonEmptyString) ->
+      let spaces = String(' ', indent + 1)
+      let safeName = Text.RegularExpressions.Regex.Replace(name.Get, @"[^a-zA-Z_]", "a")
+      let line = sprintf "%slet %s x = x" spaces safeName
+      isTopLevelFunctionBinding line = false
+
+/// Users mark functions `private`/`inline`/`rec` for their own reasons.
+/// The hot-reload detector must classify function-vs-value regardless
+/// of modifiers. If modifiers confused it, private functions would
+/// silently escape hot-reload — a nasty latent bug.
+let modifiersDontAffectClassification =
+  let modifiers = ["private "; "internal "; "public "; "inline "; "rec "]
+  testList "isTopLevelFunctionBinding: modifiers preserve function-vs-value" [
+    for m in modifiers do
+      test (sprintf "'let %sf x = x' is still a function" m) {
+        isTopLevelFunctionBinding (sprintf "let %sf x = x" m)
+        |> Expect.isTrue (sprintf "%s preserves function" m)
+      }
+      test (sprintf "'let %sx = 42' is still a value" m) {
+        isTopLevelFunctionBinding (sprintf "let %sx = 42" m)
+        |> Expect.isFalse (sprintf "%s preserves value" m)
+      }
+  ]
+
+// --- injectNoInlining: transform correctness ---
+
+/// The transform must ONLY add attributes — never modify comments,
+/// blank lines, type definitions, or other non-function code. If it
+/// accidentally mutates a non-function line, it introduces compile
+/// errors or changes the semantics of the user's code.
+let injectPreservesNonFunctionLines = testList "injectNoInlining: non-function lines preserved" [
+  test "type definition passes through" {
+    injectNoInlining "type X = { A: int }" |> Expect.equal "type def unchanged" "type X = { A: int }"
+  }
+  test "comments pass through" {
+    injectNoInlining "// this is a comment\n(* block comment *)"
+    |> Expect.equal "comments unchanged" "// this is a comment\n(* block comment *)"
+  }
+  test "open declarations pass through" {
+    injectNoInlining "open System\nopen System.IO"
+    |> Expect.equal "opens unchanged" "open System\nopen System.IO"
+  }
+  test "empty string passes through" {
+    injectNoInlining "" |> Expect.equal "empty unchanged" ""
+  }
+]
+
+/// Each function needs exactly one [<MethodImpl(NoInlining)>] to
+/// prevent JIT inlining. Zero = Harmony patch invisible. This
+/// structural property ensures the transform is precise.
+let injectAttributeCountMatchesFunctionCount =
+  test "injectNoInlining: attribute count equals function count" {
+    let code = "let f x = x\nlet x = 42\nlet g (y: int) = y * 2\n  static member Create(z) = z"
+    let result = injectNoInlining code
+    let lines = result.Split('\n')
+    let attrCount =
+      lines |> Array.filter (fun l -> l.TrimStart().StartsWith("[<MethodImpl")) |> Array.length
+    let funcCount =
+      code.Split('\n')
+      |> Array.filter (fun l -> isTopLevelFunctionBinding l || isStaticMemberFunction l)
+      |> Array.length
+    attrCount |> Expect.equal "one attribute per function" funcCount
+  }
+
+// --- shouldExcludeFile: glob matching contracts ---
+
+/// The default WatchConfig has no exclusions. If empty patterns
+/// accidentally matched everything, hot-reload would silently
+/// stop watching all files.
+let emptyPatternsExcludeNothing =
+  testPropertyWithConfig cfg
+    "shouldExcludeFile: empty pattern list never excludes"
+    <| fun (s: NonEmptyString) ->
+      shouldExcludeFile [] s.Get = false
+
+/// Windows file systems are case-insensitive. Patterns like "Bin/*"
+/// must match "bin/Debug/test.dll". Without case-insensitive matching,
+/// exclusion patterns silently fail on Windows.
+let excludeIsCaseInsensitive = testList "shouldExcludeFile: case insensitive matching" [
+  test "uppercase pattern matches lowercase path" {
+    shouldExcludeFile ["BIN/*"] "bin/Debug/test.dll" |> Expect.isTrue "BIN/* matches bin/"
+  }
+  test "lowercase pattern matches uppercase path" {
+    shouldExcludeFile ["bin/*"] "BIN/Debug/test.dll" |> Expect.isTrue "bin/* matches BIN/"
+  }
+]
+
+/// FileSystemWatcher on Windows reports backslashes, but users write
+/// glob patterns with forward slashes. Without normalization, the same
+/// path would match or not depending on OS.
+let excludeNormalizesSlashes = testList "shouldExcludeFile: slash normalization" [
+  test "forward-slash pattern matches backslash path" {
+    shouldExcludeFile ["bin/*"] @"bin\Debug\test.dll"
+    |> Expect.isTrue "forward matches backslash"
+  }
+  test "backslash pattern matches forward-slash path" {
+    shouldExcludeFile [@"bin\*"] "bin/Debug/test.dll"
+    |> Expect.isTrue "backslash matches forward"
+  }
+]
+
+// --- fileChangeAction: hot-reload routing safety ---
+
+/// When a .fs file is deleted, its old definitions remain valid in FSI.
+/// Trying to #load a deleted file would crash. The hot-reload system
+/// MUST treat deletes as no-ops regardless of extension.
+let deletedFilesAlwaysIgnored =
+  testPropertyWithConfig cfg
+    "fileChangeAction: deleted files are always Ignore regardless of extension"
+    <| fun (s: NonEmptyString) ->
+      let exts = [".fs"; ".fsx"; ".fsproj"; ".txt"; ".dll"; ""]
+      exts |> List.forall (fun ext ->
+        let change = { FilePath = s.Get + ext; Kind = FileChangeKind.Deleted; Timestamp = DateTimeOffset.UtcNow }
+        fileChangeAction change = FileChangeAction.Ignore
+      )
+
+/// The escalation hierarchy is a critical design decision:
+///   Reload = cheapest (re-eval one file via #load)
+///   SoftReset = heavier (rebuild all assembly references)
+/// Wrong routing means either wasted rebuilds or stale code.
+let fileChangeActionEscalation = testList "fileChangeAction: escalation hierarchy" [
+  for ext, expectReload, label in [
+    ".fs", true, "source → Reload"
+    ".fsx", true, "script → Reload"
+    ".fsproj", false, "project → SoftReset"
+    ".txt", false, "unrelated → Ignore"
+  ] do
+    test label {
+      let change = { FilePath = sprintf "test%s" ext; Kind = FileChangeKind.Changed; Timestamp = DateTimeOffset.UtcNow }
+      let result = fileChangeAction change
+      if expectReload then
+        match result with
+        | FileChangeAction.Reload _ -> ()
+        | other -> failwith (sprintf "expected Reload, got %A" other)
+      elif ext = ".fsproj" then
+        result |> Expect.equal label FileChangeAction.SoftReset
+      else
+        result |> Expect.equal label FileChangeAction.Ignore
+    }
+]
+
+// --- shouldTriggerRebuild: build noise suppression ---
+
+/// IDEs create temp files (~foo.fs, foo.tmp), and build output lands
+/// in bin/obj. Without this filter, every IDE save causes a double-
+/// rebuild and every build triggers an infinite rebuild loop.
+let tempFilesNeverTriggerRebuild = testList "shouldTriggerRebuild: temp/build artifacts filtered" [
+  let config = { Directories = []; Extensions = [".fs"; ".fsx"; ".fsproj"]; ExcludePatterns = []; DebounceMs = 500 }
+  for path, label in [
+    "~MyFile.fs", "tilde-prefix"; "scratch.fs.tmp", "tmp-suffix"
+    "src/obj/Debug/net10.0/test.fs", "obj dir"; "src/bin/Debug/net10.0/SageFs.dll", "bin dir"
+    @"C:\proj\bin\Release\net10.0\app.fs", "Win bin"; @"C:\proj\obj\Debug\net10.0\temp.fsx", "Win obj"
+  ] do
+    test label { shouldTriggerRebuild config path |> Expect.isFalse label }
+]
+
+/// Users configure exclusion patterns to suppress rebuilds for generated
+/// code, vendored deps, etc. If patterns were ignored after a refactor,
+/// generated files would trigger spurious rebuilds.
+let exclusionPatternsHonored = testList "shouldTriggerRebuild: exclusion patterns respected" [
+  let config ext pats = { Directories = []; Extensions = ext; ExcludePatterns = pats; DebounceMs = 500 }
+  test "excluded .fs file doesn't trigger" {
+    shouldTriggerRebuild (config [".fs"] ["**/Generated/*"]) "src/Generated/Code.fs"
+    |> Expect.isFalse "excluded"
+  }
+  test "non-excluded .fs file triggers" {
+    shouldTriggerRebuild (config [".fs"] ["**/Generated/*"]) "src/MyCode.fs"
+    |> Expect.isTrue "not excluded"
+  }
+]
+
+/// Only configured extensions trigger rebuilds. Firing on unconfigured
+/// extensions means spurious rebuilds (slow). NOT firing on configured
+/// ones means stale code (dangerous).
+let onlyConfiguredExtensionsTrigger = testList "shouldTriggerRebuild: only configured extensions" [
+  let config exts = { Directories = []; Extensions = exts; ExcludePatterns = []; DebounceMs = 500 }
+  test ".fs fires when configured" {
+    shouldTriggerRebuild (config [".fs"]) "src/App.fs" |> Expect.isTrue ".fs"
+  }
+  test ".cs silent when only .fs configured" {
+    shouldTriggerRebuild (config [".fs"]) "src/App.cs" |> Expect.isFalse ".cs"
+  }
+  test "empty extensions means nothing fires" {
+    shouldTriggerRebuild (config []) "src/App.fs" |> Expect.isFalse "empty"
+  }
+]
+
+// --- scoreCandidate: autocomplete ranking contracts ---
+
+/// When a user types "get" in autocomplete, they expect "getUser" to
+/// rank above "budgetItem" even though "budget" fuzzy-matches "get".
+/// The 200-point prefix bonus makes autocomplete feel responsive.
+let prefixMatchBeatsFuzzy =
+  testPropertyWithConfig cfg
+    "scoreCandidate: prefix match always outscores non-prefix of same length"
+    <| fun (NonEmptyString prefix) ->
+      let safePfx = Text.RegularExpressions.Regex.Replace(prefix, @"[^a-zA-Z]", "a")
+      if safePfx.Length = 0 then true
+      else
+        let prefixCandidate = safePfx + "Suffix"
+        let nonPrefixCandidate = "zz" + safePfx + "Suffix"
+        scoreCandidate safePfx prefixCandidate > scoreCandidate safePfx nonPrefixCandidate
+
+/// When two candidates both prefix-match, the shorter one is more
+/// likely what the user wants. The brevity bonus (100/(len+1))
+/// ensures "getX" ranks above "getVeryLongMethodName".
+let shorterCandidateScoresHigher =
+  testPropertyWithConfig cfg
+    "scoreCandidate: shorter candidate scores >= longer for same prefix"
+    <| fun (NonEmptyString prefix) (PositiveInt extra) ->
+      let safePfx = Text.RegularExpressions.Regex.Replace(prefix, @"[^a-zA-Z]", "a")
+      if safePfx.Length = 0 then true
+      else
+        let short = safePfx + "x"
+        let long = safePfx + String('x', extra + 2)
+        scoreCandidate safePfx short >= scoreCandidate safePfx long
+
+// --- reformatExpectoSummary: output passthrough safety ---
+
+/// cleanStdout applies reformatExpectoSummary to every line containing
+/// "EXPECTO!". Non-matching lines MUST pass through unchanged — if the
+/// regex accidentally matches non-Expecto output, it mangles it.
+let reformatPassthroughOnNonExpecto =
+  testPropertyWithConfig cfg
+    "reformatExpectoSummary: non-matching lines pass through verbatim"
+    <| fun (s: NonEmptyString) ->
+      let plain = Text.RegularExpressions.Regex.Replace(s.Get, @"EXPECTO!", "test")
+      reformatExpectoSummary plain = plain
+
+// ═══════════════════════════════════════════════════════════
 // Combined
 // ═══════════════════════════════════════════════════════════
 
@@ -204,5 +513,46 @@ let allPureFunctionCoverageTests = testList "Pure function coverage" [
   testList "AppState" [
     stripAnsiTests
     reformatExpectoSummaryTests
+  ]
+  testList "Behavioral contracts" [
+    testList "stripAnsi" [
+      stripAnsiIdempotent
+      stripAnsiNoCompleteCsiSurvives
+      stripAnsiNoOscSurvives
+      stripAnsiIdentityOnPlainText
+    ]
+    testList "cleanStdout" [
+      cleanStdoutIdempotent
+      cleanStdoutNoAnsi
+    ]
+    testList "isTopLevelFunctionBinding" [
+      topLevelRejectsIndented
+      modifiersDontAffectClassification
+    ]
+    testList "injectNoInlining" [
+      injectPreservesNonFunctionLines
+      injectAttributeCountMatchesFunctionCount
+    ]
+    testList "shouldExcludeFile" [
+      emptyPatternsExcludeNothing
+      excludeIsCaseInsensitive
+      excludeNormalizesSlashes
+    ]
+    testList "fileChangeAction" [
+      deletedFilesAlwaysIgnored
+      fileChangeActionEscalation
+    ]
+    testList "shouldTriggerRebuild" [
+      tempFilesNeverTriggerRebuild
+      exclusionPatternsHonored
+      onlyConfiguredExtensionsTrigger
+    ]
+    testList "scoreCandidate" [
+      prefixMatchBeatsFuzzy
+      shorterCandidateScoresHigher
+    ]
+    testList "reformatExpectoSummary" [
+      reformatPassthroughOnNonExpecto
+    ]
   ]
 ]
