@@ -649,6 +649,45 @@ SageFs auto-loads `~/.SageFs/init.fsx` on session start, if it exists. Use it fo
 
 ---
 
+## FSI Quirks & Rewrites
+
+FSI (F# Interactive) is a REPL — it evaluates expressions and definitions, not files. This gives SageFs instant feedback, but FSI has behavioral differences from compiled F# that can surprise newcomers. SageFs applies **automatic rewrites** to smooth over the biggest gotcha, and this section documents what happens and why.
+
+### `use` → `let` Rewrite (Automatic)
+
+**What happens:** When you send code to SageFs, any **indented** `use` binding inside a function or computation expression is silently rewritten to `let` before FSI evaluates it.
+
+```fsharp
+// You write:                       // FSI receives:
+let processFile path =              let processFile path =
+  use stream = File.OpenRead(path)    let stream = File.OpenRead(path)
+  use reader = new StreamReader(s)    let reader = new StreamReader(s)
+  reader.ReadToEnd()                  reader.ReadToEnd()
+```
+
+**Why:** FSI doesn't support `use` bindings inside nested scopes (functions, `async {}` blocks, `task {}` CEs, etc.) even though compiled F# does. Without this rewrite, common patterns with `IDisposable` resources would fail with cryptic errors in the REPL.
+
+**What this means for you:**
+- ⚠️ **Disposables are NOT automatically disposed** in the REPL. In compiled code, `use` calls `.Dispose()` at scope exit. In FSI (after rewrite), it's just `let` — no disposal happens. For short-lived REPL experiments this is fine. For long-running sessions with file handles or database connections, be aware.
+- ✅ **Top-level `use` bindings are NOT rewritten** — only indented ones inside functions/CEs.
+- ✅ **Your source files are never modified** — the rewrite happens in-memory on the code sent to FSI.
+- ✅ **The rewrite is logged** — check the daemon console for `"FSI Compatibility: Rewrote 'use' to 'let'"` if you want to see when it fires.
+
+### Other FSI vs Compiled Differences
+
+These are **not** rewritten by SageFs — they're inherent FSI behaviors to be aware of:
+
+- **Redefinition is additive.** Sending `let x = 1;;` then `let x = 2;;` doesn't error — it shadows the previous `x`. Both definitions exist in memory; only the latest is visible.
+- **`;;` terminates an interaction.** Each `;;` is an independent evaluation. If one fails, previous definitions from earlier `;;` boundaries are still alive.
+- **No `[<EntryPoint>]`.** FSI doesn't run `main` — it evaluates definitions and expressions interactively.
+- **Assembly loading is session-scoped.** `#r` directives and loaded DLLs persist for the session lifetime. To unload, reset the session.
+
+### Want to Improve This?
+
+The rewrite logic lives in [`SageFs.Core/FsiRewrite.fs`](SageFs.Core/FsiRewrite.fs) (~25 lines) with tests in [`SageFs.Tests/FsiRewriteTests.fs`](SageFs.Tests/FsiRewriteTests.fs). If you know of a better way to handle `use` in FSI, or want to add rewrites for other FSI quirks, PRs are very welcome. The middleware pipeline in [`SageFs.Core/Middleware/FsiCompatibility.fs`](SageFs.Core/Middleware/FsiCompatibility.fs) makes it easy to add new transforms.
+
+---
+
 <details>
 <summary><h2>MCP Tools Reference</h2></summary>
 
