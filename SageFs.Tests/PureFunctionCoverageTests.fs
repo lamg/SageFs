@@ -2549,6 +2549,261 @@ let validatedBufferOpsTests = testList "ValidatedBuffer operations" [
   ]
 ]
 
+// ═══════════════════════════════════════════════════════════
+// SageFsError.describe — error contract documentation
+// ═══════════════════════════════════════════════════════════
+
+let sageFsErrorDescribeTests = testList "SageFsError.describe" [
+  test "ToolNotAvailable mentions tool, state, and alternatives" {
+    let msg = SageFsError.describe (SageFsError.ToolNotAvailable("eval", SessionState.WarmingUp, ["status";"cancel"]))
+    msg |> Expect.stringContains "has tool" "eval"
+    msg |> Expect.stringContains "has alternatives" "status, cancel"
+  }
+  test "SessionNotFound includes session id" {
+    SageFsError.describe (SageFsError.SessionNotFound "abc123")
+    |> Expect.stringContains "has id" "abc123"
+  }
+  test "NoActiveSessions gives actionable message" {
+    SageFsError.describe SageFsError.NoActiveSessions
+    |> Expect.stringContains "suggests create" "create_session"
+  }
+  test "AmbiguousSessions lists descriptions" {
+    SageFsError.describe (SageFsError.AmbiguousSessions ["session1"; "session2"])
+    |> Expect.stringContains "has listing" "session1"
+  }
+  test "SessionCreationFailed includes reason" {
+    SageFsError.describe (SageFsError.SessionCreationFailed "out of memory")
+    |> Expect.stringContains "has reason" "out of memory"
+  }
+  test "SessionStopFailed includes id and reason" {
+    let msg = SageFsError.describe (SageFsError.SessionStopFailed("xyz", "timeout"))
+    msg |> Expect.stringContains "has id" "xyz"
+    msg |> Expect.stringContains "has reason" "timeout"
+  }
+  test "WorkerCommunicationFailed includes id and reason" {
+    let msg = SageFsError.describe (SageFsError.WorkerCommunicationFailed("s1", "pipe broken"))
+    msg |> Expect.stringContains "has id" "s1"
+    msg |> Expect.stringContains "has reason" "pipe broken"
+  }
+  test "WorkerSpawnFailed includes reason" {
+    SageFsError.describe (SageFsError.WorkerSpawnFailed "no dotnet")
+    |> Expect.stringContains "has reason" "no dotnet"
+  }
+  test "PipeClosed gives fixed message" {
+    SageFsError.describe SageFsError.PipeClosed
+    |> Expect.stringContains "mentions pipe" "Pipe closed"
+  }
+  test "EvalFailed includes reason" {
+    SageFsError.describe (SageFsError.EvalFailed "type error")
+    |> Expect.stringContains "has reason" "type error"
+  }
+  test "ResetFailed includes reason" {
+    SageFsError.describe (SageFsError.ResetFailed "locked")
+    |> Expect.stringContains "has reason" "locked"
+  }
+  test "HardResetFailed includes reason" {
+    SageFsError.describe (SageFsError.HardResetFailed "build error")
+    |> Expect.stringContains "has reason" "build error"
+  }
+  test "ScriptLoadFailed includes reason" {
+    SageFsError.describe (SageFsError.ScriptLoadFailed "file not found")
+    |> Expect.stringContains "has reason" "file not found"
+  }
+  test "WarmupOpenFailed includes name and reason" {
+    let msg = SageFsError.describe (SageFsError.WarmupOpenFailed("MyModule", "ambiguous"))
+    msg |> Expect.stringContains "has name" "MyModule"
+    msg |> Expect.stringContains "has reason" "ambiguous"
+  }
+  test "RestartLimitExceeded includes count and window" {
+    let msg = SageFsError.describe (SageFsError.RestartLimitExceeded(5, 10.0))
+    msg |> Expect.stringContains "has count" "5"
+    msg |> Expect.stringContains "has window" "10"
+  }
+  test "DaemonStartFailed includes reason" {
+    SageFsError.describe (SageFsError.DaemonStartFailed "port in use")
+    |> Expect.stringContains "has reason" "port in use"
+  }
+  test "Unexpected includes exception message" {
+    SageFsError.describe (SageFsError.Unexpected (exn "kaboom"))
+    |> Expect.stringContains "has message" "kaboom"
+  }
+]
+
+// ═══════════════════════════════════════════════════════════
+// ErrorMessages.getSuggestion — user-facing error advice
+// ═══════════════════════════════════════════════════════════
+
+let errorMessagesSuggestionTests = testList "ErrorMessages.getSuggestion" [
+  test "earlier error gives session-not-corrupted advice" {
+    let msg = ErrorMessages.getSuggestion (ErrorMessages.parseError "due to earlier error")
+    msg |> Expect.stringContains "earlier error tip" "earlier error"
+    msg |> Expect.stringContains "no reset" "NOT corrupted"
+  }
+  test "name error gives namespace tip" {
+    let msg = ErrorMessages.getSuggestion (ErrorMessages.parseError "Foo is not defined or not found")
+    msg |> Expect.stringContains "name tip" "namespace"
+  }
+  test "type error gives type mismatch tip" {
+    let msg = ErrorMessages.getSuggestion (ErrorMessages.parseError "type mismatch between int and string")
+    msg |> Expect.stringContains "type tip" "Type mismatch"
+  }
+  test "syntax error gives syntax tip" {
+    let msg = ErrorMessages.getSuggestion (ErrorMessages.parseError "unexpected token in expression")
+    msg |> Expect.stringContains "syntax tip" "Syntax"
+  }
+  test "generic error gives break-it-down tip" {
+    let msg = ErrorMessages.getSuggestion (ErrorMessages.parseError "something went wrong")
+    msg |> Expect.stringContains "generic tip" "smaller pieces"
+  }
+]
+
+// ═══════════════════════════════════════════════════════════
+// EditorUpdate — string surgery edge cases
+// ═══════════════════════════════════════════════════════════
+
+let editorSurgeryTests = testList "EditorUpdate string surgery" [
+  testList "deleteForward" [
+    test "deletes char at cursor" {
+      let buf = mkBufAt "hello" 0 1
+      let result = EditorUpdate.deleteForward buf
+      ValidatedBuffer.text result |> Expect.equal "removed e" "hllo"
+    }
+    test "at end of line joins with next" {
+      let buf = mkBufAt "hello\nworld" 0 5
+      let result = EditorUpdate.deleteForward buf
+      ValidatedBuffer.lines result |> List.length |> Expect.equal "1 line" 1
+      ValidatedBuffer.text result |> Expect.equal "joined" "helloworld"
+    }
+    test "at end of last line does nothing" {
+      let buf = mkBufAt "hello" 0 5
+      let result = EditorUpdate.deleteForward buf
+      ValidatedBuffer.text result |> Expect.equal "unchanged" "hello"
+    }
+    test "at col 0 deletes first char" {
+      let buf = mkBufAt "hello" 0 0
+      let result = EditorUpdate.deleteForward buf
+      ValidatedBuffer.text result |> Expect.equal "removed h" "ello"
+    }
+    test "cursor stays at same position" {
+      let buf = mkBufAt "hello" 0 2
+      let result = EditorUpdate.deleteForward buf
+      (ValidatedBuffer.cursor result).Column |> Expect.equal "col 2" 2
+    }
+  ]
+  testList "DeleteToEndOfLine" [
+    test "deletes from cursor to end" {
+      let buf = mkBufAt "hello world" 0 5
+      let st = { EditorState.initial with Buffer = buf }
+      let st', _ = EditorUpdate.update EditorAction.DeleteToEndOfLine st
+      ValidatedBuffer.text st'.Buffer |> Expect.equal "truncated" "hello"
+    }
+    test "at col 0 clears entire line" {
+      let buf = mkBufAt "hello" 0 0
+      let st = { EditorState.initial with Buffer = buf }
+      let st', _ = EditorUpdate.update EditorAction.DeleteToEndOfLine st
+      ValidatedBuffer.text st'.Buffer |> Expect.equal "empty" ""
+    }
+    test "at end of line does nothing" {
+      let buf = mkBufAt "hello" 0 5
+      let st = { EditorState.initial with Buffer = buf }
+      let st', _ = EditorUpdate.update EditorAction.DeleteToEndOfLine st
+      ValidatedBuffer.text st'.Buffer |> Expect.equal "unchanged" "hello"
+    }
+    test "preserves other lines" {
+      let buf = mkBufAt "line1\nline2\nline3" 1 3
+      let st = { EditorState.initial with Buffer = buf }
+      let st', _ = EditorUpdate.update EditorAction.DeleteToEndOfLine st
+      ValidatedBuffer.lines st'.Buffer |> List.length |> Expect.equal "still 3 lines" 3
+      (ValidatedBuffer.lines st'.Buffer).[1] |> Expect.equal "truncated line2" "lin"
+    }
+  ]
+  testList "AcceptCompletion" [
+    test "no menu does nothing" {
+      let buf = mkBufAt "hel" 0 3
+      let st = { EditorState.initial with Buffer = buf; CompletionMenu = None }
+      let st', _ = EditorUpdate.update EditorAction.AcceptCompletion st
+      ValidatedBuffer.text st'.Buffer |> Expect.equal "unchanged" "hel"
+      st'.CompletionMenu |> Expect.isNone "menu cleared"
+    }
+    test "replaces filter text with completion label" {
+      let buf = mkBufAt "hel" 0 3
+      let menu =
+        { CompletionMenu.Items = [ { CompletionItem.Label = "hello"; Detail = None; Kind = "" } ]
+          SelectedIndex = 0
+          FilterText = "hel" }
+      let st = { EditorState.initial with Buffer = buf; CompletionMenu = Some menu }
+      let st', _ = EditorUpdate.update EditorAction.AcceptCompletion st
+      ValidatedBuffer.text st'.Buffer |> Expect.equal "completed" "hello"
+      st'.CompletionMenu |> Expect.isNone "menu cleared"
+    }
+    test "cursor advances past completion" {
+      let buf = mkBufAt "hel" 0 3
+      let menu =
+        { CompletionMenu.Items = [ { CompletionItem.Label = "hello"; Detail = None; Kind = "" } ]
+          SelectedIndex = 0
+          FilterText = "hel" }
+      let st = { EditorState.initial with Buffer = buf; CompletionMenu = Some menu }
+      let st', _ = EditorUpdate.update EditorAction.AcceptCompletion st
+      (ValidatedBuffer.cursor st'.Buffer).Column |> Expect.equal "at end of hello" 5
+    }
+    test "preserves text after cursor" {
+      let buf = mkBufAt "hel world" 0 3
+      let menu =
+        { CompletionMenu.Items = [ { CompletionItem.Label = "hello"; Detail = None; Kind = "" } ]
+          SelectedIndex = 0
+          FilterText = "hel" }
+      let st = { EditorState.initial with Buffer = buf; CompletionMenu = Some menu }
+      let st', _ = EditorUpdate.update EditorAction.AcceptCompletion st
+      ValidatedBuffer.text st'.Buffer |> Expect.equal "completed with suffix" "hello world"
+    }
+  ]
+  testList "moveToLineStart" [
+    test "moves cursor to column 0" {
+      let buf = mkBufAt "hello" 0 3
+      let result = EditorUpdate.moveToLineStart buf
+      (ValidatedBuffer.cursor result).Column |> Expect.equal "col 0" 0
+    }
+  ]
+  testList "moveToLineEnd" [
+    test "moves cursor to end of line" {
+      let buf = mkBufAt "hello" 0 2
+      let result = EditorUpdate.moveToLineEnd buf
+      (ValidatedBuffer.cursor result).Column |> Expect.equal "col 5" 5
+    }
+  ]
+]
+
+// ═══════════════════════════════════════════════════════════
+// SseWriter — SSE protocol compliance
+// ═══════════════════════════════════════════════════════════
+
+let sseWriterFormatTests = testList "SseWriter format" [
+  test "single line event has event: and data: fields" {
+    let result = SseWriter.formatSseEvent "status" "ready"
+    result |> Expect.equal "SSE format" "event: status\ndata: ready\n\n"
+  }
+  test "multiline data splits into multiple data: lines" {
+    let result = SseWriter.formatSseEvent "output" "line1\nline2"
+    result |> Expect.stringContains "first data line" "data: line1"
+    result |> Expect.stringContains "second data line" "data: line2"
+    result |> Expect.stringContains "has event" "event: output"
+  }
+  test "formatSseEventMultiline with empty list has no data lines" {
+    let result = SseWriter.formatSseEventMultiline "ping" []
+    result |> Expect.equal "event only" "event: ping\n\n"
+  }
+  test "formatSseEventMultiline with multiple lines" {
+    let result = SseWriter.formatSseEventMultiline "data" ["a";"b";"c"]
+    result |> Expect.stringContains "data a" "data: a"
+    result |> Expect.stringContains "data b" "data: b"
+    result |> Expect.stringContains "data c" "data: c"
+  }
+  test "event ends with double newline" {
+    let result = SseWriter.formatSseEvent "test" "data"
+    result.EndsWith("\n\n") |> Expect.isTrue "double newline terminator"
+  }
+]
+
 [<Tests>]
 let allPureFunctionCoverageTests = testList "Pure function coverage" [
   testList "HotReloading" [
@@ -2661,5 +2916,9 @@ let allPureFunctionCoverageTests = testList "Pure function coverage" [
     watchdogDecideTests
     restartPolicyBackoffTests
     validatedBufferOpsTests
+    sageFsErrorDescribeTests
+    errorMessagesSuggestionTests
+    editorSurgeryTests
+    sseWriterFormatTests
   ]
 ]
