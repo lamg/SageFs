@@ -304,7 +304,7 @@ let instrumentationTests = testSequenced (testList "Instrumentation" [
   // === Tier 1: SSE span filtering ===
   test "sseFilterPaths lists SSE paths to suppress" {
     Instrumentation.sseFilterPaths |> Expect.isNonEmpty "should have paths"
-    Instrumentation.sseFilterPaths |> Expect.containsAll "should contain /events and /diagnostics" ["/events"; "/diagnostics"]
+    Instrumentation.sseFilterPaths |> Expect.containsAll "should contain /events, /diagnostics, /health" ["/events"; "/diagnostics"; "/health"]
   }
   test "shouldFilterHttpSpan suppresses SSE paths" {
     Instrumentation.shouldFilterHttpSpan "/events"
@@ -313,6 +313,8 @@ let instrumentationTests = testSequenced (testList "Instrumentation" [
     |> Expect.isFalse "should suppress /diagnostics"
     Instrumentation.shouldFilterHttpSpan "/__sagefs__/reload"
     |> Expect.isFalse "should suppress /__sagefs__/reload"
+    Instrumentation.shouldFilterHttpSpan "/health"
+    |> Expect.isFalse "should suppress /health"
     Instrumentation.shouldFilterHttpSpan "/api/status"
     |> Expect.isTrue "should NOT suppress /api/status"
     Instrumentation.shouldFilterHttpSpan "/mcp/tool"

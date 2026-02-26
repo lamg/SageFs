@@ -36,8 +36,10 @@ let registerClient (id: string) =
   let tcs = TaskCompletionSource<unit>()
   let clients = getClients ()
   clients.[id] <- tcs
+  Instrumentation.devReloadConnectedClients.Add(1L)
   tcs
 
 let unregisterClient (id: string) =
   let clients = getClients ()
-  clients.TryRemove(id) |> ignore
+  if clients.TryRemove(id) |> fst then
+    Instrumentation.devReloadConnectedClients.Add(-1L)
