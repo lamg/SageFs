@@ -398,10 +398,12 @@ module SageFsUpdate =
           { s with DiscoveredTests = withSourceMap; TestSessionMap = newSessionMap })
         let effects =
           if lt.TestState.Activation = Features.LiveTesting.LiveTestingActivation.Active
-             && not (Array.isEmpty lt.TestState.DiscoveredTests) then
-            let allIds = lt.TestState.DiscoveredTests |> Array.map (fun tc -> tc.Id)
+             && not (Array.isEmpty tests) then
+            // Only trigger execution for the INCOMING session's tests, not all discovered.
+            // Other sessions' tests belong to different workers and would return NotRun.
+            let incomingIds = tests |> Array.map (fun tc -> tc.Id)
             Features.LiveTesting.LiveTestPipelineState.triggerExecutionForAffected
-              allIds Features.LiveTesting.RunTrigger.FileSave lt
+              incomingIds Features.LiveTesting.RunTrigger.FileSave lt
             |> List.map SageFsEffect.Pipeline
           else []
         { model with LiveTesting = lt }, effects
@@ -1075,8 +1077,10 @@ module SseDedupKey =
     let diagCount =
       model.Diagnostics |> Map.values |> Seq.sumBy List.length
     let lt = model.LiveTesting.TestState
+    let activeSessionId = ActiveSession.sessionId model.Sessions.ActiveSessionId |> Option.defaultValue ""
+    let sessionEntries = LiveTestState.statusEntriesForSession activeSessionId lt
     let testSummary =
-      TestSummary.fromStatuses lt.Activation (lt.StatusEntries |> Array.map (fun e -> e.Status))
+      TestSummary.fromStatuses lt.Activation (sessionEntries |> Array.map (fun e -> e.Status))
     System.Text.Json.JsonSerializer.Serialize(
       {| outputCount = outputCount
          diagCount = diagCount

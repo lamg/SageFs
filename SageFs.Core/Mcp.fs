@@ -1242,14 +1242,19 @@ module McpTools =
       | Some getModel ->
         let model = getModel ()
         let state = model.LiveTesting.TestState
+        let activeId =
+          ActiveSession.sessionId model.Sessions.ActiveSessionId
+          |> Option.defaultValue ""
+        let sessionEntries =
+          Features.LiveTesting.LiveTestState.statusEntriesForSession activeId state
         let summary =
           Features.LiveTesting.TestSummary.fromStatuses
-            state.Activation (state.StatusEntries |> Array.map (fun e -> e.Status))
+            state.Activation (sessionEntries |> Array.map (fun e -> e.Status))
         let tests =
           match fileFilter with
           | Some f ->
             let normalizedFilter = f.Replace('/', System.IO.Path.DirectorySeparatorChar).Replace('\\', System.IO.Path.DirectorySeparatorChar)
-            state.StatusEntries |> Array.filter (fun e ->
+            sessionEntries |> Array.filter (fun e ->
               match e.Origin with
               | Features.LiveTesting.TestOrigin.SourceMapped (file, _) ->
                 file = normalizedFilter
@@ -1320,9 +1325,14 @@ module McpTools =
     | Some getModel ->
       let model = getModel ()
       let state = model.LiveTesting.TestState
+      let activeId =
+        ActiveSession.sessionId model.Sessions.ActiveSessionId
+        |> Option.defaultValue ""
+      let sessionEntries =
+        Features.LiveTesting.LiveTestState.statusEntriesForSession activeId state
       let summary =
         Features.LiveTesting.TestSummary.fromStatuses
-          state.Activation (state.StatusEntries |> Array.map (fun e -> e.Status))
+          state.Activation (sessionEntries |> Array.map (fun e -> e.Status))
       let timing = model.LiveTesting.LastTiming
       let resp = {|
         Enabled = state.Activation = Features.LiveTesting.LiveTestingActivation.Active

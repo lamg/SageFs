@@ -4082,6 +4082,81 @@ let mergeResultsStalenessFixTests = testList "mergeResults staleness handling" [
 ]
 
 [<Tests>]
+let sessionScopedIsolationTests = testList "session-scoped isolation" [
+  test "NotRun does not overwrite Passed result" {
+    let tid = TestId.TestId "t1"
+    let passed = mkResult tid (TestResult.Passed (TimeSpan.FromMilliseconds 10.0))
+    let notRun = mkResult tid TestResult.NotRun
+    let state1 = LiveTesting.mergeResults LiveTestState.empty [| passed |]
+    let state2 = LiveTesting.mergeResults state1 [| notRun |]
+    state2.LastResults
+    |> Map.find tid
+    |> fun r ->
+      match r.Result with
+      | TestResult.Passed _ -> ()
+      | other -> failwithf "Expected Passed preserved, got %A" other
+  }
+
+  test "NotRun does not overwrite Failed result" {
+    let tid = TestId.TestId "t1"
+    let failed = mkResult tid (TestResult.Failed (TestFailure.AssertionFailed "nope", TimeSpan.FromMilliseconds 5.0))
+    let notRun = mkResult tid TestResult.NotRun
+    let state1 = LiveTesting.mergeResults LiveTestState.empty [| failed |]
+    let state2 = LiveTesting.mergeResults state1 [| notRun |]
+    state2.LastResults
+    |> Map.find tid
+    |> fun r ->
+      match r.Result with
+      | TestResult.Failed _ -> ()
+      | other -> failwithf "Expected Failed preserved, got %A" other
+  }
+
+  test "NotRun IS added when no prior result exists" {
+    let tid = TestId.TestId "t1"
+    let notRun = mkResult tid TestResult.NotRun
+    let state = LiveTesting.mergeResults LiveTestState.empty [| notRun |]
+    state.LastResults
+    |> Map.find tid
+    |> fun r ->
+      match r.Result with
+      | TestResult.NotRun -> ()
+      | other -> failwithf "Expected NotRun, got %A" other
+  }
+
+  test "statusEntriesForSession filters by session" {
+    let state =
+      { LiveTestState.empty with
+          StatusEntries = [|
+            { TestId = TestId.TestId "t1"; DisplayName = "session-a test"; FullName = "session-a test"
+              Origin = TestOrigin.ReflectionOnly; Framework = "expecto"
+              Category = TestCategory.Unit; CurrentPolicy = RunPolicy.OnEveryChange
+              Status = TestRunStatus.Detected; PreviousStatus = TestRunStatus.Detected }
+            { TestId = TestId.TestId "t2"; DisplayName = "session-b test"; FullName = "session-b test"
+              Origin = TestOrigin.ReflectionOnly; Framework = "xunit"
+              Category = TestCategory.Unit; CurrentPolicy = RunPolicy.OnEveryChange
+              Status = TestRunStatus.Detected; PreviousStatus = TestRunStatus.Detected }
+          |]
+          TestSessionMap = Map.ofList [ TestId.TestId "t1", "session-a"; TestId.TestId "t2", "session-b" ] }
+    let filtered = LiveTestState.statusEntriesForSession "session-a" state
+    filtered.Length |> Expect.equal "should have 1 entry for session-a" 1
+    filtered.[0].DisplayName |> Expect.equal "should be session-a test" "session-a test"
+  }
+
+  test "statusEntriesForSession returns all when empty session id" {
+    let state =
+      { LiveTestState.empty with
+          StatusEntries = [|
+            { TestId = TestId.TestId "t1"; DisplayName = "test1"; FullName = "test1"
+              Origin = TestOrigin.ReflectionOnly; Framework = "expecto"
+              Category = TestCategory.Unit; CurrentPolicy = RunPolicy.OnEveryChange
+              Status = TestRunStatus.Detected; PreviousStatus = TestRunStatus.Detected }
+          |] }
+    let filtered = LiveTestState.statusEntriesForSession "" state
+    filtered.Length |> Expect.equal "should return all entries" 1
+  }
+]
+
+[<Tests>]
 let runGenerationTests = testList "RunGeneration" [
   test "zero starts at 0" {
     RunGeneration.value RunGeneration.zero

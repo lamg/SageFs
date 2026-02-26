@@ -547,6 +547,18 @@ module LiveTestState =
     TestSessionMap = Map.empty
   }
 
+  /// Filter StatusEntries to only include tests belonging to the given session.
+  /// When sessionId is empty or no session map entries exist, returns all entries (backwards compat).
+  let statusEntriesForSession (sessionId: string) (state: LiveTestState) : TestStatusEntry array =
+    if System.String.IsNullOrEmpty sessionId || Map.isEmpty state.TestSessionMap then
+      state.StatusEntries
+    else
+      state.StatusEntries
+      |> Array.filter (fun e ->
+        match Map.tryFind e.TestId state.TestSessionMap with
+        | Some sid -> sid = sessionId
+        | None -> true)
+
 // --- Gutter Rendering Pure Functions ---
 
 module GutterIcon =
@@ -962,7 +974,14 @@ module LiveTesting =
     else
       let newResults =
         results
-        |> Array.fold (fun acc r -> Map.add r.TestId r acc) state.LastResults
+        |> Array.fold (fun acc r ->
+          match r.Result with
+          | TestResult.NotRun ->
+            // Never overwrite a real result with NotRun — NotRun means "not executed
+            // in this batch" (e.g., test belongs to a different session's worker).
+            if Map.containsKey r.TestId acc then acc
+            else Map.add r.TestId r acc
+          | _ -> Map.add r.TestId r acc) state.LastResults
       let maxDuration =
         results
         |> Array.map (fun r ->
@@ -1725,18 +1744,22 @@ module LiveTestPipelineState =
     LastTiming = None
   }
 
-  let liveTestingStatusBar (state: LiveTestPipelineState) : string =
+  let liveTestingStatusBarForSession (activeSessionId: string) (state: LiveTestPipelineState) : string =
     let timing =
       match state.LastTiming with
       | None -> ""
       | Some t -> PipelineTiming.toStatusBar t
-    let statuses = state.TestState.StatusEntries |> Array.map (fun e -> e.Status)
+    let entries = LiveTestState.statusEntriesForSession activeSessionId state.TestState
+    let statuses = entries |> Array.map (fun e -> e.Status)
     let summary = TestSummary.fromStatuses state.TestState.Activation statuses |> TestSummary.toStatusBar
     match timing, summary with
     | "", "Tests: none" -> ""
     | "", s -> s
     | t, "Tests: none" -> t
     | t, s -> sprintf "%s | %s" t s
+
+  let liveTestingStatusBar (state: LiveTestPipelineState) : string =
+    liveTestingStatusBarForSession "" state
 
   let currentFcsDelay (s: LiveTestPipelineState) =
     AdaptiveDebounce.currentFcsDelay s.AdaptiveDebounce

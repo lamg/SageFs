@@ -738,7 +738,10 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
       // Live testing status for TUI/Raylib status bar
       (fun () ->
         let model = elmRuntime.GetModel()
-        SageFs.Features.LiveTesting.LiveTestPipelineState.liveTestingStatusBar model.LiveTesting)
+        let activeId =
+          SageFs.ActiveSession.sessionId model.Sessions.ActiveSessionId
+          |> Option.defaultValue ""
+        SageFs.Features.LiveTesting.LiveTestPipelineState.liveTestingStatusBarForSession activeId model.LiveTesting)
       // Warmup progress from CQRS snapshot
       (fun sessionId ->
         let snapshot = readSnapshot()

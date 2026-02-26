@@ -493,9 +493,14 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                 try
                   let model = getModel()
                   let lt = model.LiveTesting.TestState
-                  if lt.StatusEntries.Length > 0 then
+                  let activeId =
+                    SageFs.ActiveSession.sessionId model.Sessions.ActiveSessionId
+                    |> Option.defaultValue ""
+                  let sessionEntries =
+                    LiveTestState.statusEntriesForSession activeId lt
+                  if sessionEntries.Length > 0 then
                     let s = TestSummary.fromStatuses
-                              lt.Activation (lt.StatusEntries |> Array.map (fun e -> e.Status))
+                              lt.Activation (sessionEntries |> Array.map (fun e -> e.Status))
                     let summaryBytes = System.Text.Encoding.UTF8.GetBytes(
                       SageFs.SseWriter.formatTestSummaryEvent sseJsonOpts s)
                     body.WriteAsync(summaryBytes).AsTask()
@@ -507,15 +512,15 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                     let payload =
                       let completion =
                         TestResultsBatchPayload.deriveCompletion
-                          freshness lt.DiscoveredTests.Length lt.StatusEntries.Length
+                          freshness lt.DiscoveredTests.Length sessionEntries.Length
                       TestResultsBatchPayload.create
-                        lt.LastGeneration freshness completion lt.Activation lt.StatusEntries
+                        lt.LastGeneration freshness completion lt.Activation sessionEntries
                     let batchBytes = System.Text.Encoding.UTF8.GetBytes(
                       SageFs.SseWriter.formatTestResultsBatchEvent sseJsonOpts payload)
                     body.WriteAsync(batchBytes).AsTask()
                     |> fun t -> t.ContinueWith(fun (_: Task) -> body.FlushAsync()) |> ignore
                     let files =
-                      lt.StatusEntries
+                      sessionEntries
                       |> Array.choose (fun e ->
                         match e.Origin with
                         | TestOrigin.SourceMapped (f, _) -> Some f
@@ -1005,9 +1010,14 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                     | Some getModel ->
                       let model = getModel()
                       let lt = model.LiveTesting.TestState
-                      if lt.StatusEntries.Length > 0 || TestRunPhase.isRunning lt.RunPhase then
+                      let activeId =
+                        SageFs.ActiveSession.sessionId model.Sessions.ActiveSessionId
+                        |> Option.defaultValue ""
+                      let sessionEntries =
+                        LiveTestState.statusEntriesForSession activeId lt
+                      if sessionEntries.Length > 0 || TestRunPhase.isRunning lt.RunPhase then
                         let s = SageFs.Features.LiveTesting.TestSummary.fromStatuses
-                                  lt.Activation (lt.StatusEntries |> Array.map (fun e -> e.Status))
+                                  lt.Activation (sessionEntries |> Array.map (fun e -> e.Status))
                         serverTracker.AccumulateEvent(
                           PushEvent.TestSummaryChanged s)
                         // Throttle SSE broadcasts to avoid flooding clients during streaming
@@ -1026,16 +1036,16 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                           let payload =
                             let completion =
                               SageFs.Features.LiveTesting.TestResultsBatchPayload.deriveCompletion
-                                freshness lt.DiscoveredTests.Length lt.StatusEntries.Length
+                                freshness lt.DiscoveredTests.Length sessionEntries.Length
                             SageFs.Features.LiveTesting.TestResultsBatchPayload.create
-                              lt.LastGeneration freshness completion lt.Activation lt.StatusEntries
+                              lt.LastGeneration freshness completion lt.Activation sessionEntries
                           serverTracker.AccumulateEvent(
                             PushEvent.TestResultsBatch payload)
                           testEventBroadcast.Trigger(
                             SageFs.SseWriter.formatTestResultsBatchEvent sseJsonOpts payload)
                           // Compute and push FileAnnotations for each file with source-mapped tests
                           let files =
-                            lt.StatusEntries
+                            sessionEntries
                             |> Array.choose (fun e ->
                               match e.Origin with
                               | TestOrigin.SourceMapped (f, _) -> Some f
