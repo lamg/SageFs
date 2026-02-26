@@ -46,6 +46,7 @@ let configureStore (connectionString: string) : IDocumentStore =
 /// Append events to a session stream with retry on version conflict
 let appendEvents (store: IDocumentStore) (streamId: string) (events: SageFsEvent list) =
   let config = RetryPolicy.defaults
+  let sw = System.Diagnostics.Stopwatch.StartNew()
   let rec attempt n =
     task {
       try
@@ -53,13 +54,19 @@ let appendEvents (store: IDocumentStore) (streamId: string) (events: SageFsEvent
         for evt in events do
           session.Events.Append(streamId, evt :> obj) |> ignore
         do! session.SaveChangesAsync()
+        sw.Stop()
+        Instrumentation.eventstoreAppendDurationMs.Record(sw.Elapsed.TotalMilliseconds)
         return Ok ()
       with ex ->
         match RetryPolicy.decide config n ex with
         | RetryPolicy.RetryAfter delayMs ->
+          Instrumentation.eventstoreAppendRetries.Add(1L)
           do! System.Threading.Tasks.Task.Delay(delayMs)
           return! attempt (n + 1)
         | RetryPolicy.GiveUp ex ->
+          sw.Stop()
+          Instrumentation.eventstoreAppendDurationMs.Record(sw.Elapsed.TotalMilliseconds)
+          Instrumentation.eventstoreAppendFailures.Add(1L)
           return Error (sprintf "Event append failed after %d attempts: %s" (n + 1) ex.Message)
         | RetryPolicy.Success -> return Ok ()
     }

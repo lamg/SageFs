@@ -26,6 +26,8 @@ type ElmRuntime<'Model, 'Msg, 'Region> = {
 }
 
 module ElmLoop =
+  open System.Diagnostics
+
   /// Start the Elm loop with an initial model.
   /// Returns an ElmRuntime with dispatch, model reader, and region reader.
   let start (program: ElmProgram<'Model, 'Msg, 'Effect, 'Region>)
@@ -33,8 +35,10 @@ module ElmLoop =
     let mutable model = initialModel
     let mutable latestRegions = []
     let lockObj = obj ()
+    let sw = Stopwatch()
 
     let rec dispatch (msg: 'Msg) =
+      sw.Restart()
       let snapshot, effects =
         lock lockObj (fun () ->
           try
@@ -44,18 +48,29 @@ module ElmLoop =
           with ex ->
             eprintfn "[ElmLoop] Update threw: %s" ex.Message
             model, [])
+      sw.Stop()
+      let msgType = msg.GetType().Name
+      Instrumentation.elmloopUpdateMs.Record(sw.Elapsed.TotalMilliseconds, System.Collections.Generic.KeyValuePair("msg_type", msgType :> obj))
 
+      sw.Restart()
       let regions =
         try program.Render snapshot
         with ex ->
           eprintfn "[ElmLoop] Render threw: %s" ex.Message
           lock lockObj (fun () -> latestRegions)
+      sw.Stop()
+      Instrumentation.elmloopRenderMs.Record(sw.Elapsed.TotalMilliseconds)
 
       lock lockObj (fun () -> latestRegions <- regions)
 
+      sw.Restart()
       try program.OnModelChanged snapshot regions
       with ex -> eprintfn "[ElmLoop] OnModelChanged threw: %s" ex.Message
+      sw.Stop()
+      Instrumentation.elmloopCallbackMs.Record(sw.Elapsed.TotalMilliseconds)
 
+      if not effects.IsEmpty then
+        Instrumentation.elmloopEffectsSpawned.Add(int64 effects.Length)
       for effect in effects do
         Async.Start (async {
           try do! program.ExecuteEffect dispatch effect

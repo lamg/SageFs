@@ -62,6 +62,44 @@ module Instrumentation =
   let fileWatcherChanges =
     pipelineMeter.CreateCounter<int64>("sagefs.filewatcher.changes_total", description = "Total file watcher change events")
 
+  // P0: EventStore retry envelope metrics
+  let eventstoreAppendRetries =
+    sessionMeter.CreateCounter<int64>("sagefs.eventstore.append_retries_total", description = "Total event append retries due to version conflicts")
+  let eventstoreAppendDurationMs =
+    sessionMeter.CreateHistogram<float>("sagefs.eventstore.append_duration_ms", "ms", "Event append duration including retries")
+  let eventstoreAppendFailures =
+    sessionMeter.CreateCounter<int64>("sagefs.eventstore.append_failures_total", description = "Total event append failures after retry exhaustion")
+
+  // P0: Daemon startup metrics
+  let daemonStartupMs =
+    sessionMeter.CreateHistogram<float>("sagefs.daemon.startup_ms", "ms", "Daemon startup duration")
+  let daemonReplayEventCount =
+    sessionMeter.CreateCounter<int64>("sagefs.daemon.replay_event_count", description = "Event count during daemon startup replay")
+  let daemonSessionsResumed =
+    sessionMeter.CreateCounter<int64>("sagefs.daemon.sessions_resumed_total", description = "Sessions resumed during daemon startup")
+  let daemonDuplicatesPruned =
+    sessionMeter.CreateCounter<int64>("sagefs.daemon.duplicates_pruned_total", description = "Duplicate sessions pruned during startup")
+
+  // P1: Elm loop metrics (histograms only — no spans near the lock)
+  let elmloopUpdateMs =
+    pipelineMeter.CreateHistogram<float>("sagefs.elmloop.update_ms", "ms", "Elm loop Update phase duration")
+  let elmloopRenderMs =
+    pipelineMeter.CreateHistogram<float>("sagefs.elmloop.render_ms", "ms", "Elm loop Render phase duration")
+  let elmloopCallbackMs =
+    pipelineMeter.CreateHistogram<float>("sagefs.elmloop.callback_ms", "ms", "Elm loop OnModelChanged callback duration")
+  let elmloopEffectsSpawned =
+    pipelineMeter.CreateCounter<int64>("sagefs.elmloop.effects_spawned_total", description = "Total effects spawned from Elm loop")
+
+  // P1: LiveTesting additions
+  let liveTestingDiscoveryMs =
+    pipelineMeter.CreateHistogram<float>("sagefs.live_testing.discovery_ms", "ms", "Test discovery duration")
+  let liveTestingAssemblyLoadErrors =
+    pipelineMeter.CreateCounter<int64>("sagefs.live_testing.assembly_load_errors_total", description = "Total assembly load errors during test discovery")
+
+  // P2: DevReload connected clients
+  let devReloadConnectedClients =
+    mcpMeter.CreateUpDownCounter<int64>("sagefs.devreload.connected_clients", description = "Currently connected SSE reload clients")
+
   /// SSE/long-lived paths to suppress in ASP.NET Core HTTP span instrumentation.
   let sseFilterPaths =
     [ "/events"; "/diagnostics"; "/__sagefs__/reload"; "/sse"; "/dashboard/stream" ]
@@ -233,6 +271,34 @@ module Instrumentation =
         if not (isNull activity) then
           activity.SetTag("error", true) |> ignore
           activity.SetTag("error.message", ex.Message) |> ignore
+          activity.SetStatus(ActivityStatusCode.Error, ex.Message) |> ignore
+          activity.Stop()
+          activity.Dispose()
+        return raise ex
+    }
+
+  /// Wrap a Task-returning operation with Activity tracing.
+  let tracedTask (source: ActivitySource) (name: string) (tags: (string * obj) list) (f: unit -> System.Threading.Tasks.Task<'a>) =
+    task {
+      let sw = Stopwatch.StartNew()
+      let activity = source.StartActivity(name)
+      try
+        let! result = f ()
+        sw.Stop()
+        if not (isNull activity) then
+          for (k, v) in tags do
+            activity.SetTag(k, v) |> ignore
+          activity.SetTag("duration_ms", sw.Elapsed.TotalMilliseconds) |> ignore
+          activity.Stop()
+          activity.Dispose()
+        return result
+      with ex ->
+        sw.Stop()
+        if not (isNull activity) then
+          activity.SetTag("error", true) |> ignore
+          activity.SetTag("error.type", ex.GetType().Name) |> ignore
+          activity.SetTag("error.message", ex.Message) |> ignore
+          activity.SetTag("duration_ms", sw.Elapsed.TotalMilliseconds) |> ignore
           activity.SetStatus(ActivityStatusCode.Error, ex.Message) |> ignore
           activity.Stop()
           activity.Dispose()

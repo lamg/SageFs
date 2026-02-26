@@ -400,4 +400,98 @@ let instrumentationTests = testSequenced (testList "Instrumentation" [
   test "fileWatcherChanges counter exists" {
     Instrumentation.fileWatcherChanges |> Expect.isNotNull "fileWatcherChanges"
   }
+
+  // === Tier 3 P0: EventStore retry envelope metrics ===
+  test "eventstoreAppendRetries counter exists" {
+    Instrumentation.eventstoreAppendRetries |> Expect.isNotNull "eventstoreAppendRetries"
+  }
+  test "eventstoreAppendDurationMs histogram exists" {
+    Instrumentation.eventstoreAppendDurationMs |> Expect.isNotNull "eventstoreAppendDurationMs"
+  }
+  test "eventstoreAppendFailures counter exists" {
+    Instrumentation.eventstoreAppendFailures |> Expect.isNotNull "eventstoreAppendFailures"
+  }
+
+  // === Tier 3 P0: Daemon startup metrics ===
+  test "daemonStartupMs histogram exists" {
+    Instrumentation.daemonStartupMs |> Expect.isNotNull "daemonStartupMs"
+  }
+  test "daemonReplayEventCount counter exists" {
+    Instrumentation.daemonReplayEventCount |> Expect.isNotNull "daemonReplayEventCount"
+  }
+  test "daemonSessionsResumed counter exists" {
+    Instrumentation.daemonSessionsResumed |> Expect.isNotNull "daemonSessionsResumed"
+  }
+  test "daemonDuplicatesPruned counter exists" {
+    Instrumentation.daemonDuplicatesPruned |> Expect.isNotNull "daemonDuplicatesPruned"
+  }
+
+  // === Tier 3 P1: Elm loop metrics ===
+  test "elmloopUpdateMs histogram exists" {
+    Instrumentation.elmloopUpdateMs |> Expect.isNotNull "elmloopUpdateMs"
+  }
+  test "elmloopRenderMs histogram exists" {
+    Instrumentation.elmloopRenderMs |> Expect.isNotNull "elmloopRenderMs"
+  }
+  test "elmloopCallbackMs histogram exists" {
+    Instrumentation.elmloopCallbackMs |> Expect.isNotNull "elmloopCallbackMs"
+  }
+  test "elmloopEffectsSpawned counter exists" {
+    Instrumentation.elmloopEffectsSpawned |> Expect.isNotNull "elmloopEffectsSpawned"
+  }
+
+  // === Tier 3 P1: LiveTesting additions ===
+  test "liveTestingDiscoveryMs histogram exists" {
+    Instrumentation.liveTestingDiscoveryMs |> Expect.isNotNull "liveTestingDiscoveryMs"
+  }
+  test "liveTestingAssemblyLoadErrors counter exists" {
+    Instrumentation.liveTestingAssemblyLoadErrors |> Expect.isNotNull "liveTestingAssemblyLoadErrors"
+  }
+
+  // === Tier 3 P2: DevReload connected clients ===
+  test "devReloadConnectedClients updown counter exists" {
+    Instrumentation.devReloadConnectedClients |> Expect.isNotNull "devReloadConnectedClients"
+  }
+
+  // === tracedTask helper ===
+  test "tracedTask returns correct value" {
+    Instrumentation.tracedTask
+      Instrumentation.sessionSource "test.task" []
+      (fun () -> System.Threading.Tasks.Task.FromResult 42)
+    |> fun t -> t.Result
+    |> Expect.equal "return value" 42
+  }
+  test "tracedTask preserves exceptions" {
+    let threw =
+      try
+        Instrumentation.tracedTask
+          Instrumentation.sessionSource "test.fail" []
+          (fun () -> failwith "boom" |> System.Threading.Tasks.Task.FromResult)
+        |> fun t -> t.Result |> ignore
+        false
+      with _ -> true
+    threw |> Expect.isTrue "should have thrown"
+  }
+  test "tracedTask emits activity with tags when listener attached" {
+    let mutable capturedName = ""
+    let mutable capturedTagKeys : string list = []
+    use listener = new ActivityListener(
+      ShouldListenTo = (fun s -> s.Name = "SageFs.SessionManager"),
+      Sample = (fun _ -> ActivitySamplingResult.AllDataAndRecorded),
+      ActivityStopped = (fun a ->
+        if a.OperationName = "daemon.startup.test" then
+          capturedName <- a.DisplayName
+          capturedTagKeys <- [ for t in a.TagObjects -> t.Key ]))
+    ActivitySource.AddActivityListener(listener)
+
+    Instrumentation.tracedTask
+      Instrumentation.sessionSource "daemon.startup.test"
+      [("event_count", box 42)]
+      (fun () -> System.Threading.Tasks.Task.FromResult "ok")
+    |> fun t -> t.Result |> ignore
+
+    capturedName |> Expect.equal "activity name" "daemon.startup.test"
+    capturedTagKeys |> Expect.contains "has event_count" "event_count"
+    capturedTagKeys |> Expect.contains "has duration_ms" "duration_ms"
+  }
 ])

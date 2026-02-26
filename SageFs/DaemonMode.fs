@@ -160,11 +160,24 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
   // Session resume runs AFTER servers start (deferred below).
   // This ensures MCP + dashboard are listening before workers spawn.
   let resumeSessions (onSessionResumed: unit -> unit) = task {
+    let startupSw = System.Diagnostics.Stopwatch.StartNew()
+    let startupSpan = Instrumentation.startSpan Instrumentation.sessionSource "sagefs.daemon.startup" []
+
+    // Replay phase
+    let replaySpan = Instrumentation.startSpan Instrumentation.sessionSource "sagefs.daemon.event_replay" []
     let! daemonEvents = SageFs.EventStore.fetchStream eventStore daemonStreamId
     let daemonState = Features.Replay.DaemonReplayState.replayStream daemonEvents
+    let eventCount = daemonEvents.Length
+    Instrumentation.daemonReplayEventCount.Add(int64 eventCount)
+    if not (isNull replaySpan) then
+      replaySpan.SetTag("event_count", eventCount) |> ignore
+    Instrumentation.succeedSpan replaySpan
+
     let aliveSessions = Features.Replay.DaemonReplayState.aliveSessions daemonState
 
     if not aliveSessions.IsEmpty then
+      // Dedup phase
+      let dedupSpan = Instrumentation.startSpan Instrumentation.sessionSource "sagefs.daemon.session_dedup" []
       // Deduplicate by working directory — only resume one session per dir
       let uniqueByDir =
         aliveSessions
@@ -179,12 +192,20 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
         |> Set.ofList
       let keptIds =
         uniqueByDir |> List.map (fun r -> r.SessionId) |> Set.ofList
+      let prunedCount = (Set.difference staleIds keptIds).Count
       for staleId in Set.difference staleIds keptIds do
         let! _ = SageFs.EventStore.appendEvents eventStore daemonStreamId [
           Features.Events.SageFsEvent.DaemonSessionStopped
             {| SessionId = staleId; StoppedAt = DateTimeOffset.UtcNow |}
         ]
         ()
+      if prunedCount > 0 then
+        Instrumentation.daemonDuplicatesPruned.Add(int64 prunedCount)
+      if not (isNull dedupSpan) then
+        dedupSpan.SetTag("alive_count", aliveSessions.Length) |> ignore
+        dedupSpan.SetTag("dedup_removed", prunedCount) |> ignore
+      Instrumentation.succeedSpan dedupSpan
+
       log.LogInformation("Resuming {Count} previous session(s) ({Stale} stale duplicates cleaned)",
         uniqueByDir.Length, (aliveSessions.Length - uniqueByDir.Length))
       // Skip missing directories first (synchronous, fast)
@@ -198,6 +219,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
         ]
         ()
       // Resume all valid sessions in parallel — each is an independent worker process
+      let resumeSpan = Instrumentation.startSpan Instrumentation.sessionSource "sagefs.daemon.session_resume" []
       let resumeTasks =
         existing
         |> List.map (fun prev -> task {
@@ -205,6 +227,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
           let! result = sessionOps.CreateSession prev.Projects prev.WorkingDir
           match result with
           | Ok info ->
+            Instrumentation.daemonSessionsResumed.Add(1L)
             // Stop the OLD session ID so it doesn't resurrect on next restart
             let! _ = SageFs.EventStore.appendEvents eventStore daemonStreamId [
               Features.Events.SageFsEvent.DaemonSessionStopped
@@ -216,6 +239,10 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
             log.LogWarning("Failed to resume session for {WorkingDir}: {Error}", prev.WorkingDir, err)
         })
       do! System.Threading.Tasks.Task.WhenAll(resumeTasks) :> System.Threading.Tasks.Task
+      if not (isNull resumeSpan) then
+        resumeSpan.SetTag("resumed_count", existing.Length) |> ignore
+      Instrumentation.succeedSpan resumeSpan
+
       // Sessions restored — clients will discover them via listing
       // No global "active session" to restore; each client picks its own
       match daemonState.ActiveSessionId with
@@ -227,12 +254,17 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
         let! result = sessionOps.CreateSession initialProjects workingDir
         match result with
         | Ok info ->
+          Instrumentation.daemonSessionsResumed.Add(1L)
           log.LogInformation("Created session: {Info}", info)
           onSessionResumed ()
         | Error err ->
           log.LogWarning("Failed to create session from --proj: {Error}", err)
       else
         log.LogInformation("No previous sessions to resume. Waiting for clients to create sessions")
+
+    startupSw.Stop()
+    Instrumentation.daemonStartupMs.Record(startupSw.Elapsed.TotalMilliseconds)
+    Instrumentation.succeedSpan startupSpan
   }
 
   // Create EffectDeps from SessionManager + start Elm loop
