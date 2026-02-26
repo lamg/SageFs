@@ -4472,7 +4472,7 @@ let optimisticGutterTests = testList "optimistic gutter transitions" [
                                                       DiscoveredTests = tests
                                                       LastResults = Map.ofList [ tid, result ] } } }
     let model2, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestsDiscovered ("test-session", tests))) model1
-    let model3, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestRunStarted ([| tid |], Some "s"))) model2
+    let model3, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestRunStarted ([| tid |], Some "test-session"))) model2
     let entry =
       model3.LiveTesting.TestState.StatusEntries
       |> Array.tryFind (fun e -> e.TestId = tid)
@@ -4641,7 +4641,7 @@ let elmUpdateStatusRecomputationTests = testList "Elm update StatusEntries recom
 
     let model0 = SageFsModel.initial
     let model1, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestsDiscovered ("test-session", tests))) { model0 with LiveTesting = { model0.LiveTesting with TestState = { model0.LiveTesting.TestState with Activation = LiveTestingActivation.Active } } }
-    let model2, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestRunStarted ([| tid |], Some "s"))) model1
+    let model2, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestRunStarted ([| tid |], Some "test-session"))) model1
 
     model2.LiveTesting.TestState.StatusEntries
     |> Array.tryHead
@@ -4689,7 +4689,7 @@ let elmUpdateStatusRecomputationTests = testList "Elm update StatusEntries recom
 
     let model0 = SageFsModel.initial
     let m1, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestsDiscovered ("test-session", tests))) { model0 with LiveTesting = { model0.LiveTesting with TestState = { model0.LiveTesting.TestState with Activation = LiveTestingActivation.Active } } }
-    let m2, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestRunStarted ([| tid1; tid2 |], Some "s"))) m1
+    let m2, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestRunStarted ([| tid1; tid2 |], Some "test-session"))) m1
     let m3, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestResultsBatch results)) m2
 
     let annotations = LiveTesting.annotationsForFile "editor" m3.LiveTesting.TestState
