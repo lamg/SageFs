@@ -5822,6 +5822,75 @@ let coverageCorrelationTests = testList "CoverageCorrelation" [
   }
 ]
 
+// --- CoverageBitmap Pipeline Wiring Tests ---
+
+let coverageBitmapWiringTests = testList "CoverageBitmap Pipeline Wiring" [
+  test "CoverageBitmapCollected populates TestCoverageBitmaps map" {
+    let tid1 = mkTestId "ns" "t1"
+    let tid2 = mkTestId "ns" "t2"
+    let hits = [| true; false; true; true; false; false; true |]
+    let bitmap = CoverageBitmap.ofBoolArray hits
+    let model', _ =
+      SageFsUpdate.update
+        (SageFsMsg.Event (SageFsEvent.CoverageBitmapCollected ([| tid1; tid2 |], bitmap)))
+        SageFsModel.initial
+    let bitmaps = model'.LiveTesting.TestState.TestCoverageBitmaps
+    Map.count bitmaps
+    |> Expect.equal "should have 2 entries" 2
+    Map.find tid1 bitmaps
+    |> CoverageBitmap.equivalent bitmap
+    |> Expect.isTrue "tid1 bitmap should match"
+    Map.find tid2 bitmaps
+    |> CoverageBitmap.equivalent bitmap
+    |> Expect.isTrue "tid2 bitmap should match"
+  }
+
+  test "subsequent CoverageBitmapCollected merges into existing map" {
+    let tid1 = mkTestId "ns" "t1"
+    let tid2 = mkTestId "ns" "t2"
+    let tid3 = mkTestId "ns" "t3"
+    let bm1 = CoverageBitmap.ofBoolArray [| true; false |]
+    let bm2 = CoverageBitmap.ofBoolArray [| false; true |]
+    let model1, _ =
+      SageFsUpdate.update
+        (SageFsMsg.Event (SageFsEvent.CoverageBitmapCollected ([| tid1; tid2 |], bm1)))
+        SageFsModel.initial
+    let model2, _ =
+      SageFsUpdate.update
+        (SageFsMsg.Event (SageFsEvent.CoverageBitmapCollected ([| tid3 |], bm2)))
+        model1
+    let bitmaps = model2.LiveTesting.TestState.TestCoverageBitmaps
+    Map.count bitmaps
+    |> Expect.equal "should have 3 entries" 3
+    Map.find tid1 bitmaps |> CoverageBitmap.equivalent bm1 |> Expect.isTrue "tid1 still bm1"
+    Map.find tid3 bitmaps |> CoverageBitmap.equivalent bm2 |> Expect.isTrue "tid3 is bm2"
+  }
+
+  test "CoverageBitmapCollected overwrites stale entry for same test" {
+    let tid = mkTestId "ns" "t1"
+    let bm1 = CoverageBitmap.ofBoolArray [| true; false; false |]
+    let bm2 = CoverageBitmap.ofBoolArray [| false; true; true |]
+    let model1, _ =
+      SageFsUpdate.update
+        (SageFsMsg.Event (SageFsEvent.CoverageBitmapCollected ([| tid |], bm1)))
+        SageFsModel.initial
+    let model2, _ =
+      SageFsUpdate.update
+        (SageFsMsg.Event (SageFsEvent.CoverageBitmapCollected ([| tid |], bm2)))
+        model1
+    let bitmaps = model2.LiveTesting.TestState.TestCoverageBitmaps
+    Map.count bitmaps
+    |> Expect.equal "should still have 1 entry" 1
+    Map.find tid bitmaps |> CoverageBitmap.equivalent bm2 |> Expect.isTrue "should be overwritten to bm2"
+  }
+
+  test "empty TestCoverageBitmaps on initial model" {
+    LiveTestState.empty.TestCoverageBitmaps
+    |> Map.isEmpty
+    |> Expect.isTrue "should start empty"
+  }
+]
+
 // --- CoverageBitmap Tests ---
 
 let coverageBitmapTests = testList "CoverageBitmap" [

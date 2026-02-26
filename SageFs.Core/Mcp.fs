@@ -1265,9 +1265,21 @@ module McpTools =
           | None -> None
         let resp =
           let enabled = state.Activation = Features.LiveTesting.LiveTestingActivation.Active
-          match tests with
-          | Some t -> {| Enabled = enabled; Summary = summary; Tests = t |} |> box
-          | None -> {| Enabled = enabled; Summary = summary |} |> box
+          let bitmapStats =
+            let count = Map.count state.TestCoverageBitmaps
+            if count = 0 then None
+            else
+              let avgProbes =
+                state.TestCoverageBitmaps
+                |> Map.toSeq
+                |> Seq.map (fun (_, bm) -> Features.LiveTesting.CoverageBitmap.popCount bm)
+                |> Seq.averageBy float
+              Some {| TestsWithCoverage = count; AvgHitProbes = avgProbes |}
+          match tests, bitmapStats with
+          | Some t, Some bs -> {| Enabled = enabled; Summary = summary; Tests = t; CoverageBitmapStats = bs |} |> box
+          | Some t, None -> {| Enabled = enabled; Summary = summary; Tests = t |} |> box
+          | None, Some bs -> {| Enabled = enabled; Summary = summary; CoverageBitmapStats = bs |} |> box
+          | None, None -> {| Enabled = enabled; Summary = summary |} |> box
         return JsonSerializer.Serialize(resp, liveTestJsonOpts)
     }
 

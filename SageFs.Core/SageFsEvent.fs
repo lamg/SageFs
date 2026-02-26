@@ -62,6 +62,7 @@ type SageFsEvent =
   | LiveTestingDisabled
   | AffectedTestsComputed of testIds: Features.LiveTesting.TestId array
   | CoverageUpdated of coverage: Features.LiveTesting.CoverageState
+  | CoverageBitmapCollected of testIds: Features.LiveTesting.TestId array * bitmap: Features.LiveTesting.CoverageBitmap
   | RunPolicyChanged of category: Features.LiveTesting.TestCategory * policy: Features.LiveTesting.RunPolicy
   | ProvidersDetected of providers: Features.LiveTesting.ProviderDescription list
   | PipelineTimingRecorded of timing: Features.LiveTesting.PipelineTiming

@@ -510,6 +510,13 @@ module SageFsUpdate =
         { model with
             LiveTesting = { lt with TestState = { lt.TestState with CoverageAnnotations = annotations } } }, []
 
+      | SageFsEvent.CoverageBitmapCollected (testIds, bitmap) ->
+        let lt = model.LiveTesting
+        let bitmaps =
+          testIds |> Array.fold (fun acc tid -> Map.add tid bitmap acc) lt.TestState.TestCoverageBitmaps
+        { model with
+            LiveTesting = { lt with TestState = { lt.TestState with TestCoverageBitmaps = bitmaps } } }, []
+
       | SageFsEvent.RunPolicyChanged (category, policy) ->
         let lt = recomputeStatuses model.LiveTesting (fun s -> { s with RunPolicies = Map.add category policy s.RunPolicies })
         { model with LiveTesting = lt }, []
@@ -1063,6 +1070,12 @@ module SageFsEffectHandler =
                       if mergedMap.TotalProbes > 0 && hits.Length = mergedMap.TotalProbes then
                         let coverage = Features.LiveTesting.InstrumentationMap.toCoverageState hits mergedMap
                         dispatch (SageFsMsg.Event (SageFsEvent.CoverageUpdated coverage))
+                        let bitmap = Features.LiveTesting.CoverageBitmap.ofBoolArray hits
+                        dispatch (SageFsMsg.Event (SageFsEvent.CoverageBitmapCollected (testIds, bitmap)))
+                        if activity <> null then
+                          activity.SetTag("coverage.total_probes", hits.Length) |> ignore
+                          activity.SetTag("coverage.hit_probes", Features.LiveTesting.CoverageBitmap.popCount bitmap) |> ignore
+                          activity.SetTag("coverage.tests_in_batch", testIds.Length) |> ignore
                     do! streamProxy tests 4 onResult onCoverage
                   | None ->
                     let notRunResults =

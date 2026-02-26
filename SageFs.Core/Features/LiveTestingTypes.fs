@@ -683,6 +683,9 @@ type LiveTestState = {
   FlakyHistory: Map<TestId, ResultWindow>
   /// Maps each TestId to the session that discovered it, enabling per-session execution routing.
   TestSessionMap: Map<TestId, string>
+  /// Per-test packed coverage bitmaps from IL probe hits, keyed by TestId.
+  /// All tests in the same batch share the same bitmap (conservative: any test might have hit any probe).
+  TestCoverageBitmaps: Map<TestId, CoverageBitmap>
 }
 
 module LiveTestState =
@@ -704,6 +707,7 @@ module LiveTestState =
     AssemblyLoadErrors = []
     FlakyHistory = Map.empty
     TestSessionMap = Map.empty
+    TestCoverageBitmaps = Map.empty
   }
 
   /// Filter StatusEntries to only include tests belonging to the given session.
