@@ -12,13 +12,19 @@ open Mono.Cecil.Rocks
 /// and inserts Hit(slotId) calls at every non-hidden sequence point.
 module CoverageInstrumenter =
 
-  /// Collect all non-hidden sequence points across all methods.
-  /// Returns (method, cecilSequencePoint, slotId) triples.
+  /// Collect all non-hidden sequence points across all methods,
+  /// including methods in nested types (F# closures, lambdas).
   let collectSequencePoints (moduleDef: ModuleDefinition) =
     let mutable slotId = 0
+    let rec methodsOf (t: TypeDefinition) =
+      seq {
+        yield! t.Methods
+        for nt in t.NestedTypes do
+          yield! methodsOf nt
+      }
     [|
       for t in moduleDef.Types do
-        for m in t.Methods do
+        for m in methodsOf t do
           if m.HasBody
              && m.DebugInformation <> null
              && m.DebugInformation.HasSequencePoints then
