@@ -31,7 +31,7 @@ SageFs is a [.NET global tool](https://learn.microsoft.com/en-us/dotnet/core/too
 ## Prerequisites
 
 - [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)
-- [Docker](https://docs.docker.com/get-docker/) — required for PostgreSQL, which [Marten](https://martendb.io/) uses for event sourcing (managed automatically via [Testcontainers](https://dotnet.testcontainers.org/), no manual setup needed)
+- [Docker](https://docs.docker.com/get-docker/) *(optional)* — only needed if you use `--persist` for PostgreSQL event sourcing via [Marten](https://martendb.io/). Without Docker, SageFs runs fully in-memory with zero external dependencies.
 
 ---
 

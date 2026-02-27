@@ -910,12 +910,18 @@ let activate (context: ExtensionContext) =
     { new Disposable with member _.dispose () = clearInterval statusInterval; null }
   )
 
-  // Auto-start
+  // Auto-start (silently — no prompt dialog)
   let autoStart = config.get("autoStart", true)
   if autoStart then
     Client.isRunning c
     |> Promise.iter (fun running ->
-      if not running then promptAutoStart () |> ignore
+      if not running then
+        promise {
+          let! projPath = findProject ()
+          match projPath with
+          | Some _ -> do! startDaemon ()
+          | None -> ()
+        } |> ignore
     )
 
 let deactivate () =
