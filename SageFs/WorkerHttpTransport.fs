@@ -257,6 +257,11 @@ module WorkerHttpTransport =
         return! respond' ctx (WorkerMessage.GetTestDiscovery rid)
       })) |> ignore
 
+      app.MapGet("/instrumentation-maps", Func<HttpContext, Task>(fun ctx -> task {
+        let rid = ctx.Request.Query["replyId"].ToString()
+        return! respond' ctx (WorkerMessage.GetInstrumentationMaps rid)
+      })) |> ignore
+
       app.MapPost("/shutdown", Func<HttpContext, Task>(fun ctx ->
         respond' ctx WorkerMessage.Shutdown)) |> ignore
 

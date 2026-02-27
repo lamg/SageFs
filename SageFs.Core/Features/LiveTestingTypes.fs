@@ -1746,11 +1746,15 @@ module PipelineEffects =
     else
       let symbolAffected = TestDependencyGraph.findAffected changedSymbols depGraph
       // Compute coverage-affected across all sessions' maps
+      let hasMaps = not (Map.isEmpty instrumentationMaps)
+      let hasBitmaps = not (Map.isEmpty state.TestCoverageBitmaps)
       let coverageAffected =
-        instrumentationMaps
-        |> Map.toArray
-        |> Array.collect (fun (_, maps) ->
-          CoverageBitmap.findCoverageAffected changedFilePath maps state.TestCoverageBitmaps)
+        if hasMaps && hasBitmaps then
+          instrumentationMaps
+          |> Map.toArray
+          |> Array.collect (fun (_, maps) ->
+            CoverageBitmap.findCoverageAffected changedFilePath maps state.TestCoverageBitmaps)
+        else [||]
       let affected =
         Array.append symbolAffected coverageAffected |> Array.distinct
       if Array.isEmpty affected then []

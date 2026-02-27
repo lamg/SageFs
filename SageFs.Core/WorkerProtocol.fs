@@ -70,6 +70,7 @@ module WorkerProtocol =
     | GetStatus of replyId: string
     | RunTests of tests: Features.LiveTesting.TestCase array * maxParallelism: int * replyId: string
     | GetTestDiscovery of replyId: string
+    | GetInstrumentationMaps of replyId: string
     | Shutdown
 
   type WorkerDiagnostic = {
@@ -135,6 +136,7 @@ module WorkerProtocol =
     | ScriptLoaded of replyId: string * result: Result<string, SageFsError>
     | TestRunResults of replyId: string * results: Features.LiveTesting.TestRunResult array
     | InitialTestDiscovery of tests: Features.LiveTesting.TestCase array * providers: Features.LiveTesting.ProviderDescription list
+    | InstrumentationMapsResult of replyId: string * maps: Features.LiveTesting.InstrumentationMap array
     | WorkerReady
     | WorkerShuttingDown
     | WorkerError of SageFsError

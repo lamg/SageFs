@@ -1048,7 +1048,8 @@ module SageFsEffectHandler =
             let testIds = tests |> Array.map (fun tc -> tc.Id)
             dispatch (SageFsMsg.Event (SageFsEvent.TestRunStarted (testIds, targetSession)))
             let ct = deps.PipelineCancellation.TestRun.next()
-            let pipelineSpan = Instrumentation.startSpan Instrumentation.pipelineSource "pipeline.test.execution" ["test.count", box tests.Length; "trigger", box (sprintf "%A" trigger)]
+            let hasInstrMaps = not (Array.isEmpty instrumentationMaps)
+            let pipelineSpan = Instrumentation.startSpan Instrumentation.pipelineSource "pipeline.test.execution" ["test.count", box tests.Length; "trigger", box (sprintf "%A" trigger); "coverage.has_maps", box hasInstrMaps; "coverage.probe_count", box (instrumentationMaps |> Array.sumBy (fun m -> m.TotalProbes))]
             Async.Start(async {
               use activity =
                 Features.LiveTesting.LiveTestingInstrumentation.activitySource.StartActivity(

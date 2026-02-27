@@ -345,7 +345,8 @@ module SessionManager =
   let create
     (ct: CancellationToken)
     (onStandbyProgressChanged: unit -> unit)
-    (onTestDiscovery: SessionId -> Features.LiveTesting.TestCase array -> Features.LiveTesting.ProviderDescription list -> unit) =
+    (onTestDiscovery: SessionId -> Features.LiveTesting.TestCase array -> Features.LiveTesting.ProviderDescription list -> unit)
+    (onInstrumentationMaps: SessionId -> Features.LiveTesting.InstrumentationMap array -> unit) =
     let snapshotRef = ref QuerySnapshot.empty
     let mailbox = MailboxProcessor<SessionCommand>.Start((fun inbox ->
       let publishSnapshot (state: ManagerState) =
@@ -587,6 +588,17 @@ module SessionManager =
                 match resp with
                 | WorkerResponse.InitialTestDiscovery(tests, providers) ->
                   inbox.Post(SessionCommand.WorkerTestDiscovery(id, tests, providers))
+                | _ -> ()
+              with _ -> ()
+            }, ct)
+            // Fetch instrumentation maps from the worker
+            Async.Start(async {
+              try
+                let rid = System.Guid.NewGuid().ToString("N")
+                let! resp = proxy (WorkerMessage.GetInstrumentationMaps rid)
+                match resp with
+                | WorkerResponse.InstrumentationMapsResult(_, maps) when not (Array.isEmpty maps) ->
+                  onInstrumentationMaps id maps
                 | _ -> ()
               with _ -> ()
             }, ct)

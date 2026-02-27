@@ -90,6 +90,8 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
   // Test discovery callback — set after elmRuntime is created
   let mutable onTestDiscoveryCallback : (WorkerProtocol.SessionId -> Features.LiveTesting.TestCase array -> Features.LiveTesting.ProviderDescription list -> unit) =
     fun _ _ _ -> ()
+  let mutable onInstrumentationMapsCallback : (WorkerProtocol.SessionId -> Features.LiveTesting.InstrumentationMap array -> unit) =
+    fun _ _ -> ()
 
   // Create SessionManager — the single source of truth for all sessions
   // Returns (mailbox, readSnapshot) — CQRS: reads go to snapshot, writes to mailbox
@@ -97,6 +99,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
     SessionManager.create cts.Token
       (fun () -> stateChangedEvent.Trigger """{"standbyProgress":true}""")
       (fun sid tests providers -> onTestDiscoveryCallback sid tests providers)
+      (fun sid maps -> onInstrumentationMapsCallback sid maps)
 
   // Active session ID — REMOVED: No global shared session.
   // Each client (MCP, TUI, dashboard) tracks its own session independently.
@@ -427,6 +430,10 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
       elmRuntime.Dispatch(SageFsMsg.Event (SageFsEvent.TestsDiscovered (sid, tests)))
     if not (List.isEmpty providers) then
       elmRuntime.Dispatch(SageFsMsg.Event (SageFsEvent.ProvidersDetected providers))
+
+  // Wire instrumentation maps from SessionManager → Elm model
+  onInstrumentationMapsCallback <- fun sid maps ->
+    elmRuntime.Dispatch(SageFsMsg.Event (SageFsEvent.InstrumentationMapsReady (sid, maps)))
 
   // Start MCP server
   let mcpTask =

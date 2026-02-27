@@ -143,6 +143,9 @@ let handleMessage
       let tests, providers = getInitialDiscovery()
       return WorkerResponse.InitialTestDiscovery(tests, providers)
 
+    | WorkerMessage.GetInstrumentationMaps _ ->
+      return WorkerResponse.InstrumentationMapsResult("", [||])
+
     | WorkerMessage.Shutdown ->
       return WorkerResponse.WorkerShuttingDown
   }
@@ -310,9 +313,8 @@ let run (sessionId: string) (port: int) (args: Args.Arguments list) = async {
 
   let readyHandler (msg: WorkerMessage) = async {
     match msg with
-    | WorkerMessage.GetStatus _ ->
-      // First message — respond with ready, then delegate
-      return! handler msg
+    | WorkerMessage.GetInstrumentationMaps(replyId) ->
+      return WorkerResponse.InstrumentationMapsResult(replyId, result.InstrumentationMaps)
     | _ -> return! handler msg
   }
 

@@ -42,6 +42,8 @@ module HttpWorkerClient =
       Some (Serialization.serialize {| tests = tests; maxParallelism = maxParallelism; replyId = rid |})
     | WorkerMessage.GetTestDiscovery rid ->
       "GET", sprintf "/test-discovery?replyId=%s" (Uri.EscapeDataString rid), None
+    | WorkerMessage.GetInstrumentationMaps rid ->
+      "GET", sprintf "/instrumentation-maps?replyId=%s" (Uri.EscapeDataString rid), None
     | WorkerMessage.Shutdown ->
       "POST", "/shutdown", None
 
