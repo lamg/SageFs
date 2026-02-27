@@ -75,7 +75,7 @@ let sseTests = testList "SSE Writer" [
       let summary: SageFs.Features.LiveTesting.TestSummary = {
         Total = 10; Passed = 8; Failed = 1; Stale = 1; Running = 0; Disabled = 0; Enabled = true
       }
-      let result = formatTestSummaryEvent opts summary
+      let result = formatTestSummaryEvent opts None summary
       result |> Expect.stringContains "should contain event type" "event: test_summary"
       result |> Expect.stringContains "should contain PascalCase Total" "\"Total\":10"
       result |> Expect.stringContains "should contain PascalCase Passed" "\"Passed\":8"
@@ -117,7 +117,7 @@ let wireProtocolTests = testList "Wire Protocol Contract" [
       let summary: SageFs.Features.LiveTesting.TestSummary = {
         Total = 47; Passed = 40; Failed = 3; Stale = 2; Running = 1; Disabled = 1; Enabled = true
       }
-      let sse = formatTestSummaryEvent productionSseOpts summary
+      let sse = formatTestSummaryEvent productionSseOpts None summary
       let data = extractSseData sse |> Option.get
       let doc = JsonDocument.Parse(data)
       let root = doc.RootElement
@@ -131,7 +131,7 @@ let wireProtocolTests = testList "Wire Protocol Contract" [
       let summary: SageFs.Features.LiveTesting.TestSummary = {
         Total = 10; Passed = 8; Failed = 1; Stale = 1; Running = 0; Disabled = 0; Enabled = true
       }
-      let sse = formatTestSummaryEvent productionSseOpts summary
+      let sse = formatTestSummaryEvent productionSseOpts None summary
       let data = extractSseData sse |> Option.get
       data.Contains("\"total\"") |> Expect.isFalse "no camelCase total"
       data.Contains("\"passed\"") |> Expect.isFalse "no camelCase passed"
@@ -315,6 +315,7 @@ let protocolSnapshotTests = testList "Protocol Snapshots" [
       let cla : CoverageLineAnnotation = {
         Line = 42; Detail = CoverageStatus.Covered(2, CoverageHealth.AllPassing)
         CoveringTestIds = [| TestId.TestId "t1"; TestId.TestId "t2" |]
+        BranchCoverage = None
       }
       let root = serAndParse cla
       root.GetProperty("Line").GetInt32() |> Expect.equal "line" 42
@@ -390,5 +391,81 @@ let protocolSnapshotTests = testList "Protocol Snapshots" [
     testCase "ShowHistory" <| fun () ->
       (serAndParse CodeLensCommand.ShowHistory).GetProperty("Case").GetString()
       |> Expect.equal "case" "ShowHistory"
+  ]
+]
+
+[<Tests>]
+let sessionScopingTests = testList "SSE Session Scoping" [
+  testList "injectSessionId" [
+    testCase "None returns json unchanged" <| fun () ->
+      let json = """{"Total":5}"""
+      injectSessionId None json
+      |> Expect.equal "unchanged" """{"Total":5}"""
+
+    testCase "Some prepends SessionId field" <| fun () ->
+      let json = """{"Total":5}"""
+      let result = injectSessionId (Some "sess-123") json
+      result |> Expect.stringContains "has SessionId" "\"SessionId\":\"sess-123\""
+
+    testCase "injected json is valid JSON" <| fun () ->
+      let json = """{"Total":5,"Passed":3}"""
+      let result = injectSessionId (Some "abc") json
+      let doc = JsonDocument.Parse(result)
+      doc.RootElement.GetProperty("SessionId").GetString()
+      |> Expect.equal "sessionId" "abc"
+      doc.RootElement.GetProperty("Total").GetInt32()
+      |> Expect.equal "total preserved" 5
+
+    testCase "non-object json returned unchanged" <| fun () ->
+      injectSessionId (Some "abc") "[1,2,3]"
+      |> Expect.equal "unchanged" "[1,2,3]"
+  ]
+
+  testList "format functions with sessionId" [
+    testCase "formatTestSummaryEvent None has no SessionId" <| fun () ->
+      let summary: TestSummary = {
+        Total = 10; Passed = 8; Failed = 1; Stale = 1; Running = 0; Disabled = 0; Enabled = true
+      }
+      let result = formatTestSummaryEvent productionSseOpts None summary
+      result.Contains("SessionId") |> Expect.isFalse "no SessionId"
+
+    testCase "formatTestSummaryEvent Some injects SessionId" <| fun () ->
+      let summary: TestSummary = {
+        Total = 10; Passed = 8; Failed = 1; Stale = 1; Running = 0; Disabled = 0; Enabled = true
+      }
+      let result = formatTestSummaryEvent productionSseOpts (Some "sess-456") summary
+      let data = extractSseData result |> Option.get
+      let doc = JsonDocument.Parse(data)
+      doc.RootElement.GetProperty("SessionId").GetString()
+      |> Expect.equal "sessionId" "sess-456"
+      doc.RootElement.GetProperty("Total").GetInt32()
+      |> Expect.equal "total preserved" 10
+
+    testCase "formatTestResultsBatchEvent Some injects SessionId" <| fun () ->
+      let payload: TestResultsBatchPayload = {
+        Generation = RunGeneration 1
+        Freshness = ResultFreshness.Fresh
+        Completion = BatchCompletion.Complete(5, 5)
+        Entries = [||]
+        Summary = { Total = 5; Passed = 5; Failed = 0; Stale = 0; Running = 0; Disabled = 0; Enabled = true }
+      }
+      let result = formatTestResultsBatchEvent productionSseOpts (Some "sess-789") payload
+      let data = extractSseData result |> Option.get
+      let doc = JsonDocument.Parse(data)
+      doc.RootElement.GetProperty("SessionId").GetString()
+      |> Expect.equal "sessionId" "sess-789"
+
+    testCase "formatFileAnnotationsEvent Some injects SessionId" <| fun () ->
+      let fa : FileAnnotations = {
+        FilePath = "src/Foo.fs"; TestAnnotations = [||]
+        CoverageAnnotations = [||]; InlineFailures = [||]; CodeLenses = [||]
+      }
+      let result = formatFileAnnotationsEvent productionSseOpts (Some "sess-abc") fa
+      let data = extractSseData result |> Option.get
+      let doc = JsonDocument.Parse(data)
+      doc.RootElement.GetProperty("SessionId").GetString()
+      |> Expect.equal "sessionId" "sess-abc"
+      doc.RootElement.GetProperty("FilePath").GetString()
+      |> Expect.equal "path preserved" "src/Foo.fs"
   ]
 ]

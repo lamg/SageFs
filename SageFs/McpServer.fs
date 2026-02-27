@@ -525,7 +525,7 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                     let s = TestSummary.fromStatuses
                               lt.Activation (sessionEntries |> Array.map (fun e -> e.Status))
                     let summaryBytes = System.Text.Encoding.UTF8.GetBytes(
-                      SageFs.SseWriter.formatTestSummaryEvent sseJsonOpts s)
+                      SageFs.SseWriter.formatTestSummaryEvent sseJsonOpts (Some activeId) s)
                     body.WriteAsync(summaryBytes).AsTask()
                     |> fun t -> t.ContinueWith(fun (_: Task) -> body.FlushAsync()) |> ignore
                     let freshness =
@@ -539,7 +539,7 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                       TestResultsBatchPayload.create
                         lt.LastGeneration freshness completion lt.Activation sessionEntries
                     let batchBytes = System.Text.Encoding.UTF8.GetBytes(
-                      SageFs.SseWriter.formatTestResultsBatchEvent sseJsonOpts payload)
+                      SageFs.SseWriter.formatTestResultsBatchEvent sseJsonOpts (Some activeId) payload)
                     body.WriteAsync(batchBytes).AsTask()
                     |> fun t -> t.ContinueWith(fun (_: Task) -> body.FlushAsync()) |> ignore
                     let files =
@@ -554,7 +554,7 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                       let fa = FileAnnotations.projectWithCoverage file pipeline
                       if fa.TestAnnotations.Length > 0 || fa.CodeLenses.Length > 0 || fa.CoverageAnnotations.Length > 0 then
                         let faBytes = System.Text.Encoding.UTF8.GetBytes(
-                          SageFs.SseWriter.formatFileAnnotationsEvent sseJsonOpts fa)
+                          SageFs.SseWriter.formatFileAnnotationsEvent sseJsonOpts (Some activeId) fa)
                         body.WriteAsync(faBytes).AsTask()
                         |> fun t -> t.ContinueWith(fun (_: Task) -> body.FlushAsync()) |> ignore
                 with ex ->
@@ -1055,7 +1055,7 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                         if elapsedMs >= testSseThrottleMs || isRunComplete then
                           lastTestSsePush <- now
                           testEventBroadcast.Trigger(
-                            SageFs.SseWriter.formatTestSummaryEvent sseJsonOpts s)
+                            SageFs.SseWriter.formatTestSummaryEvent sseJsonOpts (Some activeId) s)
                           let freshness =
                             if lt.RunPhases |> Map.exists (fun _ p -> match p with SageFs.Features.LiveTesting.TestRunPhase.RunningButEdited _ -> true | _ -> false) then
                               SageFs.Features.LiveTesting.ResultFreshness.StaleCodeEdited
@@ -1069,7 +1069,7 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                           serverTracker.AccumulateEvent(
                             PushEvent.TestResultsBatch payload)
                           testEventBroadcast.Trigger(
-                            SageFs.SseWriter.formatTestResultsBatchEvent sseJsonOpts payload)
+                            SageFs.SseWriter.formatTestResultsBatchEvent sseJsonOpts (Some activeId) payload)
                           // Compute and push FileAnnotations for each file with source-mapped tests
                           let files =
                             sessionEntries
@@ -1082,7 +1082,7 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                             let fa = SageFs.Features.LiveTesting.FileAnnotations.projectWithCoverage file model.LiveTesting
                             if fa.TestAnnotations.Length > 0 || fa.CodeLenses.Length > 0 || fa.CoverageAnnotations.Length > 0 then
                               testEventBroadcast.Trigger(
-                                SageFs.SseWriter.formatFileAnnotationsEvent sseJsonOpts fa)
+                                SageFs.SseWriter.formatFileAnnotationsEvent sseJsonOpts (Some activeId) fa)
                     | None -> ()
 
                     if serverTracker.Count > 0 then

@@ -127,6 +127,7 @@ type CoverageLineAnnotation = {
   Line: int
   Detail: CoverageStatus
   CoveringTestIds: string array
+  BranchCoverage: LineCoverage option
 }
 
 /// SSE events from the SageFs server

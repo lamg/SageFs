@@ -2151,6 +2151,7 @@ type CoverageLineAnnotation = {
   Line: int
   Detail: CoverageStatus
   CoveringTestIds: TestId array
+  BranchCoverage: LineCoverage option
 }
 
 type InlineFailure = {
@@ -2356,7 +2357,8 @@ module FileAnnotations =
             | Some g ->
               match Map.tryFind ca.Symbol g.SymbolToTests with
               | Some ids -> ids
-              | None -> [||] })
+              | None -> [||]
+          BranchCoverage = None })
       |> Array.sortBy (fun c -> c.Line)
     { FilePath = filePath
       TestAnnotations = testAnnotations
@@ -2405,7 +2407,8 @@ module FileAnnotations =
             CoveringTestIds =
               match Map.tryFind ca.Symbol pipelineState.DepGraph.SymbolToTests with
               | Some ids -> ids
-              | None -> [||] })
+              | None -> [||]
+            BranchCoverage = None })
         |> Array.sortBy (fun c -> c.Line)
       { base' with CoverageAnnotations = coverageLineAnnotations }
 

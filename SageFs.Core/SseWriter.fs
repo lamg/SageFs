@@ -39,17 +39,26 @@ let trySendSseEvent (stream: Stream) (eventType: string) (data: string) : Task<R
   let bytes = Encoding.UTF8.GetBytes(text)
   trySendBytes stream bytes
 
+/// Inject a SessionId field into a JSON object string. None = no change (backward compat).
+let injectSessionId (sessionId: string option) (json: string) : string =
+  match sessionId with
+  | None -> json
+  | Some sid ->
+    if json.StartsWith("{") then
+      sprintf """{"SessionId":"%s",%s""" sid (json.Substring(1))
+    else json
+
 /// Format a TestSummary as an SSE event string
-let formatTestSummaryEvent (opts: JsonSerializerOptions) (summary: Features.LiveTesting.TestSummary) : string =
-  let json = JsonSerializer.Serialize(summary, opts)
+let formatTestSummaryEvent (opts: JsonSerializerOptions) (sessionId: string option) (summary: Features.LiveTesting.TestSummary) : string =
+  let json = JsonSerializer.Serialize(summary, opts) |> injectSessionId sessionId
   formatSseEvent "test_summary" json
 
 /// Format a TestResultsBatchPayload as an SSE event string
-let formatTestResultsBatchEvent (opts: JsonSerializerOptions) (payload: Features.LiveTesting.TestResultsBatchPayload) : string =
-  let json = JsonSerializer.Serialize(payload, opts)
+let formatTestResultsBatchEvent (opts: JsonSerializerOptions) (sessionId: string option) (payload: Features.LiveTesting.TestResultsBatchPayload) : string =
+  let json = JsonSerializer.Serialize(payload, opts) |> injectSessionId sessionId
   formatSseEvent "test_results_batch" json
 
 /// Format a FileAnnotations as an SSE event string
-let formatFileAnnotationsEvent (opts: JsonSerializerOptions) (annotations: Features.LiveTesting.FileAnnotations) : string =
-  let json = JsonSerializer.Serialize(annotations, opts)
+let formatFileAnnotationsEvent (opts: JsonSerializerOptions) (sessionId: string option) (annotations: Features.LiveTesting.FileAnnotations) : string =
+  let json = JsonSerializer.Serialize(annotations, opts) |> injectSessionId sessionId
   formatSseEvent "file_annotations" json
