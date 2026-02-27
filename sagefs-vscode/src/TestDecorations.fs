@@ -132,9 +132,14 @@ let applyToEditor (state: VscLiveTestState) (editor: TextEditor) =
         | VscTestOutcome.Skipped reason ->
           passedRanges.Add(decorationRange line (sprintf "⊘ Skipped: %s — %s" test.DisplayName reason))
         | VscTestOutcome.Stale ->
-          runningRanges.Add(decorationRange line (sprintf "◌ Stale: %s" test.DisplayName))
+          let reason =
+            match state.Freshness with
+            | VscResultFreshness.StaleCodeEdited -> "code edited since last run"
+            | VscResultFreshness.StaleWrongGeneration -> "generation mismatch"
+            | VscResultFreshness.Fresh -> "needs re-run"
+          runningRanges.Add(decorationRange line (sprintf "◌ %s (stale — %s)" test.DisplayName reason))
         | VscTestOutcome.PolicyDisabled ->
-          passedRanges.Add(decorationRange line (sprintf "⊘ Disabled: %s" test.DisplayName))
+          passedRanges.Add(decorationRange line (sprintf "⊘ %s (disabled by policy)" test.DisplayName))
       | None ->
         runningRanges.Add(decorationRange line (sprintf "◆ %s (not yet run)" test.DisplayName))
     | None -> ()

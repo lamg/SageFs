@@ -361,6 +361,9 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
 
             // SSE broadcast for typed test events (clients subscribe via /events)
             let testEventBroadcast = Event<string>()
+            // SSE serialization uses default PascalCase (NOT camelCase) + JsonFSharpConverter
+            // for Case/Fields DU encoding. This differs from WorkerProtocol.Serialization.jsonOptions
+            // which uses type/value format. Both VS Code and VS parsers expect PascalCase + Case/Fields.
             let sseJsonOpts = JsonSerializerOptions()
             sseJsonOpts.Converters.Add(System.Text.Json.Serialization.JsonFSharpConverter())
 
@@ -867,7 +870,11 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                       match json.RootElement.TryGetProperty("category") with
                       | true, v -> let s = v.GetString() in if System.String.IsNullOrWhiteSpace s then None else Some s
                       | false, _ -> None
-                    let! result = SageFs.McpTools.runTests mcpContext pattern category
+                    let timeout =
+                      match json.RootElement.TryGetProperty("timeout_seconds") with
+                      | true, v -> match v.TryGetInt32() with true, i -> i | _ -> 30
+                      | false, _ -> 30
+                    let! result = SageFs.McpTools.runTests mcpContext pattern category timeout
                     do! jsonResponse ctx 200 {| success = true; message = result |}
                 }) :> Task
             ) |> ignore

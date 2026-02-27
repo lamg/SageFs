@@ -141,8 +141,8 @@ type LiveTestingSubscriber(port: int) =
       | TestOutcome.PolicyDisabled -> "⊘ Disabled"
     | None -> "● Not Run"
 
-  /// Format a tooltip with full test details.
-  static member formatTestTooltip(info: TestInfo, result: TestResult option) : string =
+  /// Format a tooltip with full test details. Optionally enriched with freshness context.
+  static member formatTestTooltip(info: TestInfo, result: TestResult option, ?freshness: ResultFreshness) : string =
     match result with
     | Some r ->
       let status =
@@ -153,8 +153,12 @@ type LiveTestingSubscriber(port: int) =
         | TestOutcome.Errored _ -> "Errored"
         | TestOutcome.Running -> "Running"
         | TestOutcome.Detected -> "Detected"
-        | TestOutcome.Stale -> "Stale"
-        | TestOutcome.PolicyDisabled -> "Disabled"
+        | TestOutcome.Stale ->
+          match freshness with
+          | Some ResultFreshness.StaleCodeEdited -> "Stale — code edited since last run"
+          | Some ResultFreshness.StaleWrongGeneration -> "Stale — generation mismatch (re-run needed)"
+          | _ -> "Stale"
+        | TestOutcome.PolicyDisabled -> "Disabled by policy"
       let duration =
         match r.DurationMs with
         | Some ms -> sprintf " (%0.1fms)" ms

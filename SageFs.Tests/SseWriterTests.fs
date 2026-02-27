@@ -3,6 +3,7 @@ module SageFs.Tests.SseWriterTests
 open System.IO
 open System.Text
 open System.Text.Json
+open System.Text.Json.Serialization
 open Expecto
 open Expecto.Flip
 open SageFs.SseWriter
@@ -65,15 +66,162 @@ let sseTests = testList "SSE Writer" [
   ]
 
   testList "formatTestSummaryEvent" [
-    testCase "serializes TestSummary to SSE" <| fun () ->
-      let opts = JsonSerializerOptions(PropertyNamingPolicy = JsonNamingPolicy.CamelCase)
+    testCase "serializes TestSummary to SSE with PascalCase" <| fun () ->
+      // Production SSE uses default JsonSerializerOptions + JsonFSharpConverter (PascalCase)
+      // NOT camelCase — see McpServer.fs sseJsonOpts
+      let opts = JsonSerializerOptions()
+      opts.Converters.Add(System.Text.Json.Serialization.JsonFSharpConverter())
       let summary: SageFs.Features.LiveTesting.TestSummary = {
         Total = 10; Passed = 8; Failed = 1; Stale = 1; Running = 0; Disabled = 0; Enabled = true
       }
       let result = formatTestSummaryEvent opts summary
       result |> Expect.stringContains "should contain event type" "event: test_summary"
-      result |> Expect.stringContains "should contain total" "\"total\":10"
-      result |> Expect.stringContains "should contain passed" "\"passed\":8"
+      result |> Expect.stringContains "should contain PascalCase Total" "\"Total\":10"
+      result |> Expect.stringContains "should contain PascalCase Passed" "\"Passed\":8"
       result |> Expect.stringContains "should end with double newline" "\n\n"
+  ]
+]
+
+/// Production-equivalent SSE serialization options (must match McpServer.fs sseJsonOpts)
+let productionSseOpts =
+  let opts = JsonSerializerOptions()
+  opts.Converters.Add(System.Text.Json.Serialization.JsonFSharpConverter())
+  opts
+
+let extractSseData (sseEvent: string) =
+  sseEvent.Split('\n')
+  |> Array.tryFind (fun l -> l.StartsWith("data: "))
+  |> Option.map (fun l -> l.Substring(6))
+
+[<Tests>]
+let wireProtocolTests = testList "Wire Protocol Contract" [
+
+  testList "TestSummary shape" [
+    testCase "has all expected PascalCase fields" <| fun () ->
+      let summary: SageFs.Features.LiveTesting.TestSummary = {
+        Total = 10; Passed = 7; Failed = 1; Stale = 1; Running = 0; Disabled = 1; Enabled = true
+      }
+      let json = JsonSerializer.Serialize(summary, productionSseOpts)
+      let doc = JsonDocument.Parse(json)
+      let root = doc.RootElement
+      let mutable v = Unchecked.defaultof<JsonElement>
+      root.TryGetProperty("Total", &v) |> Expect.isTrue "has Total"
+      root.TryGetProperty("Passed", &v) |> Expect.isTrue "has Passed"
+      root.TryGetProperty("Failed", &v) |> Expect.isTrue "has Failed"
+      root.TryGetProperty("Stale", &v) |> Expect.isTrue "has Stale"
+      root.TryGetProperty("Running", &v) |> Expect.isTrue "has Running"
+      root.TryGetProperty("Disabled", &v) |> Expect.isTrue "has Disabled"
+
+    testCase "round-trip values are correct" <| fun () ->
+      let summary: SageFs.Features.LiveTesting.TestSummary = {
+        Total = 47; Passed = 40; Failed = 3; Stale = 2; Running = 1; Disabled = 1; Enabled = true
+      }
+      let sse = formatTestSummaryEvent productionSseOpts summary
+      let data = extractSseData sse |> Option.get
+      let doc = JsonDocument.Parse(data)
+      let root = doc.RootElement
+      root.GetProperty("Total").GetInt32() |> Expect.equal "Total" 47
+      root.GetProperty("Passed").GetInt32() |> Expect.equal "Passed" 40
+      root.GetProperty("Failed").GetInt32() |> Expect.equal "Failed" 3
+      root.GetProperty("Stale").GetInt32() |> Expect.equal "Stale" 2
+      root.GetProperty("Disabled").GetInt32() |> Expect.equal "Disabled" 1
+
+    testCase "no camelCase properties in output" <| fun () ->
+      let summary: SageFs.Features.LiveTesting.TestSummary = {
+        Total = 10; Passed = 8; Failed = 1; Stale = 1; Running = 0; Disabled = 0; Enabled = true
+      }
+      let sse = formatTestSummaryEvent productionSseOpts summary
+      let data = extractSseData sse |> Option.get
+      data.Contains("\"total\"") |> Expect.isFalse "no camelCase total"
+      data.Contains("\"passed\"") |> Expect.isFalse "no camelCase passed"
+  ]
+
+  testList "ResultFreshness DU shape" [
+    testCase "Fresh serializes as Case/Fields" <| fun () ->
+      let json = JsonSerializer.Serialize(SageFs.Features.LiveTesting.ResultFreshness.Fresh, productionSseOpts)
+      let doc = JsonDocument.Parse(json)
+      doc.RootElement.GetProperty("Case").GetString() |> Expect.equal "case" "Fresh"
+
+    testCase "StaleCodeEdited serializes as Case/Fields" <| fun () ->
+      let json = JsonSerializer.Serialize(SageFs.Features.LiveTesting.ResultFreshness.StaleCodeEdited, productionSseOpts)
+      let doc = JsonDocument.Parse(json)
+      doc.RootElement.GetProperty("Case").GetString() |> Expect.equal "case" "StaleCodeEdited"
+
+    testCase "StaleWrongGeneration serializes as Case/Fields" <| fun () ->
+      let json = JsonSerializer.Serialize(SageFs.Features.LiveTesting.ResultFreshness.StaleWrongGeneration, productionSseOpts)
+      let doc = JsonDocument.Parse(json)
+      doc.RootElement.GetProperty("Case").GetString() |> Expect.equal "case" "StaleWrongGeneration"
+  ]
+
+  testList "TestRunStatus DU shape" [
+    testCase "Stale has Case:Stale" <| fun () ->
+      let json = JsonSerializer.Serialize(SageFs.Features.LiveTesting.TestRunStatus.Stale, productionSseOpts)
+      let doc = JsonDocument.Parse(json)
+      doc.RootElement.GetProperty("Case").GetString() |> Expect.equal "case" "Stale"
+
+    testCase "PolicyDisabled has Case:PolicyDisabled" <| fun () ->
+      let json = JsonSerializer.Serialize(SageFs.Features.LiveTesting.TestRunStatus.PolicyDisabled, productionSseOpts)
+      let doc = JsonDocument.Parse(json)
+      doc.RootElement.GetProperty("Case").GetString() |> Expect.equal "case" "PolicyDisabled"
+
+    testCase "Passed carries duration in Fields" <| fun () ->
+      let status = SageFs.Features.LiveTesting.TestRunStatus.Passed (System.TimeSpan.FromMilliseconds(42.5))
+      let json = JsonSerializer.Serialize(status, productionSseOpts)
+      let doc = JsonDocument.Parse(json)
+      let root = doc.RootElement
+      root.GetProperty("Case").GetString() |> Expect.equal "case" "Passed"
+      root.GetProperty("Fields").GetArrayLength() |> Expect.equal "1 field" 1
+      root.GetProperty("Fields").[0].ValueKind |> Expect.equal "field is string" JsonValueKind.String
+
+    testCase "Failed carries failure+duration in Fields" <| fun () ->
+      let failure = SageFs.Features.LiveTesting.TestFailure.AssertionFailed "oops"
+      let dur = System.TimeSpan.FromMilliseconds(100.0)
+      let status = SageFs.Features.LiveTesting.TestRunStatus.Failed(failure, dur)
+      let json = JsonSerializer.Serialize(status, productionSseOpts)
+      let doc = JsonDocument.Parse(json)
+      let root = doc.RootElement
+      root.GetProperty("Case").GetString() |> Expect.equal "case" "Failed"
+      root.GetProperty("Fields").GetArrayLength() |> Expect.equal "2 fields" 2
+
+    testCase "Skipped carries reason in Fields" <| fun () ->
+      let json = JsonSerializer.Serialize(SageFs.Features.LiveTesting.TestRunStatus.Skipped "not applicable", productionSseOpts)
+      let doc = JsonDocument.Parse(json)
+      let root = doc.RootElement
+      root.GetProperty("Case").GetString() |> Expect.equal "case" "Skipped"
+      root.GetProperty("Fields").[0].GetString() |> Expect.equal "reason" "not applicable"
+  ]
+
+  testList "TestResultsBatchPayload shape" [
+    testCase "has Freshness, Entries, Summary, Generation, Completion" <| fun () ->
+      let payload: SageFs.Features.LiveTesting.TestResultsBatchPayload = {
+        Generation = SageFs.Features.LiveTesting.RunGeneration 1
+        Freshness = SageFs.Features.LiveTesting.ResultFreshness.StaleCodeEdited
+        Completion = SageFs.Features.LiveTesting.BatchCompletion.Superseded
+        Entries = [||]
+        Summary = { Total = 0; Passed = 0; Failed = 0; Stale = 0; Running = 0; Disabled = 0; Enabled = true }
+      }
+      let json = JsonSerializer.Serialize(payload, productionSseOpts)
+      let doc = JsonDocument.Parse(json)
+      let root = doc.RootElement
+      let mutable v = Unchecked.defaultof<JsonElement>
+      root.TryGetProperty("Freshness", &v) |> Expect.isTrue "has Freshness"
+      root.TryGetProperty("Entries", &v) |> Expect.isTrue "has Entries"
+      root.TryGetProperty("Summary", &v) |> Expect.isTrue "has Summary"
+      root.TryGetProperty("Generation", &v) |> Expect.isTrue "has Generation"
+      root.TryGetProperty("Completion", &v) |> Expect.isTrue "has Completion"
+
+    testCase "Freshness is nested DU object" <| fun () ->
+      let payload: SageFs.Features.LiveTesting.TestResultsBatchPayload = {
+        Generation = SageFs.Features.LiveTesting.RunGeneration 1
+        Freshness = SageFs.Features.LiveTesting.ResultFreshness.StaleCodeEdited
+        Completion = SageFs.Features.LiveTesting.BatchCompletion.Complete(5, 5)
+        Entries = [||]
+        Summary = { Total = 5; Passed = 5; Failed = 0; Stale = 0; Running = 0; Disabled = 0; Enabled = true }
+      }
+      let json = JsonSerializer.Serialize(payload, productionSseOpts)
+      let doc = JsonDocument.Parse(json)
+      let freshEl = doc.RootElement.GetProperty("Freshness")
+      freshEl.ValueKind |> Expect.equal "is object" JsonValueKind.Object
+      freshEl.GetProperty("Case").GetString() |> Expect.equal "case" "StaleCodeEdited"
   ]
 ]

@@ -52,9 +52,25 @@ let create () =
             match result with
             | Some r -> formatTitle r
             | None -> "◆ Detected"
+          let tooltip =
+            match result with
+            | Some r ->
+              match r.Outcome with
+              | LiveTestingTypes.VscTestOutcome.Stale ->
+                match testState.Freshness with
+                | LiveTestingTypes.VscResultFreshness.StaleCodeEdited ->
+                  sprintf "%s — stale: code edited since last run" t.DisplayName
+                | LiveTestingTypes.VscResultFreshness.StaleWrongGeneration ->
+                  sprintf "%s — stale: generation mismatch (re-run needed)" t.DisplayName
+                | _ -> sprintf "%s — stale" t.DisplayName
+              | LiveTestingTypes.VscTestOutcome.PolicyDisabled ->
+                sprintf "%s — disabled by policy" t.DisplayName
+              | _ -> t.DisplayName
+            | None -> t.DisplayName
           let cmd = createObj [
             "title" ==> title
             "command" ==> ""
+            "tooltip" ==> tooltip
           ]
           lenses.Add(newCodeLens range cmd)
         | None -> ()

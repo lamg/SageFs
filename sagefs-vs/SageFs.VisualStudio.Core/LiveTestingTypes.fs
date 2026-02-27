@@ -51,6 +51,26 @@ type TestSummary = {
   Disabled: int
 }
 
+[<RequireQualifiedAccess>]
+module TestSummary =
+  /// Format for VS tool window header. Returns (text, severity).
+  let formatToolWindowLine (s: TestSummary) =
+    let parts = [
+      if s.Passed > 0 then sprintf "✓ %d passed" s.Passed
+      if s.Failed > 0 then sprintf "✗ %d failed" s.Failed
+      if s.Stale > 0 then sprintf "◌ %d stale" s.Stale
+      if s.Disabled > 0 then sprintf "⊘ %d disabled" s.Disabled
+      if s.Running > 0 then sprintf "● %d running" s.Running
+    ]
+    let text =
+      if parts.IsEmpty then sprintf "%d tests" s.Total
+      else sprintf "%d tests: %s" s.Total (parts |> String.concat ", ")
+    let severity =
+      if s.Failed > 0 then "error"
+      elif s.Stale > 0 then "warning"
+      else "info"
+    text, severity
+
 /// Whether live testing is enabled
 [<RequireQualifiedAccess>]
 type LiveTestingEnabled =
