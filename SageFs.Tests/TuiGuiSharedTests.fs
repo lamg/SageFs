@@ -5,6 +5,8 @@ open VerifyExpecto
 open VerifyTests
 open SageFs
 
+do try VerifyTests.VerifierSettings.DisableRequireUniquePrefix() with _ -> ()
+
 /// Layout with all panes visible, for tests that need the Editor pane
 let allPanesLayout = {
   LayoutConfig.defaults with

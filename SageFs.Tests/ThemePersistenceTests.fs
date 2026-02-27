@@ -8,6 +8,8 @@ open SageFs
 open SageFs.Server.Dashboard
 open SageFs.DaemonClient
 
+do try VerifyTests.VerifierSettings.DisableRequireUniquePrefix() with _ -> ()
+
 let snapshotsDir =
   System.IO.Path.Combine(__SOURCE_DIRECTORY__, "snapshots")
 

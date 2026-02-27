@@ -7,7 +7,9 @@ open System.IO
 open SageFs
 open SageFs.AppState
 
-let snapshotsDir = Path.Combine(__SOURCE_DIRECTORY__, "snapshots")
+do try VerifierSettings.DisableRequireUniquePrefix() with _ -> ()
+
+let snapshotsDir =Path.Combine(__SOURCE_DIRECTORY__, "snapshots")
 
 let verifyText name (value: string) =
   let settings = VerifySettings()

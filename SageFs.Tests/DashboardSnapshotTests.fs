@@ -7,6 +7,8 @@ open Falco.Markup
 open SageFs
 open SageFs.Server.Dashboard
 
+do try VerifyTests.VerifierSettings.DisableRequireUniquePrefix() with _ -> ()
+
 let snapshotsDir =
   System.IO.Path.Combine(__SOURCE_DIRECTORY__, "snapshots")
 

@@ -7,6 +7,7 @@ open VerifyTests
 [<EntryPoint>]
 let main argv =
   let configureVerify () =
+    VerifierSettings.DisableRequireUniquePrefix()
     let isCI =
       not (String.IsNullOrEmpty(Environment.GetEnvironmentVariable("CI")))
       || not (String.IsNullOrEmpty(Environment.GetEnvironmentVariable("GITHUB_ACTIONS")))
