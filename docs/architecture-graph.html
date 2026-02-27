@@ -1,0 +1,1329 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SageFs — How It Works</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=Newsreader:ital,opsz,wght@0,6..72,300;0,6..72,400;0,6..72,500;1,6..72,300;1,6..72,400&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&display=swap');
+
+  :root {
+    --bg: #08090c;
+    --bg-warm: #0c0d11;
+    --surface: #111318;
+    --surface-raised: #181b22;
+    --surface-hover: #1f232d;
+    --border: #252a36;
+    --border-bright: #3a4158;
+    --text: #b8c0d4;
+    --text-dim: #5e6a84;
+    --text-bright: #e4e9f5;
+    --text-heading: #f0f3fa;
+
+    --blue: #6cb6ff;
+    --purple: #c49bff;
+    --green: #6fdb80;
+    --orange: #f5a762;
+    --pink: #f28ec4;
+    --cyan: #6ee7ef;
+    --red: #ff8b82;
+    --yellow: #ebc950;
+
+    --glow-blue: rgba(108,182,255,0.08);
+    --glow-purple: rgba(196,155,255,0.08);
+    --glow-green: rgba(111,219,128,0.06);
+    --glow-orange: rgba(245,167,98,0.06);
+    --glow-pink: rgba(242,142,196,0.06);
+    --glow-cyan: rgba(110,231,239,0.06);
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'DM Sans', sans-serif;
+    font-size: 15px;
+    line-height: 1.7;
+    overflow-x: hidden;
+  }
+
+  /* subtle grain */
+  body::after {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.025'/%3E%3C/svg%3E");
+    pointer-events: none;
+    z-index: 9999;
+  }
+
+  /* ─── NAVIGATION ─── */
+  nav {
+    position: fixed;
+    top: 0; left: 0; right: 0;
+    z-index: 100;
+    background: rgba(8,9,12,0.85);
+    backdrop-filter: blur(20px);
+    border-bottom: 1px solid var(--border);
+    padding: 0 32px;
+    display: flex;
+    align-items: center;
+    height: 52px;
+    gap: 32px;
+  }
+  nav .logo {
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 700;
+    font-size: 16px;
+    color: var(--blue);
+    letter-spacing: -0.5px;
+    white-space: nowrap;
+  }
+  nav a {
+    color: var(--text-dim);
+    text-decoration: none;
+    font-size: 13px;
+    font-weight: 500;
+    letter-spacing: 0.3px;
+    transition: color 0.2s;
+  }
+  nav a:hover { color: var(--text-bright); }
+
+  /* ─── HERO ─── */
+  .hero {
+    padding: 140px 32px 80px;
+    max-width: 900px;
+    margin: 0 auto;
+    text-align: center;
+  }
+  .hero h1 {
+    font-family: 'Newsreader', serif;
+    font-size: clamp(38px, 5vw, 58px);
+    font-weight: 400;
+    color: var(--text-heading);
+    line-height: 1.15;
+    letter-spacing: -1px;
+    margin-bottom: 24px;
+  }
+  .hero h1 em {
+    font-style: italic;
+    background: linear-gradient(135deg, var(--blue), var(--purple));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  .hero p {
+    font-size: 17px;
+    color: var(--text-dim);
+    max-width: 640px;
+    margin: 0 auto;
+    line-height: 1.8;
+  }
+  .hero .cmd {
+    display: inline-block;
+    margin-top: 36px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 14px;
+    color: var(--green);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 28px;
+    letter-spacing: -0.3px;
+  }
+  .hero .cmd span { color: var(--text-dim); }
+
+  /* ─── SECTION LAYOUT ─── */
+  section {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 80px 32px;
+  }
+  .section-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    color: var(--text-dim);
+    margin-bottom: 12px;
+  }
+  .section-title {
+    font-family: 'Newsreader', serif;
+    font-size: clamp(28px, 3.5vw, 40px);
+    font-weight: 400;
+    color: var(--text-heading);
+    letter-spacing: -0.5px;
+    margin-bottom: 16px;
+    line-height: 1.2;
+  }
+  .section-desc {
+    color: var(--text-dim);
+    max-width: 640px;
+    margin-bottom: 48px;
+    font-size: 16px;
+    line-height: 1.8;
+  }
+
+  /* ─── FLOW DIAGRAM ─── */
+  .flow {
+    display: flex;
+    align-items: stretch;
+    gap: 0;
+    position: relative;
+    overflow-x: auto;
+    padding: 20px 0;
+  }
+  .flow-step {
+    flex: 1;
+    min-width: 180px;
+    position: relative;
+    padding: 28px 24px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    transition: all 0.3s ease;
+  }
+  .flow-step:hover {
+    background: var(--surface-raised);
+    border-color: var(--border-bright);
+    transform: translateY(-4px);
+  }
+  .flow-step .step-num {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-dim);
+    margin-bottom: 10px;
+    display: block;
+  }
+  .flow-step h3 {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text-bright);
+    margin-bottom: 8px;
+  }
+  .flow-step p {
+    font-size: 13px;
+    color: var(--text-dim);
+    line-height: 1.6;
+  }
+  .flow-step .time {
+    display: inline-block;
+    margin-top: 12px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    padding: 3px 10px;
+    border-radius: 20px;
+    font-weight: 500;
+  }
+  .flow-arrow {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 48px;
+    flex-shrink: 0;
+    color: var(--text-dim);
+    font-size: 18px;
+  }
+
+  /* colored variants */
+  .flow-step[data-color="blue"] { border-left: 3px solid var(--blue); }
+  .flow-step[data-color="blue"] .step-num { color: var(--blue); }
+  .flow-step[data-color="blue"] .time { background: var(--glow-blue); color: var(--blue); }
+
+  .flow-step[data-color="green"] { border-left: 3px solid var(--green); }
+  .flow-step[data-color="green"] .step-num { color: var(--green); }
+  .flow-step[data-color="green"] .time { background: var(--glow-green); color: var(--green); }
+
+  .flow-step[data-color="purple"] { border-left: 3px solid var(--purple); }
+  .flow-step[data-color="purple"] .step-num { color: var(--purple); }
+  .flow-step[data-color="purple"] .time { background: var(--glow-purple); color: var(--purple); }
+
+  .flow-step[data-color="orange"] { border-left: 3px solid var(--orange); }
+  .flow-step[data-color="orange"] .step-num { color: var(--orange); }
+  .flow-step[data-color="orange"] .time { background: var(--glow-orange); color: var(--orange); }
+
+  .flow-step[data-color="cyan"] { border-left: 3px solid var(--cyan); }
+  .flow-step[data-color="cyan"] .step-num { color: var(--cyan); }
+  .flow-step[data-color="cyan"] .time { background: var(--glow-cyan); color: var(--cyan); }
+
+  /* ─── EDITORS GRID ─── */
+  .editors-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 20px;
+  }
+  .editor-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 32px 28px;
+    transition: all 0.3s ease;
+    position: relative;
+    overflow: hidden;
+  }
+  .editor-card:hover {
+    border-color: var(--border-bright);
+    background: var(--surface-raised);
+    transform: translateY(-2px);
+  }
+  .editor-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 2px;
+  }
+  .editor-card[data-color="blue"]::before { background: linear-gradient(90deg, var(--blue), transparent); }
+  .editor-card[data-color="purple"]::before { background: linear-gradient(90deg, var(--purple), transparent); }
+  .editor-card[data-color="green"]::before { background: linear-gradient(90deg, var(--green), transparent); }
+  .editor-card[data-color="orange"]::before { background: linear-gradient(90deg, var(--orange), transparent); }
+  .editor-card[data-color="cyan"]::before { background: linear-gradient(90deg, var(--cyan), transparent); }
+
+  .editor-card .card-icon {
+    font-size: 28px;
+    margin-bottom: 16px;
+    display: block;
+  }
+  .editor-card h3 {
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--text-bright);
+    margin-bottom: 4px;
+  }
+  .editor-card .card-tech {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--text-dim);
+    margin-bottom: 16px;
+    display: block;
+  }
+  .editor-card p {
+    font-size: 14px;
+    color: var(--text);
+    line-height: 1.7;
+    margin-bottom: 16px;
+  }
+  .card-features {
+    list-style: none;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .card-features li {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    padding: 3px 10px;
+    border-radius: 4px;
+    background: rgba(255,255,255,0.04);
+    color: var(--text-dim);
+    border: 1px solid rgba(255,255,255,0.06);
+  }
+
+  /* ─── ENGINE SECTION ─── */
+  .engine-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 20px;
+  }
+  .engine-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 28px 24px;
+    transition: all 0.3s ease;
+  }
+  .engine-card:hover {
+    border-color: var(--border-bright);
+    background: var(--surface-raised);
+  }
+  .engine-card .engine-icon {
+    width: 40px;
+    height: 40px;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 20px;
+    margin-bottom: 16px;
+  }
+  .engine-card h3 {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text-bright);
+    margin-bottom: 6px;
+  }
+  .engine-card .engine-why {
+    font-family: 'Newsreader', serif;
+    font-style: italic;
+    font-size: 14px;
+    color: var(--text-dim);
+    margin-bottom: 12px;
+    line-height: 1.5;
+  }
+  .engine-card .engine-how {
+    font-size: 13px;
+    color: var(--text);
+    line-height: 1.7;
+  }
+  .engine-card .engine-files {
+    margin-top: 14px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--text-dim);
+    line-height: 1.8;
+  }
+  .engine-card .engine-files code {
+    display: inline-block;
+    background: rgba(255,255,255,0.04);
+    padding: 1px 6px;
+    border-radius: 3px;
+    margin: 1px 2px;
+  }
+
+  /* colored engine icons */
+  .engine-icon.blue { background: var(--glow-blue); color: var(--blue); }
+  .engine-icon.purple { background: var(--glow-purple); color: var(--purple); }
+  .engine-icon.green { background: var(--glow-green); color: var(--green); }
+  .engine-icon.orange { background: var(--glow-orange); color: var(--orange); }
+  .engine-icon.pink { background: var(--glow-pink); color: var(--pink); }
+  .engine-icon.cyan { background: var(--glow-cyan); color: var(--cyan); }
+
+  /* ─── PROTOCOL SECTION ─── */
+  .protocol-band {
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+    padding: 60px 32px;
+    margin: 0;
+    max-width: none;
+    text-align: center;
+  }
+  .protocol-band .section-label,
+  .protocol-band .section-title,
+  .protocol-band .section-desc {
+    max-width: 640px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+  .protocol-diagram {
+    max-width: 800px;
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+  }
+  .proto-row {
+    display: flex;
+    justify-content: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    padding: 8px 0;
+  }
+  .proto-row-label {
+    width: 100%;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: var(--text-dim);
+    margin-bottom: 4px;
+    margin-top: 16px;
+  }
+  .proto-row-label:first-child { margin-top: 0; }
+  .proto-flow-arrow {
+    display: flex;
+    justify-content: center;
+    padding: 6px 0;
+    color: var(--text-dim);
+    font-size: 12px;
+    opacity: 0.5;
+  }
+  .proto-flow-arrow span {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+  }
+  .proto-card {
+    padding: 14px 20px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    text-align: center;
+    min-width: 120px;
+    transition: all 0.2s;
+  }
+  .proto-card:hover {
+    border-color: var(--border-bright);
+    background: var(--surface-raised);
+  }
+  .proto-card .proto-name {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-bright);
+    margin-bottom: 4px;
+  }
+  .proto-card .proto-detail {
+    font-size: 12px;
+    color: var(--text-dim);
+    line-height: 1.4;
+  }
+  .proto-card.daemon {
+    border-color: var(--blue);
+    background: var(--glow-blue);
+    min-width: 280px;
+    padding: 20px 28px;
+  }
+  .proto-card.daemon .proto-name { color: var(--blue); }
+  .proto-card.worker-active {
+    border-color: var(--green);
+    background: var(--glow-green);
+  }
+  .proto-card.worker-active .proto-name { color: var(--green); }
+  .proto-card.worker-standby {
+    border-color: var(--yellow);
+    border-style: dashed;
+    opacity: 0.7;
+  }
+  .proto-card.worker-standby .proto-name { color: var(--yellow); }
+  .proto-card.ai-client {
+    border-color: var(--purple);
+    background: var(--glow-purple);
+  }
+  .proto-card.ai-client .proto-name { color: var(--purple); }
+  .proto-card.editor-cyan {
+    border-color: var(--cyan);
+    background: var(--glow-cyan);
+  }
+  .proto-card.editor-cyan .proto-name { color: var(--cyan); }
+  .proto-card.editor-green {
+    border-color: var(--green);
+    background: var(--glow-green);
+  }
+  .proto-card.editor-green .proto-name { color: var(--green); }
+  .proto-card.editor-blue {
+    border-color: var(--blue);
+    background: var(--glow-blue);
+  }
+  .proto-card.editor-blue .proto-name { color: var(--blue); }
+  .proto-card.editor-orange {
+    border-color: var(--orange);
+    background: var(--glow-orange);
+  }
+  .proto-card.editor-orange .proto-name { color: var(--orange); }
+  .proto-card.editor-pink {
+    border-color: var(--pink);
+    background: var(--glow-pink);
+  }
+  .proto-card.editor-pink .proto-name { color: var(--pink); }
+
+  /* ─── AI SECTION ─── */
+  .ai-tools {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 16px;
+  }
+  .ai-tool {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px;
+    transition: all 0.3s ease;
+  }
+  .ai-tool:hover {
+    border-color: var(--border-bright);
+    background: var(--surface-raised);
+  }
+  .ai-tool .tool-name {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--purple);
+    margin-bottom: 6px;
+  }
+  .ai-tool .tool-desc {
+    font-size: 13px;
+    color: var(--text);
+    line-height: 1.6;
+  }
+
+  /* ─── STATS BAND ─── */
+  .stats-band {
+    background: var(--bg-warm);
+    border-top: 1px solid var(--border);
+    padding: 60px 32px;
+    max-width: none;
+  }
+  .stats-grid {
+    max-width: 1000px;
+    margin: 0 auto;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 24px;
+    text-align: center;
+  }
+  .stat {
+    padding: 20px;
+  }
+  .stat .stat-num {
+    font-family: 'Newsreader', serif;
+    font-size: 36px;
+    font-weight: 400;
+    color: var(--text-heading);
+    letter-spacing: -1px;
+    line-height: 1;
+    margin-bottom: 8px;
+  }
+  .stat .stat-label {
+    font-size: 13px;
+    color: var(--text-dim);
+  }
+
+  /* ─── ARCHITECTURE MAP ─── */
+  .arch-map {
+    position: relative;
+    margin-top: 48px;
+  }
+  .arch-layer {
+    margin-bottom: 16px;
+    position: relative;
+  }
+  .arch-layer-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: var(--text-dim);
+    margin-bottom: 10px;
+    padding-left: 4px;
+  }
+  .arch-modules {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 16px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+  }
+  .arch-mod {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    padding: 4px 10px;
+    border-radius: 5px;
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.1);
+    color: var(--text);
+    cursor: default;
+    transition: all 0.2s;
+    position: relative;
+  }
+  .arch-mod:hover {
+    background: rgba(255,255,255,0.12);
+    color: var(--text-bright);
+    border-color: rgba(255,255,255,0.18);
+  }
+  /* tooltip */
+  .arch-mod[data-tip]:hover::after {
+    content: attr(data-tip);
+    position: absolute;
+    bottom: calc(100% + 8px);
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--surface-raised);
+    border: 1px solid var(--border-bright);
+    color: var(--text-bright);
+    font-family: 'DM Sans', sans-serif;
+    font-size: 12px;
+    font-weight: 400;
+    line-height: 1.5;
+    padding: 10px 14px;
+    border-radius: 8px;
+    white-space: normal;
+    width: max-content;
+    max-width: 280px;
+    z-index: 50;
+    pointer-events: none;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+  }
+  .arch-mod[data-tip]:hover::before {
+    content: '';
+    position: absolute;
+    bottom: calc(100% + 2px);
+    left: 50%;
+    transform: translateX(-50%);
+    border: 5px solid transparent;
+    border-top-color: var(--border-bright);
+    z-index: 51;
+    pointer-events: none;
+  }
+  .arch-mod.highlight {
+    border-color: rgba(108,182,255,0.3);
+    color: var(--blue);
+    background: var(--glow-blue);
+  }
+
+  /* connector lines between layers */
+  .arch-connector {
+    display: flex;
+    justify-content: center;
+    padding: 4px 0;
+    color: var(--text-dim);
+    font-size: 12px;
+    opacity: 0.4;
+  }
+
+  /* ─── FOOTER ─── */
+  footer {
+    text-align: center;
+    padding: 48px 32px;
+    color: var(--text-dim);
+    font-size: 13px;
+    border-top: 1px solid var(--border);
+  }
+  footer a {
+    color: var(--blue);
+    text-decoration: none;
+  }
+
+  /* ─── RESPONSIVE ─── */
+  @media (max-width: 768px) {
+    .flow { flex-direction: column; }
+    .flow-arrow { transform: rotate(90deg); width: auto; height: 32px; }
+    nav { padding: 0 16px; gap: 16px; }
+    section { padding: 48px 16px; }
+    .protocol-band { padding: 40px 16px; }
+  }
+
+  /* smooth reveal animation */
+  .reveal {
+    opacity: 0;
+    transform: translateY(24px);
+    transition: opacity 0.6s ease, transform 0.6s ease;
+  }
+  .reveal.visible {
+    opacity: 1;
+    transform: translateY(0);
+  }
+</style>
+</head>
+<body>
+
+<!-- NAV -->
+<nav>
+  <div class="logo">SageFs</div>
+  <a href="#journey">The Journey</a>
+  <a href="#editors">Your Editor</a>
+  <a href="#engine">The Engine</a>
+  <a href="#protocol">One Daemon</a>
+  <a href="#ai">AI Integration</a>
+  <a href="#map">Full Map</a>
+</nav>
+
+<!-- HERO -->
+<div class="hero reveal">
+  <h1>Write F#. <em>See it live.</em></h1>
+  <p>
+    SageFs is a live development environment that eliminates the edit‑build‑run cycle.
+    Tests run as you type — no save needed. Eval code on demand with <code>Ctrl+Enter</code>.
+    Results stream to every editor you use, from a single shared daemon.
+  </p>
+  <div class="cmd"><span>$</span> sagefs --proj MyProject.fsproj</div>
+</div>
+
+<!-- ─── THE JOURNEY ─── -->
+<section id="journey" class="reveal">
+  <div class="section-label">What happens when you run it</div>
+  <div class="section-title">From keystroke to result in under a second</div>
+  <div class="section-desc">
+    Here's the path your code takes — from the moment you change it
+    to the moment you see results in your editor.
+  </div>
+
+  <div class="flow">
+    <div class="flow-step" data-color="blue">
+      <span class="step-num">01 — You write code</span>
+      <h3>Change a line</h3>
+      <p>Edit any <code>.fs</code> or <code>.fsx</code> file. Tests start running on every change — no save needed. Hit <code>Ctrl+Enter</code> to evaluate code on demand. Both modes, all the time.</p>
+      <span class="time">0 ms</span>
+    </div>
+
+    <div class="flow-arrow">→</div>
+
+    <div class="flow-step" data-color="green">
+      <span class="step-num">02 — File watcher detects</span>
+      <h3>Change captured</h3>
+      <p>SageFs watches your entire project tree. It sees the change as it happens, classifies it (<code>.fs</code> → reload, <code>.fsproj</code> → soft reset), and routes it to the right handler.</p>
+      <span class="time">~5 ms</span>
+    </div>
+
+    <div class="flow-arrow">→</div>
+
+    <div class="flow-step" data-color="purple">
+      <span class="step-num">03 — Worker evaluates</span>
+      <h3>Code runs in FSI</h3>
+      <p>A dedicated worker process — already warmed up with your project's dependencies loaded — compiles and executes the changed code. No cold start. No full rebuild.</p>
+      <span class="time">~100 ms</span>
+    </div>
+
+    <div class="flow-arrow">→</div>
+
+    <div class="flow-step" data-color="orange">
+      <span class="step-num">04 — Tests re-run</span>
+      <h3>Affected tests only</h3>
+      <p>The live testing engine identifies which tests touch the changed code and re-executes just those. Green checkmarks or red failures stream back instantly.</p>
+      <span class="time">~300 ms</span>
+    </div>
+
+    <div class="flow-arrow">→</div>
+
+    <div class="flow-step" data-color="cyan">
+      <span class="step-num">05 — Results everywhere</span>
+      <h3>All editors update</h3>
+      <p>Via Server-Sent Events (SSE), every connected client — VS Code, Neovim, Visual Studio, the GPU GUI, AI agents — sees the results simultaneously. No polling. No refresh.</p>
+      <span class="time">~500 ms total</span>
+    </div>
+  </div>
+</section>
+
+<!-- ─── YOUR EDITOR ─── -->
+<section id="editors" class="reveal">
+  <div class="section-label">Work where you want</div>
+  <div class="section-title">Five editors, one live session</div>
+  <div class="section-desc">
+    Every editor connects to the same running daemon. Switch between them
+    freely — your session, your test results, your eval history all stay in sync.
+  </div>
+
+  <div class="editors-grid">
+
+    <div class="editor-card" data-color="cyan">
+      <span class="card-icon">🧩</span>
+      <h3>Neovim</h3>
+      <span class="card-tech">Lua · 25 modules · 885 tests</span>
+      <p>
+        Cell-based evaluation with <code>;;</code> boundaries — like Jupyter for Vim.
+        Virtual text for inline results, SSE-driven live diagnostics, gutter signs for
+        test pass/fail and code coverage. A full IDE experience in the terminal.
+      </p>
+      <ul class="card-features">
+        <li>;; cell eval</li>
+        <li>live diagnostics</li>
+        <li>coverage gutter</li>
+        <li>test panel</li>
+        <li>type explorer</li>
+      </ul>
+    </div>
+
+    <div class="editor-card" data-color="green">
+      <span class="card-icon">💻</span>
+      <h3>VS Code</h3>
+      <span class="card-tech">F# via Fable → JavaScript · 14 modules</span>
+      <p>
+        Select code, hit <code>Alt+Enter</code>, see colored annotations inline.
+        Sidebar panels for hot reload file trees, live test status, type exploration,
+        and session switching. Auto-detects or starts the daemon.
+      </p>
+      <ul class="card-features">
+        <li>inline eval results</li>
+        <li>test gutter icons</li>
+        <li>hot reload tree</li>
+        <li>type explorer</li>
+      </ul>
+    </div>
+
+    <div class="editor-card" data-color="blue">
+      <span class="card-icon">⌨️</span>
+      <h3>Terminal (TUI)</h3>
+      <span class="card-tech">F# · ANSI rendering · built-in</span>
+      <p>
+        A full terminal IDE with panes for code editing, eval output, session management,
+        and live test results. Vi-style keybindings, undo/redo, inline autocompletion.
+        Works over SSH. Zero dependencies.
+      </p>
+      <ul class="card-features">
+        <li>Ctrl+Enter eval</li>
+        <li>split panes</li>
+        <li>session picker</li>
+        <li>256-color themes</li>
+      </ul>
+    </div>
+
+    <div class="editor-card" data-color="purple">
+      <span class="card-icon">🖥️</span>
+      <h3>GPU Window (Raylib)</h3>
+      <span class="card-tech">F# · Raylib-cs · OpenGL</span>
+      <p>
+        A GPU-accelerated rendering of the same UI. Crisp text at any resolution,
+        smooth scrolling, and sub-millisecond frame times. Shares the exact same
+        layout engine as the terminal — pixel-perfect feature parity.
+      </p>
+      <ul class="card-features">
+        <li>GPU-rendered text</li>
+        <li>mouse support</li>
+        <li>any resolution</li>
+        <li>same keybindings</li>
+      </ul>
+    </div>
+
+    <div class="editor-card" data-color="orange">
+      <span class="card-icon">🏢</span>
+      <h3>Visual Studio</h3>
+      <span class="card-tech">F# + C# · VS Extensibility · 7 modules</span>
+      <p>
+        Full integration with Visual Studio's tool windows.
+        Same eval, testing, and hot reload features — embedded in the IDE
+        enterprise teams already use. Daemon auto-management included.
+      </p>
+      <ul class="card-features">
+        <li>tool windows</li>
+        <li>daemon management</li>
+        <li>session control</li>
+        <li>test integration</li>
+      </ul>
+    </div>
+
+  </div>
+</section>
+
+<!-- ─── ONE DAEMON ─── -->
+<div class="protocol-band reveal" id="protocol">
+  <div class="section-label">The secret sauce</div>
+  <div class="section-title">One daemon. Every client. Always in sync.</div>
+  <div class="section-desc">
+    SageFs runs a single background daemon that owns all sessions, workers, and state.
+    Every editor — and every AI agent — connects via the same protocol.
+    Crash-proof supervision means it auto-restarts on failure.
+  </div>
+
+  <div class="protocol-diagram">
+
+    <div class="proto-row-label">Editors — where you write code</div>
+    <div class="proto-row">
+      <div class="proto-card editor-cyan">
+        <div class="proto-name">Neovim</div>
+        <div class="proto-detail">Cell eval, gutter signs, live diagnostics</div>
+      </div>
+      <div class="proto-card editor-green">
+        <div class="proto-name">VS Code</div>
+        <div class="proto-detail">Inline annotations, sidebar panels</div>
+      </div>
+      <div class="proto-card editor-blue">
+        <div class="proto-name">Terminal TUI</div>
+        <div class="proto-detail">Built-in editor, split panes</div>
+      </div>
+      <div class="proto-card editor-orange">
+        <div class="proto-name">Visual Studio</div>
+        <div class="proto-detail">Tool windows, daemon auto-start</div>
+      </div>
+      <div class="proto-card editor-pink">
+        <div class="proto-name">Raylib GUI</div>
+        <div class="proto-detail">GPU-rendered, same layout engine</div>
+      </div>
+      <div class="proto-card ai-client">
+        <div class="proto-name">AI Agents</div>
+        <div class="proto-detail">Claude, Copilot, any MCP client</div>
+      </div>
+    </div>
+
+    <div class="proto-flow-arrow"><span>↕ SSE push (real-time) + HTTP requests ↕</span></div>
+
+    <div class="proto-row-label">Daemon — the single process that owns everything</div>
+    <div class="proto-row">
+      <div class="proto-card daemon">
+        <div class="proto-name">SageFs Daemon</div>
+        <div class="proto-detail">
+          Elm-style state machine. All sessions, all test results, all editor state
+          lives here. Broadcasts every change to every client via SSE.
+          Exposes MCP tools for AI agents. One process, one source of truth.
+        </div>
+      </div>
+    </div>
+
+    <div class="proto-flow-arrow"><span>↕ HTTP to isolated worker processes ↕</span></div>
+
+    <div class="proto-row-label">Workers — where your code actually runs</div>
+    <div class="proto-row">
+      <div class="proto-card worker-active">
+        <div class="proto-name">Active Worker</div>
+        <div class="proto-detail">Running your FSI session — evals, completions, type checks</div>
+      </div>
+      <div class="proto-card worker-standby">
+        <div class="proto-name">Standby Worker</div>
+        <div class="proto-detail">Pre-warmed with your project. Swaps in instantly on reset.</div>
+      </div>
+      <div class="proto-card worker-standby">
+        <div class="proto-name">Standby Worker</div>
+        <div class="proto-detail">Another warm spare. Pool auto-heats when .fsproj changes.</div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ─── THE ENGINE ─── -->
+<section id="engine" class="reveal">
+  <div class="section-label">Under the hood</div>
+  <div class="section-title">What makes it fast, reliable, and smart</div>
+  <div class="section-desc">
+    Each piece of SageFs exists to solve a specific problem you'd hit
+    building a live F# environment. Here's why each one matters.
+  </div>
+
+  <div class="engine-grid">
+
+    <div class="engine-card">
+      <div class="engine-icon green">⚡</div>
+      <h3>Hot Reload</h3>
+      <div class="engine-why">"I saved a file. Why do I have to rebuild everything?"</div>
+      <div class="engine-how">
+        When you save, SageFs patches method pointers at runtime — no IL instrumentation, no restart.
+        Changed functions are live in ~100ms. The browser auto-refreshes via SSE.
+        Only the changed file recompiles; everything else stays warm.
+      </div>
+      <div class="engine-files"><code>HotReloading.fs</code> <code>HotReloadState.fs</code> <code>FileWatcher.fs</code></div>
+    </div>
+
+    <div class="engine-card">
+      <div class="engine-icon blue">🧪</div>
+      <h3>Live Testing</h3>
+      <div class="engine-why">"I want to know if my change broke something — before I even save."</div>
+      <div class="engine-how">
+        Three-speed pipeline: Tree-sitter finds tests in broken code (~50ms),
+        the F# Compiler Service builds a dependency graph (~350ms),
+        then only affected tests execute. Green/red gutter markers in your editor.
+        Tests run on every change by default — no save needed. Configurable per category:
+        unit on every keystroke, integration on save, browser on demand.
+      </div>
+      <div class="engine-files"><code>LiveTestRunner.fs</code> <code>LiveTestDiscovery.fs</code> <code>LiveTestStatus.fs</code> <code>LiveTestPipeline.fs</code></div>
+    </div>
+
+    <div class="engine-card">
+      <div class="engine-icon purple">🧠</div>
+      <h3>Code Completions</h3>
+      <div class="engine-why">"What methods does this type have? What namespace is that in?"</div>
+      <div class="engine-how">
+        Type-aware completions powered by the F# Compiler Services, with fuzzy matching.
+        Available everywhere — the TUI and GPU GUI have a built-in completion popup,
+        editor plugins get them via SSE, and AI agents access them through the MCP
+        <code>get_completions</code> tool. Explore any loaded .NET API interactively.
+        Diagnostics (type errors, warnings) stream inline as you type.
+      </div>
+      <div class="engine-files"><code>AutoCompletion.fs</code> <code>Diagnostics.fs</code> <code>Completions.fs</code> <code>Editor.fs</code></div>
+    </div>
+
+    <div class="engine-card">
+      <div class="engine-icon orange">🔄</div>
+      <h3>Session Management</h3>
+      <div class="engine-why">"I need multiple contexts — one for my app, one for experiments."</div>
+      <div class="engine-how">
+        Create, switch, reset, and destroy isolated F# sessions on the fly.
+        Each gets its own FSI worker process with your full project loaded.
+        Sessions persist across daemon restarts. Soft reset clears definitions;
+        hard reset rebuilds from scratch.
+      </div>
+      <div class="engine-files"><code>SessionManager.fs</code> <code>SessionLifecycle.fs</code> <code>SessionOperations.fs</code></div>
+    </div>
+
+    <div class="engine-card">
+      <div class="engine-icon cyan">🏊</div>
+      <h3>Standby Pool</h3>
+      <div class="engine-why">"Restarting a session takes forever while it reloads my project."</div>
+      <div class="engine-how">
+        In the background, SageFs pre-warms spare worker processes with your project
+        already compiled and loaded. When you reset, the standby swaps in instantly —
+        no cold start. The pool auto-heats when project files change.
+      </div>
+      <div class="engine-files"><code>StandbyPool.fs</code> <code>WorkerProtocol.fs</code> <code>HttpWorkerClient.fs</code></div>
+    </div>
+
+    <div class="engine-card">
+      <div class="engine-icon pink">🎨</div>
+      <h3>Rendering Pipeline</h3>
+      <div class="engine-why">"How does the same UI work in a terminal AND a GPU window?"</div>
+      <div class="engine-how">
+        All UI renders to an abstract <code>Cell[,]</code> grid — a 2D array of characters with colors.
+        The TUI backend emits ANSI escape codes. The Raylib backend draws GPU quads.
+        Same layout engine, same input handling, pixel-perfect parity.
+      </div>
+      <div class="engine-files"><code>RenderPipeline.fs</code> <code>CellGrid.fs</code> <code>Draw.fs</code> <code>Screen.fs</code> <code>AnsiEmitter.fs</code></div>
+    </div>
+
+    <div class="engine-card">
+      <div class="engine-icon blue">🔁</div>
+      <h3>Elm Architecture</h3>
+      <div class="engine-why">"How does everything stay in sync without race conditions?"</div>
+      <div class="engine-how">
+        All state lives in a single immutable model. Every event — keystrokes, file changes,
+        test results, SSE messages — dispatches through a pure <code>update</code> function.
+        No shared mutable state. No locks. Side effects execute after the model updates.
+        The UI is always a pure function of the current model.
+      </div>
+      <div class="engine-files"><code>ElmLoop.fs</code> <code>SageFsApp.fs</code> <code>ElmDaemon.fs</code> <code>AppState.fs</code></div>
+    </div>
+
+    <div class="engine-card">
+      <div class="engine-icon green">🛡️</div>
+      <h3>Crash Recovery</h3>
+      <div class="engine-why">"What if a worker crashes? What if the daemon dies?"</div>
+      <div class="engine-how">
+        Erlang-style supervision. The watchdog monitors every worker process —
+        if one crashes, it auto-restarts with exponential backoff. The daemon itself
+        is supervised at the OS level. State is event-sourced, so nothing is lost.
+        A crashed session resumes exactly where it left off.
+      </div>
+      <div class="engine-files"><code>Watchdog.fs</code> <code>DaemonState.fs</code> <code>EventStore.fs</code></div>
+    </div>
+
+    <div class="engine-card">
+      <div class="engine-icon purple">📡</div>
+      <h3>Observability</h3>
+      <div class="engine-why">"Something is slow. How do I find out what?"</div>
+      <div class="engine-how">
+        OpenTelemetry tracing across the entire pipeline — from file save to test result.
+        Frame time displayed in the status bar.
+        Pipeline trace tool shows exactly where time is spent: discovery, compilation,
+        execution, rendering.
+      </div>
+      <div class="engine-files"><code>Instrumentation.fs</code> <code>Tracing.fs</code></div>
+    </div>
+
+  </div>
+</section>
+
+<!-- ─── AI INTEGRATION ─── -->
+<section id="ai" class="reveal">
+  <div class="section-label">Built for AI agents</div>
+  <div class="section-title">Give Claude (or any AI) a live compiler</div>
+  <div class="section-desc">
+    SageFs exposes the Model Context Protocol (MCP) — the same protocol that powers
+    Claude Desktop and GitHub Copilot tool use. AI agents don't just generate code.
+    They execute it, type-check it, run tests, and iterate — against your real project.
+  </div>
+
+  <div class="ai-tools">
+    <div class="ai-tool">
+      <div class="tool-name">send_fsharp_code</div>
+      <div class="tool-desc">Execute F# code in a live session with your project's full dependency graph loaded. Each <code>;;</code> is an isolated transaction.</div>
+    </div>
+    <div class="ai-tool">
+      <div class="tool-name">check_fsharp_code</div>
+      <div class="tool-desc">Type-check code without running it. Catches errors before execution — the AI equivalent of "does this compile?"</div>
+    </div>
+    <div class="ai-tool">
+      <div class="tool-name">run_tests</div>
+      <div class="tool-desc">Execute tests by name, category, or pattern. Get structured pass/fail results back — not just console output.</div>
+    </div>
+    <div class="ai-tool">
+      <div class="tool-name">get_completions</div>
+      <div class="tool-desc">Code completions at any cursor position. The agent discovers available APIs from your actual loaded assemblies.</div>
+    </div>
+    <div class="ai-tool">
+      <div class="tool-name">explore_namespace / explore_type</div>
+      <div class="tool-desc">Browse the full .NET type system interactively — namespaces, types, members, constructors. No documentation needed.</div>
+    </div>
+    <div class="ai-tool">
+      <div class="tool-name">get_live_test_status</div>
+      <div class="tool-desc">Query the current state of all tests — passing, failing, stale, running. See what broke and what's green.</div>
+    </div>
+    <div class="ai-tool">
+      <div class="tool-name">load_fsharp_script</div>
+      <div class="tool-desc">Load and execute an <code>.fsx</code> script file. Each statement runs independently — partial progress survives failures.</div>
+    </div>
+    <div class="ai-tool">
+      <div class="tool-name">get_pipeline_trace</div>
+      <div class="tool-desc">Diagnose slow test runs. See enabled providers, run policies, and per-test timing to find bottlenecks.</div>
+    </div>
+  </div>
+</section>
+
+<!-- ─── FULL MAP ─── -->
+<section id="map" class="reveal">
+  <div class="section-label">The complete picture</div>
+  <div class="section-title">Every module, every layer</div>
+  <div class="section-desc">
+    SageFs.Core is the shared engine (66 modules). The CLI and GUI projects are thin shells
+    that consume Core's rendering pipeline. Here's the full compilation-order dependency map.
+  </div>
+
+  <div class="arch-map">
+
+    <div class="arch-layer">
+      <div class="arch-layer-label">🏗️ Foundation — bootstrapping, configuration, utilities</div>
+      <div class="arch-modules">
+        <span class="arch-mod" data-tip="CLI argument parsing — project paths, flags like --no-watch, --bare, --tui, --gui">Args</span>
+        <span class="arch-mod" data-tip="Shared helper functions used across the entire codebase">Utils</span>
+        <span class="arch-mod" data-tip="Reads .fsproj files to discover source files, references, and NuGet dependencies">ProjectLoading</span>
+        <span class="arch-mod" data-tip="Copies assemblies to temp dirs so the originals aren't locked — enables hot reload without file locks">ShadowCopy</span>
+        <span class="arch-mod" data-tip="Pre-loads your project's namespaces into a new FSI session so you can use your types immediately">WarmUp</span>
+        <span class="arch-mod" data-tip="OpenTelemetry tracing — measures time spent in each phase of the pipeline">Instrumentation</span>
+      </div>
+    </div>
+
+    <div class="arch-connector">↓ depends on ↓</div>
+
+    <div class="arch-layer">
+      <div class="arch-layer-label">🔌 Worker System — isolated FSI process management</div>
+      <div class="arch-modules">
+        <span class="arch-mod" data-tip="Message types for daemon ↔ worker communication — eval, check, reset, completions, test execution">WorkerProtocol</span>
+        <span class="arch-mod" data-tip="Sends commands to worker processes over HTTP and reads back structured results">HttpWorkerClient</span>
+        <span class="arch-mod" data-tip="Pre-warms spare worker processes in the background so session restarts are near-instant">StandbyPool</span>
+        <span class="arch-mod" data-tip="Monitors worker health and auto-restarts crashed processes with exponential backoff">Watchdog</span>
+      </div>
+    </div>
+
+    <div class="arch-connector">↓ depends on ↓</div>
+
+    <div class="arch-layer">
+      <div class="arch-layer-label">📋 Session Layer — lifecycle, state, operations</div>
+      <div class="arch-modules">
+        <span class="arch-mod" data-tip="Tracks all active sessions, routes messages to the right worker, handles create/destroy">SessionManager</span>
+        <span class="arch-mod" data-tip="State machine for session states: creating → warming → ready → evaluating → resetting">SessionLifecycle</span>
+        <span class="arch-mod" data-tip="High-level operations: eval code, check types, get completions, reset, load scripts">SessionOperations</span>
+        <span class="arch-mod" data-tip="Persists session events so history survives daemon restarts">EventStore</span>
+        <span class="arch-mod" data-tip="Writes a marker file so other clients can discover a running daemon and connect to it">DaemonState</span>
+      </div>
+    </div>
+
+    <div class="arch-connector">↓ depends on ↓</div>
+
+    <div class="arch-layer">
+      <div class="arch-layer-label">✨ Features — the user-facing capabilities</div>
+      <div class="arch-modules">
+        <span class="arch-mod" data-tip="Executes affected tests and reports pass/fail results back to all connected clients">LiveTestRunner</span>
+        <span class="arch-mod" data-tip="Finds test methods in your project using Tree-sitter — works even when code doesn't compile">LiveTestDiscovery</span>
+        <span class="arch-mod" data-tip="Tracks the current state of every test: passing, failing, stale, running">LiveTestStatus</span>
+        <span class="arch-mod" data-tip="Orchestrates the three-speed pipeline: discover → build dependency graph → execute affected tests">LiveTestPipeline</span>
+        <span class="arch-mod" data-tip="Structured events for test lifecycle: started, passed, failed, skipped — consumed by all UIs">LiveTestEvents</span>
+        <span class="arch-mod" data-tip="F# Compiler Services integration for type-aware code completions with fuzzy matching">AutoCompletion</span>
+        <span class="arch-mod" data-tip="Transforms raw compiler completion data into structured items for the editor popup and MCP">Completions</span>
+        <span class="arch-mod" data-tip="Streams type errors and warnings inline as you type — no manual build step needed">Diagnostics</span>
+        <span class="arch-mod" data-tip="Line-level test coverage — shows which lines are exercised by passing tests">Coverage</span>
+        <span class="arch-mod" data-tip="Patches method pointers at runtime when you save — changed functions are live in ~100ms">HotReloading</span>
+        <span class="arch-mod" data-tip="Tracks which files are being watched and their reload status">HotReloadState</span>
+        <span class="arch-mod" data-tip="Watches your project tree for .fs/.fsx/.fsproj changes and routes them to the right handler">FileWatcher</span>
+      </div>
+    </div>
+
+    <div class="arch-connector">↓ depends on ↓</div>
+
+    <div class="arch-layer">
+      <div class="arch-layer-label">🖼️ Rendering — abstract grid → any backend</div>
+      <div class="arch-modules">
+        <span class="arch-mod" data-tip="Text editor state machine — cursor, selection, vi modes, undo/redo, completion popup, keybindings">Editor</span>
+        <span class="arch-mod" data-tip="Multi-line text buffer with validation — tracks cursor position, handles insertions and deletions">ValidatedBuffer</span>
+        <span class="arch-mod" data-tip="Defines render regions, editor actions, and the mapping from keystrokes to actions">RenderPipeline</span>
+        <span class="arch-mod" data-tip="The abstract Cell[,] grid that both TUI and Raylib render from — characters + colors + attributes">CellGrid</span>
+        <span class="arch-mod" data-tip="Primitive drawing operations: text, boxes, borders, fills — writes to the CellGrid">Draw</span>
+        <span class="arch-mod" data-tip="Splits the screen into panes — handles sizing, positioning, and focus tracking">Layout</span>
+        <span class="arch-mod" data-tip="Composes all panes into the final frame — output, editor, sessions, tests, diagnostics, status bar">Screen</span>
+        <span class="arch-mod" data-tip="Renders individual pane content — each pane type (output, editor, tests) has its own renderer">PaneRenderer</span>
+        <span class="arch-mod" data-tip="Color schemes and styling — abstract color IDs mapped to 256-color ANSI or Raylib RGB">Theme</span>
+        <span class="arch-mod" data-tip="Converts the Cell[,] grid into ANSI escape codes for terminal output">AnsiEmitter</span>
+      </div>
+    </div>
+
+    <div class="arch-connector">↓ depends on ↓</div>
+
+    <div class="arch-layer">
+      <div class="arch-layer-label">🔁 Elm Loop — the heart of state management</div>
+      <div class="arch-modules">
+        <span class="arch-mod" data-tip="Generic Elm-style event loop: dispatch message → pure update → render → execute side effects">ElmLoop</span>
+        <span class="arch-mod" data-tip="The main application: wires all features into a single update function with message routing">SageFsApp</span>
+        <span class="arch-mod" data-tip="Daemon-mode Elm loop — manages SSE subscriptions, HTTP endpoints, and multi-client broadcasting">ElmDaemon</span>
+        <span class="arch-mod" data-tip="The immutable model — all UI state, session data, test results, editor state in one record">AppState</span>
+      </div>
+    </div>
+
+    <div class="arch-connector">↓ depends on ↓</div>
+
+    <div class="arch-layer">
+      <div class="arch-layer-label">🧩 Middleware — FSI compatibility, computation expressions, directives</div>
+      <div class="arch-modules">
+        <span class="arch-mod" data-tip="Bridges gaps between SageFs's FSI and standard F# Interactive — handles quirks and edge cases">FsiCompatibility</span>
+        <span class="arch-mod" data-tip="Custom computation expressions for monadic workflows in the REPL">ComputationExpression</span>
+        <span class="arch-mod" data-tip="Processes #r, #load, #time and other FSI directives with SageFs-specific enhancements">Directives</span>
+        <span class="arch-mod" data-tip="Runs FSI evaluations without blocking the UI thread — keeps the TUI responsive during long evals">NonBlockingRun</span>
+      </div>
+    </div>
+
+    <div class="arch-connector">↓ depends on ↓</div>
+
+    <div class="arch-layer">
+      <div class="arch-layer-label">🚀 Orchestration — wiring it all together</div>
+      <div class="arch-modules">
+        <span class="arch-mod" data-tip="Creates and wires up all actor processes — sessions, workers, standby pool, watchdog, file watcher">ActorCreation</span>
+        <span class="arch-mod" data-tip="Model Context Protocol server — exposes eval, check, completions, tests, and exploration to AI agents">Mcp</span>
+        <span class="arch-mod" data-tip="Runs the background daemon: HTTP server, SSE broadcasting, MCP endpoint, session orchestration">DaemonMode</span>
+        <span class="arch-mod" data-tip="Terminal UI client that connects to a running daemon and renders the interactive TUI">TuiClient</span>
+        <span class="arch-mod" data-tip="Entry point — parses args, detects existing daemon, launches in the right mode">Program</span>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<!-- ─── STATS ─── -->
+<div class="stats-band reveal">
+  <div class="stats-grid">
+    <div class="stat">
+      <div class="stat-num">66</div>
+      <div class="stat-label">Core modules</div>
+    </div>
+    <div class="stat">
+      <div class="stat-num">~28K</div>
+      <div class="stat-label">Lines of production F#</div>
+    </div>
+    <div class="stat">
+      <div class="stat-num">2,691</div>
+      <div class="stat-label">Tests (SageFs)</div>
+    </div>
+    <div class="stat">
+      <div class="stat-num">5</div>
+      <div class="stat-label">Editor integrations</div>
+    </div>
+    <div class="stat">
+      <div class="stat-num">13</div>
+      <div class="stat-label">Days to build</div>
+    </div>
+    <div class="stat">
+      <div class="stat-num">490</div>
+      <div class="stat-label">Commits</div>
+    </div>
+  </div>
+</div>
+
+<!-- FOOTER -->
+<footer>
+  Built with F# and a single-minded refusal to wait for <code>dotnet build</code>.
+</footer>
+
+<script>
+// Intersection observer for reveal animations
+const observer = new IntersectionObserver((entries) => {
+  entries.forEach(entry => {
+    if (entry.isIntersecting) {
+      entry.target.classList.add('visible');
+    }
+  });
+}, { threshold: 0.1, rootMargin: '0px 0px -40px 0px' });
+
+document.querySelectorAll('.reveal').forEach(el => observer.observe(el));
+
+// Smooth scroll for nav links
+document.querySelectorAll('nav a').forEach(a => {
+  a.addEventListener('click', e => {
+    e.preventDefault();
+    const target = document.querySelector(a.getAttribute('href'));
+    if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+});
+</script>
+
+</body>
+</html>
