@@ -15,6 +15,7 @@ let snapshotsDir = Path.Combine(__SOURCE_DIRECTORY__, "snapshots")
 let verifyText name (value: string) =
   let settings = VerifySettings()
   settings.UseDirectory(snapshotsDir)
+  settings.DisableDiff()
   let normalized = value.Replace("\r\n", "\n")
   Verifier.Verify(name, normalized, "txt", settings).ToTask()
 

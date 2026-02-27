@@ -12,6 +12,7 @@ let snapshotsDir = Path.Combine(__SOURCE_DIRECTORY__, "snapshots")
 let verifyText name (value: string) =
   let settings = VerifySettings()
   settings.UseDirectory(snapshotsDir)
+  settings.DisableDiff()
   Verifier.Verify(name, value, "txt", settings).ToTask()
 
 [<Tests>]
