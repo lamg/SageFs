@@ -455,6 +455,25 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                 }) :> Task
             ) |> ignore
 
+            // GET /version — protocol version and server info
+            app.MapGet("/version", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+                task {
+                    let asm = typeof<SageFs.SageFsModel>.Assembly
+                    let v = asm.GetName().Version
+                    let infoVersion =
+                        asm.GetCustomAttributes(typeof<System.Reflection.AssemblyInformationalVersionAttribute>, false)
+                        |> Array.tryHead
+                        |> Option.map (fun a -> (a :?> System.Reflection.AssemblyInformationalVersionAttribute).InformationalVersion)
+                        |> Option.defaultValue (string v)
+                    do! jsonResponse ctx 200
+                          {| version = infoVersion
+                             protocolVersion = 1
+                             server = "sagefs"
+                             mcp = true
+                             sse = true |}
+                } :> Task
+            ) |> ignore
+
             // POST /diagnostics — fire-and-forget diagnostics check via proxy
             app.MapPost("/diagnostics", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
                 withErrorHandling ctx (fun () -> task {
