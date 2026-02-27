@@ -382,6 +382,10 @@ Already running at `http://localhost:37750/dashboard`. Submit code, view session
 | History browser | — | — | — | ✅ | — | ✅ |
 | Daemon lifecycle | ✅ | — | — | ✅ | ✅ | ✅ |
 | Status dashboard | — | — | ✅ | ✅ | — | ✅ |
+| Branch coverage gutters | — | — | — | — | — | ✅ |
+| Display density presets | — | — | — | — | — | ✅ |
+| SSE session scoping | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Filterable test panel | — | — | — | — | — | ✅ |
 
 > ¹ **n/a** — Feature is architecturally inapplicable. TUI/Raylib are REPL interfaces (eval file = just type code); CodeLens requires an editor with source buffers.
 > ² **—** — VS Extensibility SDK (out-of-process, v17.14) does not yet expose completion provider or theme color contribution APIs. The HTTP client (`GetCompletionsAsync`) is implemented; UI integration awaits SDK support.
@@ -405,7 +409,7 @@ Edit code → tests run automatically → results appear inline, in under 500ms.
 ○ let unusedHelper () = ()                  ← not reached by any test
 ```
 
-Gutter markers appear in your editor (VS Code, Neovim, TUI, Visual Studio) showing test status on test code and test reachability on production code. No configuration, no IL instrumentation, no separate test runner window.
+Gutter markers appear in your editor (VS Code, Neovim, TUI, Visual Studio) showing test status on test code and test reachability on production code. Lightweight FCS-based coverage requires no IL instrumentation; optional IL branch-level probes provide three-state branch coverage (fully covered, partially covered, uncovered) with shape+color gutter signs for accessibility.
 
 **How it's different from VS Enterprise:**
 
@@ -415,7 +419,7 @@ Gutter markers appear in your editor (VS Code, Neovim, TUI, Visual Studio) showi
 | **Scope** | Rebuilds all impacted projects | Scope-level: just the function being edited |
 | **Broken code** | Must compile to instrument | Tree-sitter works on broken/incomplete code |
 | **Frameworks** | MSTest, xUnit, NUnit only | + Expecto, TUnit, extensible provider model |
-| **Coverage method** | IL instrumentation (heavy) | FCS typed AST symbol graph (lightweight) |
+| **Coverage method** | IL instrumentation (heavy) | Dual: FCS typed AST symbol graph (lightweight) + IL branch-level probes |
 | **Editors** | Visual Studio only | VS Code, Neovim, TUI, GUI, Visual Studio, web dashboard |
 | **Cost** | ~$250/month | Free, MIT licensed |
 
@@ -514,7 +518,7 @@ Source files are watched automatically. The escalation chain: `.fs`/`.fsx` chang
 
 ### 🔀 Multi-Session
 
-Run multiple F# sessions simultaneously — different projects, different states. Each session is an **isolated worker sub-process** so one crash doesn't take down the others. Create, switch, and stop sessions from any frontend (VS Code, Neovim, REPL, dashboard, or MCP).
+Run multiple F# sessions simultaneously — different projects, different states. Each session is an **isolated worker sub-process** so one crash doesn't take down the others. Create, switch, and stop sessions from any frontend (VS Code, Neovim, REPL, dashboard, or MCP). SSE events are tagged with `SessionId` so each editor only renders results from its active session — no cross-talk between windows watching different projects.
 
 ### 🛡️ Supervised Mode (Watchdog)
 
