@@ -947,14 +947,14 @@ module CategoryDetection =
       TestCategory.Property
     elif labelLower |> List.exists (fun l -> l.Contains "architecture" || l.Contains "arch") then
       TestCategory.Architecture
-    elif referencedAssemblies |> Array.exists (fun a -> a.Contains "Microsoft.Playwright") then
-      TestCategory.Browser
-    elif referencedAssemblies |> Array.exists (fun a -> a.Contains "BenchmarkDotNet") then
-      TestCategory.Benchmark
     elif fullName.ToLowerInvariant().Contains "integration" then
       TestCategory.Integration
     elif fullName.ToLowerInvariant().Contains "browser" || fullName.ToLowerInvariant().Contains "e2e" then
       TestCategory.Browser
+    elif referencedAssemblies |> Array.exists (fun a -> a.Contains "Microsoft.Playwright") then
+      TestCategory.Browser
+    elif referencedAssemblies |> Array.exists (fun a -> a.Contains "BenchmarkDotNet") then
+      TestCategory.Benchmark
     else
       TestCategory.Unit
 

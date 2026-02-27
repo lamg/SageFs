@@ -332,7 +332,7 @@ module BuiltInExecutors =
                           Origin = TestOrigin.ReflectionOnly
                           Labels = []
                           Framework = "expecto"
-                          Category = TestCategory.Unit } ]
+                          Category = CategoryDetection.categorize [] fullName "expecto" [||] } ]
               |> List.toArray
             with _ -> [||]))
         |> Array.toList
