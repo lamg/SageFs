@@ -102,6 +102,33 @@ type TestCategory =
   | Architecture
   | Property
 
+/// Coverage health — whether all covering tests pass
+[<RequireQualifiedAccess>]
+type CoverageHealth =
+  | AllPassing
+  | SomeFailing
+
+/// Coverage status for a single line
+[<RequireQualifiedAccess>]
+type CoverageStatus =
+  | Covered of testCount: int * health: CoverageHealth
+  | NotCovered
+  | Pending
+
+/// Line-level coverage detail
+[<RequireQualifiedAccess>]
+type LineCoverage =
+  | FullyCovered
+  | PartiallyCovered of covered: int * total: int
+  | NotCovered
+
+/// Coverage annotation for a single source line
+type CoverageLineAnnotation = {
+  Line: int
+  Detail: CoverageStatus
+  CoveringTestIds: string array
+}
+
 /// SSE events from the SageFs server
 [<RequireQualifiedAccess>]
 type LiveTestEvent =

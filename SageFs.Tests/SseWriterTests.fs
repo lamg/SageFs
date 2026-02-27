@@ -7,6 +7,7 @@ open System.Text.Json.Serialization
 open Expecto
 open Expecto.Flip
 open SageFs.SseWriter
+open SageFs.Features.LiveTesting
 
 [<Tests>]
 let sseTests = testList "SSE Writer" [
@@ -223,5 +224,171 @@ let wireProtocolTests = testList "Wire Protocol Contract" [
       let freshEl = doc.RootElement.GetProperty("Freshness")
       freshEl.ValueKind |> Expect.equal "is object" JsonValueKind.Object
       freshEl.GetProperty("Case").GetString() |> Expect.equal "case" "StaleCodeEdited"
+  ]
+]
+
+/// Helper to serialize and parse in one call
+let private serAndParse<'T> (value: 'T) =
+  let json = JsonSerializer.Serialize<'T>(value, productionSseOpts)
+  JsonDocument.Parse(json).RootElement
+
+[<Tests>]
+let protocolSnapshotTests = testList "Protocol Snapshots" [
+
+  testList "RunPolicy wire format" [
+    testCase "OnEveryChange" <| fun () ->
+      (serAndParse RunPolicy.OnEveryChange).GetProperty("Case").GetString()
+      |> Expect.equal "case" "OnEveryChange"
+    testCase "OnSaveOnly" <| fun () ->
+      (serAndParse RunPolicy.OnSaveOnly).GetProperty("Case").GetString()
+      |> Expect.equal "case" "OnSaveOnly"
+    testCase "OnDemand" <| fun () ->
+      (serAndParse RunPolicy.OnDemand).GetProperty("Case").GetString()
+      |> Expect.equal "case" "OnDemand"
+    testCase "Disabled" <| fun () ->
+      (serAndParse RunPolicy.Disabled).GetProperty("Case").GetString()
+      |> Expect.equal "case" "Disabled"
+  ]
+
+  testList "TestCategory wire format" [
+    testCase "Unit" <| fun () ->
+      (serAndParse TestCategory.Unit).GetProperty("Case").GetString()
+      |> Expect.equal "case" "Unit"
+    testCase "Integration" <| fun () ->
+      (serAndParse TestCategory.Integration).GetProperty("Case").GetString()
+      |> Expect.equal "case" "Integration"
+    testCase "Custom with value" <| fun () ->
+      let root = serAndParse (TestCategory.Custom "smoke")
+      root.GetProperty("Case").GetString() |> Expect.equal "case" "Custom"
+      root.GetProperty("Fields").[0].GetString() |> Expect.equal "value" "smoke"
+  ]
+
+  testList "CoverageHealth wire format" [
+    testCase "AllPassing" <| fun () ->
+      (serAndParse CoverageHealth.AllPassing).GetProperty("Case").GetString()
+      |> Expect.equal "case" "AllPassing"
+    testCase "SomeFailing" <| fun () ->
+      (serAndParse CoverageHealth.SomeFailing).GetProperty("Case").GetString()
+      |> Expect.equal "case" "SomeFailing"
+  ]
+
+  testList "CoverageStatus wire format" [
+    testCase "Covered has testCount and health" <| fun () ->
+      let root = serAndParse (CoverageStatus.Covered(3, CoverageHealth.AllPassing))
+      root.GetProperty("Case").GetString() |> Expect.equal "case" "Covered"
+      root.GetProperty("Fields").GetArrayLength() |> Expect.equal "2 fields" 2
+      root.GetProperty("Fields").[0].GetInt32() |> Expect.equal "testCount" 3
+    testCase "NotCovered" <| fun () ->
+      (serAndParse CoverageStatus.NotCovered).GetProperty("Case").GetString()
+      |> Expect.equal "case" "NotCovered"
+    testCase "Pending" <| fun () ->
+      (serAndParse CoverageStatus.Pending).GetProperty("Case").GetString()
+      |> Expect.equal "case" "Pending"
+  ]
+
+  testList "LineCoverage wire format" [
+    testCase "FullyCovered" <| fun () ->
+      (serAndParse LineCoverage.FullyCovered).GetProperty("Case").GetString()
+      |> Expect.equal "case" "FullyCovered"
+    testCase "PartiallyCovered" <| fun () ->
+      let root = serAndParse (LineCoverage.PartiallyCovered(2, 5))
+      root.GetProperty("Case").GetString() |> Expect.equal "case" "PartiallyCovered"
+      root.GetProperty("Fields").[0].GetInt32() |> Expect.equal "covered" 2
+    testCase "NotCovered" <| fun () ->
+      (serAndParse LineCoverage.NotCovered).GetProperty("Case").GetString()
+      |> Expect.equal "case" "NotCovered"
+  ]
+
+  testList "FileAnnotations wire format" [
+    testCase "empty has all PascalCase fields" <| fun () ->
+      let fa : FileAnnotations = {
+        FilePath = "src/Foo.fs"; TestAnnotations = [||]
+        CoverageAnnotations = [||]; InlineFailures = [||]; CodeLenses = [||]
+      }
+      let root = serAndParse fa
+      let mutable v = Unchecked.defaultof<JsonElement>
+      root.TryGetProperty("FilePath", &v) |> Expect.isTrue "has FilePath"
+      root.TryGetProperty("CoverageAnnotations", &v) |> Expect.isTrue "has CoverageAnnotations"
+      root.TryGetProperty("CodeLenses", &v) |> Expect.isTrue "has CodeLenses"
+
+    testCase "CoverageLineAnnotation shape" <| fun () ->
+      let cla : CoverageLineAnnotation = {
+        Line = 42; Detail = CoverageStatus.Covered(2, CoverageHealth.AllPassing)
+        CoveringTestIds = [| TestId.TestId "t1"; TestId.TestId "t2" |]
+      }
+      let root = serAndParse cla
+      root.GetProperty("Line").GetInt32() |> Expect.equal "line" 42
+      root.GetProperty("Detail").GetProperty("Case").GetString() |> Expect.equal "detail" "Covered"
+      root.GetProperty("CoveringTestIds").GetArrayLength() |> Expect.equal "ids" 2
+
+    testCase "TestLineAnnotation shape" <| fun () ->
+      let tla : TestLineAnnotation = {
+        TestId = TestId.TestId "my-test"; DisplayName = "MyModule.should_work"
+        Line = 10; Status = TestRunStatus.Passed(System.TimeSpan.FromMilliseconds(50.0))
+        Freshness = AnnotationFreshness.Current
+      }
+      let root = serAndParse tla
+      root.GetProperty("Line").GetInt32() |> Expect.equal "line" 10
+      root.GetProperty("Status").GetProperty("Case").GetString() |> Expect.equal "status" "Passed"
+
+    testCase "TestCodeLens shape" <| fun () ->
+      let cl : TestCodeLens = {
+        TestId = TestId.TestId "my-test"; Label = "✓ Passed"
+        Line = 5; Command = CodeLensCommand.RunTest
+      }
+      let root = serAndParse cl
+      root.GetProperty("Label").GetString() |> Expect.stringContains "label" "Passed"
+      root.GetProperty("Command").GetProperty("Case").GetString() |> Expect.equal "cmd" "RunTest"
+  ]
+
+  testList "BatchCompletion wire format" [
+    testCase "Complete" <| fun () ->
+      (serAndParse (BatchCompletion.Complete(10, 10))).GetProperty("Case").GetString()
+      |> Expect.equal "case" "Complete"
+    testCase "Partial" <| fun () ->
+      (serAndParse (BatchCompletion.Partial(5, 10))).GetProperty("Case").GetString()
+      |> Expect.equal "case" "Partial"
+    testCase "Superseded" <| fun () ->
+      (serAndParse BatchCompletion.Superseded).GetProperty("Case").GetString()
+      |> Expect.equal "case" "Superseded"
+  ]
+
+  testList "PipelineTiming wire format" [
+    testCase "has all expected fields" <| fun () ->
+      let ts = System.TimeSpan.FromMilliseconds(10.0)
+      let pt : PipelineTiming = {
+        Depth = PipelineDepth.ThroughExecution(ts, ts, ts)
+        TotalTests = 100; AffectedTests = 12
+        Trigger = RunTrigger.Keystroke
+        Timestamp = System.DateTimeOffset(2026, 2, 27, 0, 0, 0, System.TimeSpan.Zero)
+      }
+      let root = serAndParse pt
+      let mutable v = Unchecked.defaultof<JsonElement>
+      root.TryGetProperty("TotalTests", &v) |> Expect.isTrue "has TotalTests"
+      root.GetProperty("TotalTests").GetInt32() |> Expect.equal "total" 100
+  ]
+
+  testList "AnnotationFreshness wire format" [
+    testCase "Current" <| fun () ->
+      (serAndParse AnnotationFreshness.Current).GetProperty("Case").GetString()
+      |> Expect.equal "case" "Current"
+    testCase "Stale" <| fun () ->
+      (serAndParse AnnotationFreshness.Stale).GetProperty("Case").GetString()
+      |> Expect.equal "case" "Stale"
+    testCase "Running" <| fun () ->
+      (serAndParse AnnotationFreshness.Running).GetProperty("Case").GetString()
+      |> Expect.equal "case" "Running"
+  ]
+
+  testList "CodeLensCommand wire format" [
+    testCase "RunTest" <| fun () ->
+      (serAndParse CodeLensCommand.RunTest).GetProperty("Case").GetString()
+      |> Expect.equal "case" "RunTest"
+    testCase "DebugTest" <| fun () ->
+      (serAndParse CodeLensCommand.DebugTest).GetProperty("Case").GetString()
+      |> Expect.equal "case" "DebugTest"
+    testCase "ShowHistory" <| fun () ->
+      (serAndParse CodeLensCommand.ShowHistory).GetProperty("Case").GetString()
+      |> Expect.equal "case" "ShowHistory"
   ]
 ]

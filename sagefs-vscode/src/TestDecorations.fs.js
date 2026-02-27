@@ -137,11 +137,14 @@ export function applyToEditor(state, editor) {
                             break;
                         }
                         case 5: {
-                            void (runningRanges.push(decorationRange(line, toText(printf("◌ Stale: %s"))(test.DisplayName))));
+                            let reason_1;
+                            const matchValue_3 = state.Freshness;
+                            reason_1 = ((matchValue_3.tag === 2) ? "generation mismatch" : ((matchValue_3.tag === 0) ? "needs re-run" : "code edited since last run"));
+                            void (runningRanges.push(decorationRange(line, toText(printf("◌ %s (stale — %s)"))(test.DisplayName)(reason_1))));
                             break;
                         }
                         case 6: {
-                            void (passedRanges.push(decorationRange(line, toText(printf("⊘ Disabled: %s"))(test.DisplayName))));
+                            void (passedRanges.push(decorationRange(line, toText(printf("⊘ %s (disabled by policy)"))(test.DisplayName))));
                             break;
                         }
                         default: {

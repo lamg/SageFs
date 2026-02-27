@@ -63,6 +63,7 @@ export function create() {
     return {
         onDidChangeCodeLenses: changeEmitter.event,
         provideCodeLenses: (doc, _token) => {
+            let matchValue_1, matchValue_2;
             const lenses = [];
             const enumerator = getEnumerator(VscLiveTestStateModule_testsForFile(doc.fileName, testState()));
             try {
@@ -78,6 +79,7 @@ export function create() {
                         const cmd = {
                             title: (result == null) ? "◆ Detected" : formatTitle(result),
                             command: "",
+                            tooltip: (result == null) ? t.DisplayName : ((matchValue_1 = result.Outcome, (matchValue_1.tag === 5) ? ((matchValue_2 = testState().Freshness, (matchValue_2.tag === 1) ? toText(printf("%s — stale: code edited since last run"))(t.DisplayName) : ((matchValue_2.tag === 2) ? toText(printf("%s — stale: generation mismatch (re-run needed)"))(t.DisplayName) : toText(printf("%s — stale"))(t.DisplayName)))) : ((matchValue_1.tag === 6) ? toText(printf("%s — disabled by policy"))(t.DisplayName) : t.DisplayName))),
                         };
                         void (lenses.push(newCodeLens(range, cmd)));
                     }
