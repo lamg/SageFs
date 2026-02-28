@@ -957,78 +957,80 @@ let activate (context: ExtensionContext) =
   hijackIonideSendToFsi context.subscriptions
 
   // Diagnostics SSE + session resume + live state updates
+  let connectToRunningDaemon (c: Client.Client) =
+    diagnosticsDisposable <- Some (Diag.start c.mcpPort dc)
+    // TestController for VS Code Test Explorer
+    let adapter = TestCtrl.create (fun () -> client)
+    testAdapter <- Some adapter
+    // Initialize inline test decorations
+    TestDeco.initialize ()
+    // Live testing listener — handles test_summary, test_results_batch, and state events
+    let mutable listenerRef: LiveTest.LiveTestingListener option = None
+    let listener = LiveTest.start c.mcpPort {
+      OnStateChange = fun changes ->
+        adapter.Refresh changes
+        let state = listenerRef |> Option.map (fun l -> l.State ()) |> Option.defaultValue VscLiveTestState.empty
+        TestDeco.applyToAllEditors state
+        TestDeco.applyCoverageToAllEditors state
+        TestDeco.updateDiagnostics state
+        TestLens.updateState state
+      OnSummaryUpdate = fun summary -> updateTestStatusBar summary
+      OnStatusRefresh = fun () -> refreshStatus ()
+      OnBindingsUpdate = fun _ -> ()
+      OnPipelineTraceUpdate = fun _ -> ()
+    }
+    listenerRef <- Some listener
+    liveTestListener <- Some listener
+    sseDisposable <- Some {
+      new Disposable with member _.dispose () = listener.Dispose(); null
+    }
+    // Re-apply decorations when editors change
+    context.subscriptions.Add (
+      Window.onDidChangeVisibleTextEditors (fun _editors ->
+        let state = listenerRef |> Option.map (fun l -> l.State ()) |> Option.defaultValue VscLiveTestState.empty
+        TestDeco.applyToAllEditors state
+        TestDeco.applyCoverageToAllEditors state))
+    context.subscriptions.Add (
+      Window.onDidChangeActiveTextEditor (fun _editor ->
+        let state = listenerRef |> Option.map (fun l -> l.State ()) |> Option.defaultValue VscLiveTestState.empty
+        TestDeco.applyToAllEditors state
+        TestDeco.applyCoverageToAllEditors state))
+    // Auto-discover and create session if none exists
+    Client.listSessions c
+    |> Promise.iter (fun sessions ->
+      match sessions with
+      | [||] ->
+        findProject ()
+        |> Promise.iter (fun projOpt ->
+          match projOpt with
+          | Some proj ->
+            let workDir = getWorkingDirectory () |> Option.defaultValue "."
+            Window.showInformationMessage
+              (sprintf "SageFs is running but has no session. Create one for %s?" proj)
+              [| "Create Session"; "Not Now" |]
+            |> Promise.iter (fun choice ->
+              match choice with
+              | Some "Create Session" ->
+                Client.createSession proj workDir c
+                |> Promise.iter (fun result ->
+                  match result with
+                  | Client.Succeeded _ ->
+                    Window.showInformationMessage (sprintf "SageFs: Session created for %s" proj) [||] |> ignore
+                  | Client.Failed _ -> ()
+                  refreshStatus ()
+                )
+              | _ -> ()
+            )
+          | None -> ()
+        )
+      | _ -> ()
+    )
+
   Client.isRunning c
   |> Promise.iter (fun running ->
     match running with
     | false -> ()
-    | true ->
-      diagnosticsDisposable <- Some (Diag.start c.mcpPort dc)
-      // TestController for VS Code Test Explorer
-      let adapter = TestCtrl.create (fun () -> client)
-      testAdapter <- Some adapter
-      // Initialize inline test decorations
-      TestDeco.initialize ()
-      // Live testing listener — handles test_summary, test_results_batch, and state events
-      let mutable listenerRef: LiveTest.LiveTestingListener option = None
-      let listener = LiveTest.start c.mcpPort {
-        OnStateChange = fun changes ->
-          adapter.Refresh changes
-          let state = listenerRef |> Option.map (fun l -> l.State ()) |> Option.defaultValue VscLiveTestState.empty
-          TestDeco.applyToAllEditors state
-          TestDeco.applyCoverageToAllEditors state
-          TestDeco.updateDiagnostics state
-          TestLens.updateState state
-        OnSummaryUpdate = fun summary -> updateTestStatusBar summary
-        OnStatusRefresh = fun () -> refreshStatus ()
-        OnBindingsUpdate = fun _ -> ()
-        OnPipelineTraceUpdate = fun _ -> ()
-      }
-      listenerRef <- Some listener
-      liveTestListener <- Some listener
-      sseDisposable <- Some {
-        new Disposable with member _.dispose () = listener.Dispose(); null
-      }
-      // Re-apply decorations when editors change
-      context.subscriptions.Add (
-        Window.onDidChangeVisibleTextEditors (fun _editors ->
-          let state = listenerRef |> Option.map (fun l -> l.State ()) |> Option.defaultValue VscLiveTestState.empty
-          TestDeco.applyToAllEditors state
-          TestDeco.applyCoverageToAllEditors state))
-      context.subscriptions.Add (
-        Window.onDidChangeActiveTextEditor (fun _editor ->
-          let state = listenerRef |> Option.map (fun l -> l.State ()) |> Option.defaultValue VscLiveTestState.empty
-          TestDeco.applyToAllEditors state
-          TestDeco.applyCoverageToAllEditors state))
-      // Auto-discover and create session if none exists
-      Client.listSessions c
-      |> Promise.iter (fun sessions ->
-        match sessions with
-        | [||] ->
-          findProject ()
-          |> Promise.iter (fun projOpt ->
-            match projOpt with
-            | Some proj ->
-              let workDir = getWorkingDirectory () |> Option.defaultValue "."
-              Window.showInformationMessage
-                (sprintf "SageFs is running but has no session. Create one for %s?" proj)
-                [| "Create Session"; "Not Now" |]
-              |> Promise.iter (fun choice ->
-                match choice with
-                | Some "Create Session" ->
-                  Client.createSession proj workDir c
-                  |> Promise.iter (fun result ->
-                    match result with
-                    | Client.Succeeded _ ->
-                      Window.showInformationMessage (sprintf "SageFs: Session created for %s" proj) [||] |> ignore
-                    | Client.Failed _ -> ()
-                    refreshStatus ()
-                  )
-                | _ -> ()
-              )
-            | None -> ()
-          )
-        | _ -> ()
-      )
+    | true -> connectToRunningDaemon c
   )
 
   // Config change listener
