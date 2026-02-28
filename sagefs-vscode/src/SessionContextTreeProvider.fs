@@ -136,7 +136,7 @@ let createProvider () =
   createObj [
     "onDidChangeTreeData" ==> emitter.event
     "getChildren" ==> fun (el: obj) ->
-      let elOpt = if isNull el then None else Some el
+      let elOpt = tryOfObj el
       getChildren elOpt
     "getTreeItem" ==> getTreeItem
   ]

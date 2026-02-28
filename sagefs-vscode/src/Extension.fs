@@ -243,9 +243,9 @@ let rec startDaemon () =
           out.appendLine (sprintf "[SageFs] process exited (code %d)" code)
         )
         let stderr = procStderr proc
-        if not (isNull stderr) then onData stderr (fun chunk -> out.appendLine chunk)
+        stderr |> tryOfObj |> Option.iter (fun s -> onData s (fun chunk -> out.appendLine chunk))
         let stdout = procStdout proc
-        if not (isNull stdout) then onData stdout (fun chunk -> out.appendLine chunk)
+        stdout |> tryOfObj |> Option.iter (fun s -> onData s (fun chunk -> out.appendLine chunk))
         unref proc
         daemonProcess <- Some proc
         let sb = getStatusBar ()
