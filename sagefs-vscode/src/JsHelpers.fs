@@ -105,3 +105,11 @@ let subscribeSse (url: string) (onData: obj -> unit) : Disposable = jsNative
   return { dispose: () => { if (req) req.destroy(); } };
 })()""")>]
 let subscribeTypedSse (url: string) (onEvent: string -> obj -> unit) : Disposable = jsNative
+
+// ── Timer helpers ───────────────────────────────────────────────────────
+
+[<Emit("setInterval($0, $1)")>]
+let jsSetInterval (fn: unit -> unit) (ms: int) : obj = jsNative
+
+[<Emit("clearInterval($0)")>]
+let jsClearInterval (id: obj) : unit = jsNative

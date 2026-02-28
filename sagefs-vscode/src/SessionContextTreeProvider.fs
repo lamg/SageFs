@@ -3,6 +3,7 @@ module SageFs.Vscode.SessionContextTreeProvider
 open Fable.Core
 open Fable.Core.JsInterop
 open Vscode
+open SageFs.Vscode.JsHelpers
 
 module Client = SageFs.Vscode.SageFsClient
 
@@ -13,12 +14,6 @@ let mutable currentSessionId: string option = None
 let mutable cachedContext: Client.WarmupContextInfo option = None
 let mutable refreshEmitter: EventEmitter<obj> option = None
 let mutable autoRefreshTimer: obj option = None
-
-[<Emit("setInterval($0, $1)")>]
-let jsSetInterval (fn: unit -> unit) (ms: int) : obj = jsNative
-
-[<Emit("clearInterval($0)")>]
-let jsClearInterval (handle: obj) : unit = jsNative
 
 // ── Tree item builders ───────────────────────────────────────────
 

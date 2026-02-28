@@ -3,6 +3,7 @@ module SageFs.Vscode.HotReloadTreeProvider
 open Fable.Core
 open Fable.Core.JsInterop
 open Vscode
+open SageFs.Vscode.JsHelpers
 
 module Client = SageFs.Vscode.SageFsClient
 
@@ -22,12 +23,6 @@ let mutable cachedFiles: Client.HotReloadFile array = [||]
 let mutable refreshEmitter: EventEmitter<obj> option = None
 let mutable treeView: TreeView<obj> option = None
 let mutable autoRefreshTimer: obj option = None
-
-[<Emit("setInterval($0, $1)")>]
-let jsSetInterval (fn: unit -> unit) (ms: int) : obj = jsNative
-
-[<Emit("clearInterval($0)")>]
-let jsClearInterval (handle: obj) : unit = jsNative
 
 // ── Path helpers ─────────────────────────────────────────────────
 

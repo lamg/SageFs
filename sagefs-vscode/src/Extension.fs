@@ -3,6 +3,7 @@ module SageFs.Vscode.Extension
 open Fable.Core
 open Fable.Core.JsInterop
 open Vscode
+open SageFs.Vscode.JsHelpers
 
 module Client = SageFs.Vscode.SageFsClient
 module Diag = SageFs.Vscode.DiagnosticsListener
@@ -65,12 +66,6 @@ let onProcError (proc: obj) (handler: string -> unit) : unit = jsNative
 
 [<Emit("$0.on('exit', function(code, signal) { $1(code == null ? -1 : code, signal == null ? '' : signal) })")>]
 let onProcExit (proc: obj) (handler: int -> string -> unit) : unit = jsNative
-
-[<Emit("setInterval($0, $1)")>]
-let setInterval (fn: unit -> unit) (ms: int) : obj = jsNative
-
-[<Emit("clearInterval($0)")>]
-let clearInterval (id: obj) : unit = jsNative
 
 [<Emit("setTimeout($0, $1)")>]
 let setTimeout (fn: unit -> unit) (ms: int) : obj = jsNative
@@ -269,13 +264,13 @@ let rec startDaemon () =
         let mutable attempts = 0
         let mutable intervalId: obj option = None
         let id =
-          setInterval (fun () ->
+          jsSetInterval (fun () ->
             attempts <- attempts + 1
             sb.text <- sprintf "$(loading~spin) SageFs starting... (%ds)" (attempts * 2)
             Client.isRunning c
             |> Promise.iter (fun ready ->
               if ready then
-                intervalId |> Option.iter clearInterval
+                intervalId |> Option.iter jsClearInterval
                 out.appendLine "SageFs daemon is ready."
                 Window.showInformationMessage "SageFs daemon started." [||] |> ignore
                 match diagnosticCollection with
@@ -285,7 +280,7 @@ let rec startDaemon () =
                 | None -> ()
                 refreshStatus ()
               elif attempts > 60 then
-                intervalId |> Option.iter clearInterval
+                intervalId |> Option.iter jsClearInterval
                 out.appendLine "Timed out waiting for SageFs daemon after 120s."
                 Window.showErrorMessage "SageFs daemon failed to start after 120s." [||] |> ignore
                 sb.text <- "$(error) SageFs: offline"
@@ -997,9 +992,9 @@ let activate (context: ExtensionContext) =
 
   // Status polling
   refreshStatus ()
-  let statusInterval = setInterval refreshStatus 5000
+  let statusInterval = jsSetInterval refreshStatus 5000
   context.subscriptions.Add (
-    { new Disposable with member _.dispose () = clearInterval statusInterval; null }
+    { new Disposable with member _.dispose () = jsClearInterval statusInterval; null }
   )
 
   // Auto-start (silently — no prompt dialog)
