@@ -152,7 +152,7 @@ let refresh () =
       match refreshEmitter with
       | Some e -> e.fire null
       | None -> ()
-    } |> ignore
+    } |> promiseIgnore
   | _ ->
     cachedContext <- None
     match refreshEmitter with

@@ -145,7 +145,7 @@ let refresh () =
       match refreshEmitter with
       | Some e -> e.fire null
       | None -> ()
-    } |> ignore
+    } |> promiseIgnore
   | _ ->
     cachedFiles <- [||]
     match refreshEmitter with
@@ -182,7 +182,7 @@ let register (ctx: ExtensionContext) =
         promise {
           let! _ = Client.toggleHotReload sid path c
           refresh ()
-        } |> ignore
+        } |> promiseIgnore
       | _ -> ()
     )
   ctx.subscriptions.Add toggleCmd
@@ -195,7 +195,7 @@ let register (ctx: ExtensionContext) =
         promise {
           let! _ = Client.watchAllHotReload sid c
           refresh ()
-        } |> ignore
+        } |> promiseIgnore
       | _ -> ()
     )
   ctx.subscriptions.Add watchAllCmd
@@ -208,7 +208,7 @@ let register (ctx: ExtensionContext) =
         promise {
           let! _ = Client.unwatchAllHotReload sid c
           refresh ()
-        } |> ignore
+        } |> promiseIgnore
       | _ -> ()
     )
   ctx.subscriptions.Add unwatchAllCmd
@@ -237,7 +237,7 @@ let register (ctx: ExtensionContext) =
             let! _ = Client.watchDirectoryHotReload sid dir c
             ()
           refresh ()
-        } |> ignore
+        } |> promiseIgnore
       | _ -> ()
     )
   ctx.subscriptions.Add toggleDirCmd
