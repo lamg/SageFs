@@ -15,6 +15,7 @@ module TestCtrl = SageFs.Vscode.TestControllerAdapter
 module TypeExpl = SageFs.Vscode.TypeExplorerProvider
 module TestDeco = SageFs.Vscode.TestDecorations
 module TestLens = SageFs.Vscode.TestCodeLensProvider
+module InlineDeco = SageFs.Vscode.InlineDecorations
 
 open SageFs.Vscode.LiveTestingTypes
 
@@ -30,7 +31,6 @@ let mutable testStatusBarItem: StatusBarItem option = None
 let mutable diagnosticsDisposable: Disposable option = None
 let mutable sseDisposable: Disposable option = None
 let mutable diagnosticCollection: DiagnosticCollection option = None
-let mutable blockDecorations: Map<int, TextEditorDecorationType> = Map.empty
 let mutable activeSessionId: string option = None
 let mutable liveTestListener: LiveTest.LiveTestingListener option = None
 let mutable testAdapter: TestCtrl.TestAdapter option = None
@@ -137,119 +137,14 @@ let getCodeBlock (editor: TextEditor) =
   let range = newRange startLine 0 endLine (int (doc.lineAt(float endLine).text.Length))
   doc.getTextRange range
 
-// ── Decorations ────────────────────────────────────────────────
+// ── Inline decorations (delegated to InlineDecorations module) ──
 
-let mutable staleDecorations: Map<int, TextEditorDecorationType> = Map.empty
-
-let clearBlockDecoration (line: int) =
-  match Map.tryFind line blockDecorations with
-  | Some deco ->
-    deco.dispose () |> ignore
-    blockDecorations <- Map.remove line blockDecorations
-  | None -> ()
-  match Map.tryFind line staleDecorations with
-  | Some deco ->
-    deco.dispose () |> ignore
-    staleDecorations <- Map.remove line staleDecorations
-  | None -> ()
-
-let clearAllDecorations () =
-  blockDecorations |> Map.iter (fun _ deco -> deco.dispose () |> ignore)
-  blockDecorations <- Map.empty
-  staleDecorations |> Map.iter (fun _ deco -> deco.dispose () |> ignore)
-  staleDecorations <- Map.empty
-
-let markDecorationsStale (editor: TextEditor) =
-  // Replace fresh decorations with dimmed stale versions
-  let lines = blockDecorations |> Map.toList |> List.map fst
-  for line in lines do
-    match Map.tryFind line blockDecorations with
-    | Some deco ->
-      deco.dispose () |> ignore
-      blockDecorations <- Map.remove line blockDecorations
-      // Skip if already stale
-      if not (Map.containsKey line staleDecorations) then
-        let staleOpts = createObj [
-          "after" ==> createObj [
-            "contentText" ==> "  // ⏸ stale"
-            "color" ==> newThemeColor "sagefs.staleForeground"
-            "fontStyle" ==> "italic"
-          ]
-        ]
-        let staleDeco = Window.createTextEditorDecorationType staleOpts
-        let lineText = editor.document.lineAt(float line).text
-        let endCol = lineText.Length
-        let range = newRange line endCol line endCol
-        editor.setDecorations(staleDeco, ResizeArray [| box range |])
-        staleDecorations <- Map.add line staleDeco staleDecorations
-    | None -> ()
-
-[<Emit("performance.now()")>]
-let performanceNow () : float = jsNative
-
-let formatDuration (ms: float) =
-  if ms < 1000.0 then sprintf "%dms" (int ms)
-  else sprintf "%.1fs" (ms / 1000.0)
-
-let showInlineResult (editor: TextEditor) (text: string) (durationMs: float option) =
-  let trimmed = text.Trim()
-  if trimmed = "" then () else
-  let line =
-    if editor.selection.isEmpty then int editor.selection.active.line
-    else int editor.selection.``end``.line
-  clearBlockDecoration line
-  let lines = trimmed.Split('\n')
-  let firstLine = if lines.Length > 0 then lines.[0] else ""
-  let durSuffix =
-    match durationMs with
-    | Some ms -> sprintf "  %s" (formatDuration ms)
-    | None -> ""
-  let contentText =
-    if lines.Length <= 1 then
-      sprintf "  // → %s%s" firstLine durSuffix
-    else
-      let summary =
-        if lines.Length <= 4 then lines |> String.concat "  │  "
-        else sprintf "%s  │  ... (%d lines)" firstLine lines.Length
-      sprintf "  // → %s%s" summary durSuffix
-  let opts = createObj [
-    "after" ==> createObj [
-      "contentText" ==> contentText
-      "color" ==> newThemeColor "sagefs.successForeground"
-      "fontStyle" ==> "italic"
-    ]
-  ]
-  let deco = Window.createTextEditorDecorationType opts
-  let lineText = editor.document.lineAt(float line).text
-  let endCol = lineText.Length
-  let range = newRange line endCol line endCol
-  editor.setDecorations(deco, ResizeArray [| box range |])
-  blockDecorations <- Map.add line deco blockDecorations
-  setTimeout (fun () -> clearBlockDecoration line) 30000 |> ignore
-
-let showInlineDiagnostic (editor: TextEditor) (text: string) =
-  let firstLine =
-    let parts = text.Split('\n')
-    if parts.Length > 0 then parts.[0].Trim() else ""
-  if firstLine = "" then () else
-  let line =
-    if editor.selection.isEmpty then int editor.selection.active.line
-    else int editor.selection.``end``.line
-  clearBlockDecoration line
-  let opts = createObj [
-    "after" ==> createObj [
-      "contentText" ==> sprintf "  // ❌ %s" firstLine
-      "color" ==> newThemeColor "sagefs.errorForeground"
-      "fontStyle" ==> "italic"
-    ]
-  ]
-  let deco = Window.createTextEditorDecorationType opts
-  let lineText = editor.document.lineAt(float line).text
-  let endCol = lineText.Length
-  let range = newRange line endCol line endCol
-  editor.setDecorations(deco, ResizeArray [| box range |])
-  blockDecorations <- Map.add line deco blockDecorations
-  setTimeout (fun () -> clearBlockDecoration line) 30000 |> ignore
+let showInlineResult = InlineDeco.showInlineResult
+let showInlineDiagnostic = InlineDeco.showInlineDiagnostic
+let markDecorationsStale = InlineDeco.markDecorationsStale
+let clearAllDecorations = InlineDeco.clearAllDecorations
+let performanceNow = InlineDeco.performanceNow
+let formatDuration = InlineDeco.formatDuration
 
 // ── Status ─────────────────────────────────────────────────────
 
@@ -813,7 +708,7 @@ let activate (context: ExtensionContext) =
   let docChangeSub = Workspace.onDidChangeTextDocument (fun _evt ->
     match Window.getActiveTextEditor () with
     | Some ed when ed.document.fileName.EndsWith(".fs") || ed.document.fileName.EndsWith(".fsx") ->
-      if not (Map.isEmpty blockDecorations) then
+      if not (Map.isEmpty InlineDeco.blockDecorations) then
         markDecorationsStale ed
     | _ -> ())
   context.subscriptions.Add docChangeSub
