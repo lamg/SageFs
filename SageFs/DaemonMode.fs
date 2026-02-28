@@ -10,6 +10,32 @@ open Microsoft.AspNetCore.Http
 open Microsoft.Extensions.Logging
 open OpenTelemetry.Logs
 
+/// Send a message through the session proxy with railway error handling.
+/// Centralizes error recovery for IO, pipe, and disposed exceptions.
+let proxyToSession
+  (getProxy: string -> Threading.Tasks.Task<(WorkerProtocol.WorkerMessage -> Async<WorkerProtocol.WorkerResponse>) option>)
+  (sid: string)
+  (msg: WorkerProtocol.WorkerMessage)
+  : Threading.Tasks.Task<Result<WorkerProtocol.WorkerResponse, string>> = task {
+  match sid with
+  | null | "" -> return Error "No session selected"
+  | _ ->
+    try
+      let! proxy = getProxy sid
+      match proxy with
+      | Some send ->
+        let! resp = send msg |> Async.StartAsTask
+        return Ok resp
+      | None -> return Error "No active session"
+    with
+    | :? IO.IOException as ex ->
+      return Error (sprintf "Session pipe broken — %s" ex.Message)
+    | :? AggregateException as ae when (ae.InnerException :? IO.IOException) ->
+      return Error (sprintf "Session pipe broken — %s" ae.InnerException.Message)
+    | :? ObjectDisposedException as ex ->
+      return Error (sprintf "Session pipe closed — %s" ex.Message)
+}
+
 /// Run SageFs as a headless daemon.
 /// MCP server + SessionManager + Dashboard — all frontends are clients.
 /// Every session is a worker sub-process managed by SessionManager.
@@ -83,7 +109,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
   use cts = new CancellationTokenSource()
 
   // Create state-changed event for SSE subscribers (created early so SessionManager can trigger it)
-  let stateChangedEvent = Event<string>()
+  let stateChangedEvent = Event<DaemonStateChange>()
   let mutable lastStateJson = ""
   let mutable lastLoggedOutputCount = 0
   let mutable lastLoggedDiagCount = 0
@@ -97,10 +123,10 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
   // Returns (mailbox, readSnapshot) — CQRS: reads go to snapshot, writes to mailbox
   let sessionManager, readSnapshot =
     SessionManager.create cts.Token
-      (fun () -> stateChangedEvent.Trigger """{"standbyProgress":true}""")
+      (fun () -> stateChangedEvent.Trigger StandbyProgress)
       (fun sid tests providers -> onTestDiscoveryCallback sid tests providers)
       (fun sid maps -> onInstrumentationMapsCallback sid maps)
-      (fun sid -> stateChangedEvent.Trigger (sprintf """{"sessionReady":"%s"}""" sid))
+      (fun sid -> stateChangedEvent.Trigger (SessionReady sid))
 
   // Active session ID — REMOVED: No global shared session.
   // Each client (MCP, TUI, dashboard) tracks its own session independently.
@@ -360,7 +386,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
               |> Option.defaultValue ""
             eprintfn "\x1b[36m[elm]\x1b[0m output=%d diags=%d | %s"
               outputCount diagCount latest
-          stateChangedEvent.Trigger json
+          stateChangedEvent.Trigger (ModelChanged json)
       with _ -> ())
 
   // Create a diagnostics-changed event (aggregated from workers)
@@ -519,27 +545,34 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
   // Dashboard status helpers — read from CQRS snapshot (non-blocking, lock-free).
   // Only proxy calls (eval stats) go async; state/workingDir/statusMsg/workerBaseUrl use snapshot.
   let tryGetSessionSnapshotAsync (sid: string) = task {
-    try
-      let! managed =
-        sessionManager.PostAndAsyncReply(fun reply ->
-          SessionManager.SessionCommand.GetSession(sid, reply))
-        |> Async.StartAsTask
-      match managed with
-      | Some s ->
-        let! resp =
-          s.Proxy (WorkerProtocol.WorkerMessage.GetStatus "dash")
-          |> Async.StartAsTask
-        match resp with
-        | WorkerProtocol.WorkerResponse.StatusResult(_, snap) -> return Some snap
-        | _ -> return None
-      | None -> return None
-    with
-    | :? System.IO.IOException -> return None
-    | :? System.AggregateException as ae
-        when (ae.InnerException :? System.IO.IOException) -> return None
-    | :? System.ObjectDisposedException -> return None
-    | :? System.AggregateException as ae
-        when (ae.InnerException :? System.ObjectDisposedException) -> return None
+    // CQRS: bypass MailboxProcessor — use snapshot + direct HTTP to worker
+    let snapshot = readSnapshot()
+    match SessionManager.QuerySnapshot.tryGetSession sid snapshot, Map.tryFind sid snapshot.WorkerBaseUrls with
+    | Some _, Some baseUrl when baseUrl.Length > 0 ->
+      try
+        let client = new Net.Http.HttpClient()
+        client.Timeout <- TimeSpan.FromSeconds(2.0)
+        let! resp = client.GetStringAsync(sprintf "%s/status?replyId=dash" baseUrl)
+        use doc = Text.Json.JsonDocument.Parse(resp)
+        let root = doc.RootElement
+        let snap : WorkerProtocol.WorkerStatusSnapshot = {
+          Status =
+            match root.GetProperty("status").GetString() with
+            | "Ready" -> WorkerProtocol.SessionStatus.Ready
+            | "Evaluating" -> WorkerProtocol.SessionStatus.Evaluating
+            | _ -> WorkerProtocol.SessionStatus.Starting
+          StatusMessage =
+            match root.TryGetProperty("statusMessage") with
+            | true, v when v.ValueKind <> Text.Json.JsonValueKind.Null -> Some (v.GetString())
+            | _ -> None
+          EvalCount = root.GetProperty("evalCount").GetInt32()
+          AvgDurationMs = root.GetProperty("avgDurationMs").GetInt64()
+          MinDurationMs = root.GetProperty("minDurationMs").GetInt64()
+          MaxDurationMs = root.GetProperty("maxDurationMs").GetInt64()
+        }
+        return Some snap
+      with _ -> return None
+    | _ -> return None
   }
 
   let getSessionState (sid: string) =
@@ -586,10 +619,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
   }
 
   let getStatusMsg (sid: string) =
-    let snapshot = readSnapshot()
-    match Map.tryFind sid snapshot.WarmupProgress with
-    | Some progress -> Some progress
-    | None -> None
+    readSnapshot().WarmupProgress |> Map.tryFind sid
 
   let getWorkerBaseUrl (sid: string) =
     let snapshot = readSnapshot()
@@ -612,71 +642,38 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
       (fun () -> elmRuntime.GetRegions() |> Some)
       (Some stateChangedEvent.Publish)
       (fun sid code -> task {
-        if String.IsNullOrEmpty(sid) then return "Error: No session selected"
-        else
-        try
-          let! proxy = sessionOps.GetProxy sid
-          match proxy with
-          | Some send ->
-            let! resp =
-              send (WorkerProtocol.WorkerMessage.EvalCode(code, "dash"))
-              |> Async.StartAsTask
-            let result =
-              match resp with
-              | WorkerProtocol.WorkerResponse.EvalResult(_, Ok msg, diags, _) ->
-                elmRuntime.Dispatch (SageFsMsg.Event (
-                  SageFsEvent.EvalCompleted (sid, msg, diags |> List.map WorkerProtocol.WorkerDiagnostic.toDiagnostic)))
-                msg
-              | WorkerProtocol.WorkerResponse.EvalResult(_, Error err, _, _) ->
-                let msg = SageFsError.describe err
-                elmRuntime.Dispatch (SageFsMsg.Event (
-                  SageFsEvent.EvalFailed (sid, msg)))
-                sprintf "Error: %s" msg
-              | other -> sprintf "Unexpected: %A" other
-            return result
-          | None -> return "Error: No active session"
-        with
-        | :? System.IO.IOException as ex ->
-          return sprintf "Error: Session pipe broken — %s" ex.Message
-        | :? System.AggregateException as ae
-            when (ae.InnerException :? System.IO.IOException) ->
-          return sprintf "Error: Session pipe broken — %s" ae.InnerException.Message
-        | :? System.ObjectDisposedException as ex ->
-          return sprintf "Error: Session pipe closed — %s" ex.Message
-      })
-      (fun sid -> task {
-        if String.IsNullOrEmpty(sid) then return "Error: No session selected"
-        else
-        try
-          let! proxy = sessionOps.GetProxy sid
-          match proxy with
-          | Some send ->
-            let! resp =
-              send (WorkerProtocol.WorkerMessage.ResetSession "dash")
-              |> Async.StartAsTask
-            return
-              match resp with
-              | WorkerProtocol.WorkerResponse.ResetResult(_, Ok ()) -> "Session reset successfully"
-              | WorkerProtocol.WorkerResponse.ResetResult(_, Error e) -> sprintf "Reset failed: %A" e
-              | other -> sprintf "Unexpected: %A" other
-          | None -> return "Error: No active session"
-        with
-        | :? System.IO.IOException as ex ->
-          return sprintf "Error: Session pipe broken — %s" ex.Message
-        | :? System.AggregateException as ae
-            when (ae.InnerException :? System.IO.IOException) ->
-          return sprintf "Error: Session pipe broken — %s" ae.InnerException.Message
-        | :? System.ObjectDisposedException as ex ->
-          return sprintf "Error: Session pipe closed — %s" ex.Message
-      })
-      (fun sid -> task {
-        if String.IsNullOrEmpty(sid) then return "Error: No session selected"
-        else
-        let! result = sessionOps.RestartSession sid true
+        let! result = proxyToSession sessionOps.GetProxy sid (WorkerProtocol.WorkerMessage.EvalCode(code, "dash"))
         return
           match result with
-          | Ok msg -> sprintf "Hard reset: %s" msg
-          | Error e -> sprintf "Hard reset failed: %s" (SageFsError.describe e)
+          | Ok (WorkerProtocol.WorkerResponse.EvalResult(_, Ok msg, diags, _)) ->
+            elmRuntime.Dispatch (SageFsMsg.Event (
+              SageFsEvent.EvalCompleted (sid, msg, diags |> List.map WorkerProtocol.WorkerDiagnostic.toDiagnostic)))
+            msg
+          | Ok (WorkerProtocol.WorkerResponse.EvalResult(_, Error err, _, _)) ->
+            let msg = SageFsError.describe err
+            elmRuntime.Dispatch (SageFsMsg.Event (SageFsEvent.EvalFailed (sid, msg)))
+            sprintf "Error: %s" msg
+          | Ok other -> sprintf "Unexpected: %A" other
+          | Error e -> sprintf "Error: %s" e
+      })
+      (fun sid -> task {
+        let! result = proxyToSession sessionOps.GetProxy sid (WorkerProtocol.WorkerMessage.ResetSession "dash")
+        return
+          match result with
+          | Ok (WorkerProtocol.WorkerResponse.ResetResult(_, Ok ())) -> "Session reset successfully"
+          | Ok (WorkerProtocol.WorkerResponse.ResetResult(_, Error e)) -> sprintf "Reset failed: %A" e
+          | Ok other -> sprintf "Unexpected: %A" other
+          | Error e -> sprintf "Error: %s" e
+      })
+      (fun sid -> task {
+        match sid with
+        | null | "" -> return "Error: No session selected"
+        | _ ->
+          let! result = sessionOps.RestartSession sid true
+          return
+            match result with
+            | Ok msg -> sprintf "Hard reset: %s" msg
+            | Error e -> sprintf "Hard reset failed: %s" (SageFsError.describe e)
       })
       // Session switch handler — update Elm model's active session
       (Some (fun (sid: string) -> task {
@@ -858,7 +855,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
           do! ctx.Response.WriteAsync(respBody)
           // Trigger SSE push so Dashboard updates hot-reload panel
           if resp.IsSuccessStatusCode then
-            stateChangedEvent.Trigger """{"hotReloadChanged":true}"""
+            stateChangedEvent.Trigger HotReloadChanged
         with ex ->
           ctx.Response.StatusCode <- 502
           do! ctx.Response.WriteAsJsonAsync({| error = ex.Message |})
@@ -992,10 +989,8 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
   liveTestWatcher.EnableRaisingEvents <- false
   liveTestWatcher.Dispose()
   try
-    let! activeSessions =
-      sessionManager.PostAndAsyncReply(fun reply ->
-        SessionManager.SessionCommand.ListSessions reply)
-      |> Async.StartAsTask
+    // CQRS: read from snapshot (non-blocking), then command to stop
+    let activeSessions = SessionManager.QuerySnapshot.allSessions (readSnapshot())
     for info in activeSessions do
       let! _ = persistence.AppendEvents daemonStreamId [
         Features.Events.SageFsEvent.DaemonSessionStopped

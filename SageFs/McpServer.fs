@@ -263,7 +263,7 @@ let mkContext (persistence: SageFs.EventStore.EventPersistence) (diagnosticsChan
   { Persistence = persistence; DiagnosticsChanged = diagnosticsChanged; StateChanged = stateChanged; SessionOps = sessionOps; SessionMap = System.Collections.Concurrent.ConcurrentDictionary<string, string>(); McpPort = mcpPort; Dispatch = dispatch; GetElmModel = getElmModel; GetElmRegions = getElmRegions; GetWarmupContext = getWarmupContext }
 
 // Start MCP server in background
-let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.T>) (stateChanged: IEvent<string> option) (persistence: SageFs.EventStore.EventPersistence) (port: int) (sessionOps: SageFs.SessionManagementOps) (elmRuntime: SageFs.ElmRuntime<SageFs.SageFsModel, SageFs.SageFsMsg, SageFs.RenderRegion> option) (getWarmupContext: (string -> System.Threading.Tasks.Task<SageFs.WarmupContext option>) option) (getHotReloadState: (string -> System.Threading.Tasks.Task<string list option>) option) =
+let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.T>) (stateChanged: IEvent<DaemonStateChange> option) (persistence: SageFs.EventStore.EventPersistence) (port: int) (sessionOps: SageFs.SessionManagementOps) (elmRuntime: SageFs.ElmRuntime<SageFs.SageFsModel, SageFs.SageFsMsg, SageFs.RenderRegion> option) (getWarmupContext: (string -> System.Threading.Tasks.Task<SageFs.WarmupContext option>) option) (getHotReloadState: (string -> System.Threading.Tasks.Task<string list option>) option) =
     task {
         try
             let dispatch = elmRuntime |> Option.map (fun r -> r.Dispatch)
@@ -345,8 +345,21 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                 logging.AddFilter("SageFs", LogLevel.Information) |> ignore
             ) |> ignore
             
+            // Map typed DU events to strings for McpContext (SageFs.Core can't reference DaemonStateChange)
+            let stateChangedStr : IEvent<string> option =
+              stateChanged |> Option.map (fun evt ->
+                let bridge = Event<string>()
+                evt.Add(fun change ->
+                  let json =
+                    match change with
+                    | DaemonStateChange.ModelChanged j -> j
+                    | DaemonStateChange.SessionReady sid -> sprintf """{"sessionReady":"%s"}""" sid
+                    | DaemonStateChange.HotReloadChanged -> """{"hotReloadChanged":true}"""
+                    | DaemonStateChange.StandbyProgress -> """{"standbyProgress":true}"""
+                  bridge.Trigger(json))
+                bridge.Publish)
             // Create MCP context
-            let mcpContext = (mkContext persistence diagnosticsChanged stateChanged sessionOps port dispatch getElmModel getElmRegions getWarmupContext)
+            let mcpContext = (mkContext persistence diagnosticsChanged stateChangedStr sessionOps port dispatch getElmModel getElmRegions getWarmupContext)
             
             // Register MCP services
             builder.Services.AddSingleton<McpContext>(mcpContext) |> ignore
@@ -406,7 +419,7 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
             app.MapMcp() |> ignore
 
             // Shared context — constructed once
-            let mcpContext = mkContext persistence diagnosticsChanged stateChanged sessionOps port dispatch getElmModel getElmRegions getWarmupContext
+            let mcpContext = mkContext persistence diagnosticsChanged stateChangedStr sessionOps port dispatch getElmModel getElmRegions getWarmupContext
 
             // ── Helpers: eliminate repeated getElmModel/activeId patterns ──
 
@@ -673,8 +686,9 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
             // Detect session ready and push warmup context snapshot
             match stateChanged, getHotReloadState, getElmModel, getWarmupContext with
             | Some evt, Some getHr, Some getModel, Some getCtx ->
-              evt.Subscribe(fun json ->
-                if json.Contains("hotReloadChanged") then
+              evt.Subscribe(fun change ->
+                match change with
+                | DaemonStateChange.HotReloadChanged ->
                   task {
                     try
                       let activeId =
@@ -691,11 +705,9 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                         | None -> ()
                     with _ -> ()
                   } |> ignore
-                elif json.Contains("sessionReady") then
+                | DaemonStateChange.SessionReady sid ->
                   task {
                     try
-                      let doc = System.Text.Json.JsonDocument.Parse(json)
-                      let sid = doc.RootElement.GetProperty("sessionReady").GetString()
                       if sid.Length > 0 then
                         let! ctxOpt = getCtx sid
                         match ctxOpt with
@@ -713,7 +725,8 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                           sessionEventBroadcast.Trigger(hrFrame)
                         | None -> ()
                     with _ -> ()
-                  } |> ignore) |> ignore
+                  } |> ignore
+                | _ -> ()) |> ignore
             | _ -> ()
 
             // GET /events — SSE stream of Elm state changes
@@ -736,8 +749,14 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                                 |> fun t -> t.ContinueWith(fun (_: Task) -> ctx.Response.Body.FlushAsync()) |> ignore
                             with _ -> ()), null, 15000, 15000)
                         use _heartbeat = heartbeat
-                        use _sub = evt.Subscribe(fun json ->
+                        use _sub = evt.Subscribe(fun change ->
                             try
+                                let json =
+                                  match change with
+                                  | DaemonStateChange.ModelChanged j -> j
+                                  | DaemonStateChange.SessionReady sid -> sprintf """{"sessionReady":"%s"}""" sid
+                                  | DaemonStateChange.HotReloadChanged -> """{"hotReloadChanged":true}"""
+                                  | DaemonStateChange.StandbyProgress -> """{"standbyProgress":true}"""
                                 let sseEvent = SageFs.SseWriter.formatSseEvent "state" json
                                 let bytes = System.Text.Encoding.UTF8.GetBytes(sseEvent)
                                 ctx.Response.Body.WriteAsync(bytes).AsTask()
@@ -1201,166 +1220,169 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
             let mutable lastPipelineTraceJson = ""
             let _stateSub =
               stateChanged |> Option.map (fun evt ->
-                evt.Subscribe(fun json ->
-                  try
-                    let doc = JsonDocument.Parse(json)
-                    let root = doc.RootElement
-                    let diagCount =
-                      match root.TryGetProperty("diagCount") with
-                      | true, v -> v.GetInt32()
-                      | _ -> 0
-                    let outputCount =
-                      match root.TryGetProperty("outputCount") with
-                      | true, v -> v.GetInt32()
-                      | _ -> 0
+                evt.Subscribe(fun change ->
+                  match change with
+                  | DaemonStateChange.ModelChanged json ->
+                    try
+                      let doc = JsonDocument.Parse(json)
+                      let root = doc.RootElement
+                      let diagCount =
+                        match root.TryGetProperty("diagCount") with
+                        | true, v -> v.GetInt32()
+                        | _ -> 0
+                      let outputCount =
+                        match root.TryGetProperty("outputCount") with
+                        | true, v -> v.GetInt32()
+                        | _ -> 0
 
-                    // Always push latest state (Replace dedup keeps only the newest)
-                    serverTracker.AccumulateEvent(
-                      PushEvent.StateChanged(outputCount, diagCount))
+                      // Always push latest state (Replace dedup keeps only the newest)
+                      serverTracker.AccumulateEvent(
+                        PushEvent.StateChanged(outputCount, diagCount))
 
-                    // When diagCount changes, extract actual diagnostics from Elm model
-                    match diagCount <> lastDiagCount with
-                    | false -> ()
-                    | true ->
-                      lastDiagCount <- diagCount
-                      withModel (fun model ->
-                        let errors =
-                          model.Diagnostics
-                          |> Map.toList
-                          |> List.collect (fun (_, diags) ->
-                            diags
-                            |> List.filter (fun d ->
-                              d.Severity = DiagnosticSeverity.Error)
-                            |> List.map (fun d ->
-                              ("fsi", d.Range.StartLine, d.Message)))
-                        serverTracker.AccumulateEvent(
-                          PushEvent.DiagnosticsChanged errors))
-
-                    // CQRS: Parse bindings from eval output and push via SSE
-                    match outputCount <> lastOutputCount with
-                    | false -> ()
-                    | true ->
-                      match outputCount < lastOutputCount with
-                      | true -> fsiBindings <- Map.empty
-                      | false -> ()
-                      lastOutputCount <- outputCount
-                      withModel (fun model ->
-                        let sid = activeSessionId () |> Option.defaultValue ""
-                        let newBindings =
-                          model.RecentOutput
-                          |> List.filter (fun o -> o.Kind = SageFs.OutputKind.Result && o.SessionId = sid)
-                          |> List.rev
-                          |> List.map (fun o -> o.Text)
-                          |> String.concat "\n"
-                          |> SageFs.SseWriter.parseBindingsFromOutput
-                          |> SageFs.SseWriter.accumulateBindings Map.empty
-                        match newBindings <> fsiBindings with
-                        | false -> ()
-                        | true ->
-                          fsiBindings <- newBindings
-                          fsiBindings
-                          |> Map.values |> Array.ofSeq
-                          |> SageFs.SseWriter.formatBindingsSnapshotEvent sseJsonOpts (Some sid)
-                          |> testEventBroadcast.Trigger)
-
-                    // CQRS: Push pipeline trace when it changes
-                    withModel (fun model ->
-                      let sid = activeSessionId ()
-                      let lt = model.LiveTesting
-                      let traceJson =
-                        try
-                          let sidStr = sid |> Option.defaultValue ""
-                          let summary =
-                            SageFs.Features.LiveTesting.TestSummary.fromStatuses
-                              lt.TestState.Activation
-                              (LiveTestState.statusEntriesForSession sidStr lt.TestState
-                               |> Array.map (fun e -> e.Status))
-                          System.Text.Json.JsonSerializer.Serialize(
-                            {| Enabled = lt.TestState.Activation = LiveTestingActivation.Active
-                               IsRunning = TestRunPhase.isAnyRunning lt.TestState.RunPhases
-                               Summary = {| Total = summary.Total; Passed = summary.Passed; Failed = summary.Failed
-                                            Running = summary.Running; Stale = summary.Stale |} |}, sseJsonOpts)
-                        with _ -> ""
-                      match traceJson.Length > 0 && traceJson <> lastPipelineTraceJson with
+                      // When diagCount changes, extract actual diagnostics from Elm model
+                      match diagCount <> lastDiagCount with
                       | false -> ()
                       | true ->
-                        lastPipelineTraceJson <- traceJson
-                        testEventBroadcast.Trigger(
-                          SageFs.SseWriter.formatPipelineTraceEvent sid traceJson))
-
-                    // Push live testing summary when test state changes
-                    withModel (fun model ->
-                      let lt = model.LiveTesting.TestState
-                      let activeId =
-                        activeSessionId () |> Option.defaultValue ""
-                      let sessionEntries =
-                        LiveTestState.statusEntriesForSession activeId lt
-                      match sessionEntries.Length > 0 || TestRunPhase.isAnyRunning lt.RunPhases with
-                      | false -> ()
-                      | true ->
-                        let s = SageFs.Features.LiveTesting.TestSummary.fromStatuses
-                                  lt.Activation (sessionEntries |> Array.map (fun e -> e.Status))
-                        serverTracker.AccumulateEvent(
-                          PushEvent.TestSummaryChanged s)
-                        // Throttle SSE broadcasts to avoid flooding clients during streaming
-                        let now = System.Diagnostics.Stopwatch.GetTimestamp()
-                        let elapsedMs = (now - lastTestSsePush) * 1000L / System.Diagnostics.Stopwatch.Frequency
-                        let isRunComplete = not (TestRunPhase.isAnyRunning lt.RunPhases)
-                        match elapsedMs >= testSseThrottleMs || isRunComplete with
-                        | false -> ()
-                        | true ->
-                          lastTestSsePush <- now
-                          testEventBroadcast.Trigger(
-                            SageFs.SseWriter.formatTestSummaryEvent sseJsonOpts (Some activeId) s)
-                          let freshness =
-                            match lt.RunPhases |> Map.exists (fun _ p -> match p with SageFs.Features.LiveTesting.TestRunPhase.RunningButEdited _ -> true | _ -> false) with
-                            | true -> SageFs.Features.LiveTesting.ResultFreshness.StaleCodeEdited
-                            | false -> SageFs.Features.LiveTesting.ResultFreshness.Fresh
-                          let payload =
-                            let completion =
-                              SageFs.Features.LiveTesting.TestResultsBatchPayload.deriveCompletion
-                                freshness lt.DiscoveredTests.Length sessionEntries.Length
-                            SageFs.Features.LiveTesting.TestResultsBatchPayload.create
-                              lt.LastGeneration freshness completion lt.Activation sessionEntries
+                        lastDiagCount <- diagCount
+                        withModel (fun model ->
+                          let errors =
+                            model.Diagnostics
+                            |> Map.toList
+                            |> List.collect (fun (_, diags) ->
+                              diags
+                              |> List.filter (fun d ->
+                                d.Severity = DiagnosticSeverity.Error)
+                              |> List.map (fun d ->
+                                ("fsi", d.Range.StartLine, d.Message)))
                           serverTracker.AccumulateEvent(
-                            PushEvent.TestResultsBatch payload)
-                          testEventBroadcast.Trigger(
-                            SageFs.SseWriter.formatTestResultsBatchEvent sseJsonOpts (Some activeId) payload)
-                          // Compute and push FileAnnotations for each file with source-mapped tests
-                          let files =
-                            sessionEntries
-                            |> Array.choose (fun e ->
-                              match e.Origin with
-                              | TestOrigin.SourceMapped (f, _) -> Some f
-                              | _ -> None)
-                            |> Array.distinct
-                          // Also push for production code files with coverage from instrumentation maps
-                          let instrFiles =
-                            model.LiveTesting.InstrumentationMaps
-                            |> Map.values |> Seq.collect id
-                            |> Seq.collect (fun m -> m.Slots |> Array.map (fun s -> s.File))
-                            |> Seq.distinct
-                            |> Seq.filter (fun f -> not (Array.contains f files))
-                            |> Array.ofSeq
-                          let allFiles = Array.append files instrFiles
-                          for file in allFiles do
-                            let fa = SageFs.Features.LiveTesting.FileAnnotations.projectWithCoverage file model.LiveTesting
-                            match fa.TestAnnotations.Length > 0 || fa.CodeLenses.Length > 0 || fa.CoverageAnnotations.Length > 0 with
-                            | true ->
-                              testEventBroadcast.Trigger(
-                                SageFs.SseWriter.formatFileAnnotationsEvent sseJsonOpts (Some activeId) fa)
-                            | false -> ())
+                            PushEvent.DiagnosticsChanged errors))
 
-                    match serverTracker.Count > 0 with
-                    | false -> ()
-                    | true ->
-                      let data =
-                        {| event = "state_changed"
-                           diagCount = diagCount
-                           outputCount = outputCount |}
-                      serverTracker.NotifyLogAsync(
-                        LoggingLevel.Info, "sagefs.state", data) |> ignore
-                  with _ -> ()))
+                      // CQRS: Parse bindings from eval output and push via SSE
+                      match outputCount <> lastOutputCount with
+                      | false -> ()
+                      | true ->
+                        match outputCount < lastOutputCount with
+                        | true -> fsiBindings <- Map.empty
+                        | false -> ()
+                        lastOutputCount <- outputCount
+                        withModel (fun model ->
+                          let sid = activeSessionId () |> Option.defaultValue ""
+                          let newBindings =
+                            model.RecentOutput
+                            |> List.filter (fun o -> o.Kind = SageFs.OutputKind.Result && o.SessionId = sid)
+                            |> List.rev
+                            |> List.map (fun o -> o.Text)
+                            |> String.concat "\n"
+                            |> SageFs.SseWriter.parseBindingsFromOutput
+                            |> SageFs.SseWriter.accumulateBindings Map.empty
+                          match newBindings <> fsiBindings with
+                          | false -> ()
+                          | true ->
+                            fsiBindings <- newBindings
+                            fsiBindings
+                            |> Map.values |> Array.ofSeq
+                            |> SageFs.SseWriter.formatBindingsSnapshotEvent sseJsonOpts (Some sid)
+                            |> testEventBroadcast.Trigger)
+
+                      // CQRS: Push pipeline trace when it changes
+                      withModel (fun model ->
+                        let sid = activeSessionId ()
+                        let lt = model.LiveTesting
+                        let traceJson =
+                          try
+                            let sidStr = sid |> Option.defaultValue ""
+                            let summary =
+                              SageFs.Features.LiveTesting.TestSummary.fromStatuses
+                                lt.TestState.Activation
+                                (LiveTestState.statusEntriesForSession sidStr lt.TestState
+                                 |> Array.map (fun e -> e.Status))
+                            System.Text.Json.JsonSerializer.Serialize(
+                              {| Enabled = lt.TestState.Activation = LiveTestingActivation.Active
+                                 IsRunning = TestRunPhase.isAnyRunning lt.TestState.RunPhases
+                                 Summary = {| Total = summary.Total; Passed = summary.Passed; Failed = summary.Failed
+                                              Running = summary.Running; Stale = summary.Stale |} |}, sseJsonOpts)
+                          with _ -> ""
+                        match traceJson.Length > 0 && traceJson <> lastPipelineTraceJson with
+                        | false -> ()
+                        | true ->
+                          lastPipelineTraceJson <- traceJson
+                          testEventBroadcast.Trigger(
+                            SageFs.SseWriter.formatPipelineTraceEvent sid traceJson))
+
+                      // Push live testing summary when test state changes
+                      withModel (fun model ->
+                        let lt = model.LiveTesting.TestState
+                        let activeId =
+                          activeSessionId () |> Option.defaultValue ""
+                        let sessionEntries =
+                          LiveTestState.statusEntriesForSession activeId lt
+                        match sessionEntries.Length > 0 || TestRunPhase.isAnyRunning lt.RunPhases with
+                        | false -> ()
+                        | true ->
+                          let s = SageFs.Features.LiveTesting.TestSummary.fromStatuses
+                                    lt.Activation (sessionEntries |> Array.map (fun e -> e.Status))
+                          serverTracker.AccumulateEvent(
+                            PushEvent.TestSummaryChanged s)
+                          // Throttle SSE broadcasts to avoid flooding clients during streaming
+                          let now = System.Diagnostics.Stopwatch.GetTimestamp()
+                          let elapsedMs = (now - lastTestSsePush) * 1000L / System.Diagnostics.Stopwatch.Frequency
+                          let isRunComplete = not (TestRunPhase.isAnyRunning lt.RunPhases)
+                          match elapsedMs >= testSseThrottleMs || isRunComplete with
+                          | false -> ()
+                          | true ->
+                            lastTestSsePush <- now
+                            testEventBroadcast.Trigger(
+                              SageFs.SseWriter.formatTestSummaryEvent sseJsonOpts (Some activeId) s)
+                            let freshness =
+                              match lt.RunPhases |> Map.exists (fun _ p -> match p with SageFs.Features.LiveTesting.TestRunPhase.RunningButEdited _ -> true | _ -> false) with
+                              | true -> SageFs.Features.LiveTesting.ResultFreshness.StaleCodeEdited
+                              | false -> SageFs.Features.LiveTesting.ResultFreshness.Fresh
+                            let payload =
+                              let completion =
+                                SageFs.Features.LiveTesting.TestResultsBatchPayload.deriveCompletion
+                                  freshness lt.DiscoveredTests.Length sessionEntries.Length
+                              SageFs.Features.LiveTesting.TestResultsBatchPayload.create
+                                lt.LastGeneration freshness completion lt.Activation sessionEntries
+                            serverTracker.AccumulateEvent(
+                              PushEvent.TestResultsBatch payload)
+                            testEventBroadcast.Trigger(
+                              SageFs.SseWriter.formatTestResultsBatchEvent sseJsonOpts (Some activeId) payload)
+                            // Compute and push FileAnnotations for each file with source-mapped tests
+                            let files =
+                              sessionEntries
+                              |> Array.choose (fun e ->
+                                match e.Origin with
+                                | TestOrigin.SourceMapped (f, _) -> Some f
+                                | _ -> None)
+                              |> Array.distinct
+                            // Also push for production code files with coverage from instrumentation maps
+                            let instrFiles =
+                              model.LiveTesting.InstrumentationMaps
+                              |> Map.values |> Seq.collect id
+                              |> Seq.collect (fun m -> m.Slots |> Array.map (fun s -> s.File))
+                              |> Seq.distinct
+                              |> Seq.filter (fun f -> not (Array.contains f files))
+                              |> Array.ofSeq
+                            let allFiles = Array.append files instrFiles
+                            for file in allFiles do
+                              let fa = SageFs.Features.LiveTesting.FileAnnotations.projectWithCoverage file model.LiveTesting
+                              match fa.TestAnnotations.Length > 0 || fa.CodeLenses.Length > 0 || fa.CoverageAnnotations.Length > 0 with
+                              | true ->
+                                testEventBroadcast.Trigger(
+                                  SageFs.SseWriter.formatFileAnnotationsEvent sseJsonOpts (Some activeId) fa)
+                              | false -> ())
+
+                      match serverTracker.Count > 0 with
+                      | false -> ()
+                      | true ->
+                        let data =
+                          {| event = "state_changed"
+                             diagCount = diagCount
+                             outputCount = outputCount |}
+                        serverTracker.NotifyLogAsync(
+                          LoggingLevel.Info, "sagefs.state", data) |> ignore
+                    with _ -> ()
+                  | _ -> ()))
 
             // Get logger from DI for structured logging (flows to OTEL)
             let logger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("SageFs.McpServer")
