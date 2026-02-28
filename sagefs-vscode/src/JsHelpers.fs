@@ -64,3 +64,6 @@ let jsSetInterval (fn: unit -> unit) (ms: int) : obj = jsNative
 
 [<Emit("clearInterval($0)")>]
 let jsClearInterval (id: obj) : unit = jsNative
+
+[<Emit("clearTimeout($0)")>]
+let jsClearTimeout (id: obj) : unit = jsNative

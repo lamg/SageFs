@@ -66,6 +66,7 @@ let onProcExit (proc: obj) (handler: int -> string -> unit) : unit = jsNative
 
 let mutable daemonProcess: obj option = None
 let mutable isStarting = false
+let mutable onDaemonReady: (Client.Client -> unit) option = None
 
 // ── Helpers ────────────────────────────────────────────────────
 
@@ -196,7 +197,7 @@ let refreshStatus () =
     with _ ->
       sb.text <- "$(circle-slash) SageFs: offline"
       sb.show ()
-  } |> ignore
+  } |> promiseIgnore
 
 // ── Daemon Lifecycle ───────────────────────────────────────────
 
@@ -264,11 +265,7 @@ let rec startDaemon () =
                 isStarting <- false
                 out.appendLine "SageFs daemon is ready."
                 Window.showInformationMessage "SageFs daemon started." [||] |> ignore
-                match diagnosticCollection with
-                | Some dc ->
-                  diagnosticsDisposable |> Option.iter (fun d -> d.dispose () |> ignore)
-                  diagnosticsDisposable <- Some (Diag.start c.mcpPort dc)
-                | None -> ()
+                onDaemonReady |> Option.iter (fun f -> f c)
                 refreshStatus ()
               elif attempts > 60 then
                 intervalId |> Option.iter jsClearInterval
@@ -835,6 +832,16 @@ let activate (context: ExtensionContext) =
 
   // Diagnostics SSE + session resume + live state updates
   let connectToRunningDaemon (c: Client.Client) =
+    // Dispose existing connection resources for idempotency
+    sseDisposable |> Option.iter (fun d -> d.dispose () |> ignore)
+    sseDisposable <- None
+    liveTestListener |> Option.iter (fun l -> l.Dispose ())
+    liveTestListener <- None
+    testAdapter |> Option.iter (fun a -> a.Dispose ())
+    testAdapter <- None
+    diagnosticsDisposable |> Option.iter (fun d -> d.dispose () |> ignore)
+    diagnosticsDisposable <- None
+    // Establish fresh connection resources
     diagnosticsDisposable <- Some (Diag.start c.mcpPort dc)
     // TestController for VS Code Test Explorer
     let adapter = TestCtrl.create (fun () -> client)
@@ -900,6 +907,9 @@ let activate (context: ExtensionContext) =
         )
       | _ -> ()
     )
+
+  // Wire up daemon-ready callback for startDaemon lifecycle
+  onDaemonReady <- Some connectToRunningDaemon
 
   Client.isRunning c
   |> Promise.iter (fun running ->

@@ -11,6 +11,8 @@ module Client = SageFs.Vscode.SageFsClient
 
 // ── TestController lifecycle ─────────────────────────────────
 
+let [<Literal>] private EndRunDebounceMs = 500
+
 type TestAdapter = {
   Controller: TestController
   Refresh: VscStateChange list -> unit
@@ -27,7 +29,7 @@ let create
   let mutable endRunTimer: obj option = None
 
   let endActiveRun () =
-    endRunTimer |> Option.iter jsClearInterval
+    endRunTimer |> Option.iter jsClearTimeout
     endRunTimer <- None
     activeRun |> Option.iter (fun r -> r.``end`` ())
     activeRun <- None
@@ -41,10 +43,10 @@ let create
       activeRun <- Some run
       run
 
-  /// Schedule run.end() after 500ms debounce — resets on each new batch.
+  /// Schedule run.end() after debounce — resets on each new batch.
   let scheduleEndRun () =
-    endRunTimer |> Option.iter jsClearInterval
-    endRunTimer <- Some (jsSetTimeout (fun () -> endActiveRun ()) 500)
+    endRunTimer |> Option.iter jsClearTimeout
+    endRunTimer <- Some (jsSetTimeout (fun () -> endActiveRun ()) EndRunDebounceMs)
 
   let ensureTestItem (info: VscTestInfo) =
     let id = VscTestId.value info.Id
