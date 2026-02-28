@@ -6,10 +6,17 @@ open Fable.Core.JsInterop
 [<Emit("console.warn('[SageFs]', $0, $1)")>]
 let logWarn (context: string) (err: obj) : unit = jsNative
 
-type EvalResult =
-  { success: bool
-    result: string option
-    error: string option }
+/// Command result: either succeeded with optional message, or failed with error.
+/// Replaces the old { success; result; error } bag-of-optionals — illegal states now unrepresentable.
+type ApiOutcome =
+  | Succeeded of message: string option
+  | Failed of error: string
+
+module ApiOutcome =
+  let message = function Succeeded m -> m | Failed _ -> None
+  let error = function Failed e -> Some e | Succeeded _ -> None
+  let isOk = function Succeeded _ -> true | Failed _ -> false
+  let messageOrDefault fallback = function Succeeded (Some m) -> m | Succeeded None -> fallback | Failed e -> e
 
 type SageFsStatus =
   { connected: bool
@@ -93,6 +100,35 @@ let dashHttpGet (c: Client) (path: string) (timeout: int) =
 let dashHttpPost (c: Client) (path: string) (body: string) (timeout: int) =
   httpPostRaw (sprintf "http://localhost:%d%s" c.dashboardPort path) body timeout
 
+// ── JSON field helpers (null-safe boundary parsing) ──────────────────────
+let tryField<'T> (name: string) (obj: obj) : 'T option =
+  let v = obj?(name)
+  match isNull v with
+  | true -> None
+  | false -> Some (unbox<'T> v)
+
+let parseOutcome (parsed: obj) : ApiOutcome =
+  let success = tryField<bool> "success" parsed |> Option.defaultValue false
+  match success with
+  | true ->
+    tryField<string> "message" parsed
+    |> Option.orElse (tryField<string> "result" parsed)
+    |> Succeeded
+  | false ->
+    tryField<string> "error" parsed
+    |> Option.defaultValue "Unknown error"
+    |> Failed
+
+/// POST a command, parse the standard { success, message/result, error } response.
+let postCommand (c: Client) (path: string) (body: string) (timeout: int) : JS.Promise<ApiOutcome> =
+  promise {
+    try
+      let! resp = httpPost c path body timeout
+      return jsonParse resp.body |> parseOutcome
+    with err ->
+      return Failed (string err)
+  }
+
 let isRunning (c: Client) =
   promise {
     try
@@ -106,78 +142,35 @@ let getStatus (c: Client) =
   promise {
     try
       let! resp = httpGet c "/health" 3000
-      if resp.statusCode <> 200 then
-        return { connected = true; healthy = Some false; status = Some "no session" }
-      else
+      match resp.statusCode with
+      | 200 ->
         let parsed = jsonParse resp.body
-        let h = parsed?healthy
-        let s = parsed?status
         return
           { connected = true
-            healthy = if isNull h then Some false else Some (unbox<bool> h)
-            status = if isNull s then None else Some (unbox<string> s) }
+            healthy = tryField<bool> "healthy" parsed |> Option.orElse (Some false)
+            status = tryField<string> "status" parsed }
+      | _ ->
+        return { connected = true; healthy = Some false; status = Some "no session" }
     with _ ->
       return { connected = false; healthy = None; status = None }
   }
 
 let evalCode (code: string) (workingDirectory: string option) (c: Client) =
-  promise {
-    let payload =
-      match workingDirectory with
-      | Some wd -> {| code = code; working_directory = wd |}
-      | None -> {| code = code; working_directory = "" |}
-    try
-      let! resp = httpPost c "/exec" (jsonStringify payload) 30000
-      let parsed = jsonParse resp.body
-      return
-        { success = parsed?success |> unbox<bool>
-          result = Some (parsed?result |> unbox<string>)
-          error =
-            let e = parsed?error
-            if isNull e then None else Some (unbox<string> e) }
-    with err ->
-      return { success = false; result = None; error = Some (string err) }
-  }
+  let wd = workingDirectory |> Option.defaultValue ""
+  postCommand c "/exec" (jsonStringify {| code = code; working_directory = wd |}) 30000
 
 let resetSession (c: Client) =
-  promise {
-    try
-      let! resp = httpPost c "/reset" "{}" 15000
-      let parsed = jsonParse resp.body
-      return
-        { success = parsed?success |> unbox<bool>
-          result =
-            let m = parsed?message
-            if isNull m then None else Some (unbox<string> m)
-          error =
-            let e = parsed?error
-            if isNull e then None else Some (unbox<string> e) }
-    with err ->
-      return { success = false; result = None; error = Some (string err) }
-  }
+  postCommand c "/reset" "{}" 15000
 
 let hardReset (rebuild: bool) (c: Client) =
-  promise {
-    try
-      let! resp = httpPost c "/hard-reset" (jsonStringify {| rebuild = rebuild |}) 60000
-      let parsed = jsonParse resp.body
-      return
-        { success = parsed?success |> unbox<bool>
-          result =
-            let m = parsed?message
-            if isNull m then None else Some (unbox<string> m)
-          error =
-            let e = parsed?error
-            if isNull e then None else Some (unbox<string> e) }
-    with err ->
-      return { success = false; result = None; error = Some (string err) }
-  }
+  postCommand c "/hard-reset" (jsonStringify {| rebuild = rebuild |}) 60000
 
 let listSessions (c: Client) =
   promise {
     try
       let! resp = httpGet c "/api/sessions" 5000
-      if resp.statusCode = 200 then
+      match resp.statusCode with
+      | 200 ->
         let parsed = jsonParse resp.body
         let sessions: obj array = parsed?sessions |> unbox
         return
@@ -186,13 +179,9 @@ let listSessions (c: Client) =
               name = None
               workingDirectory = s?workingDirectory |> unbox<string>
               status = s?status |> unbox<string>
-              projects =
-                let p = s?projects
-                if isNull p then [||] else unbox<string array> p
-              evalCount =
-                let e = s?evalCount
-                if isNull e then 0 else unbox<int> e })
-      else
+              projects = tryField<string array> "projects" s |> Option.defaultValue [||]
+              evalCount = tryField<int> "evalCount" s |> Option.defaultValue 0 })
+      | _ ->
         return [||]
     with ex ->
       logWarn "listSessions" ex
@@ -200,20 +189,7 @@ let listSessions (c: Client) =
   }
 
 let createSession (projects: string) (workingDirectory: string) (c: Client) =
-  promise {
-    try
-      let payload = {| projects = [| projects |]; workingDirectory = workingDirectory |}
-      let! resp = httpPost c "/api/sessions/create" (jsonStringify payload) 30000
-      let parsed = jsonParse resp.body
-      return
-        { success = parsed?success |> unbox<bool>
-          result = Some (parsed?message |> unbox<string>)
-          error =
-            let e = parsed?error
-            if isNull e then None else Some (unbox<string> e) }
-    with err ->
-      return { success = false; result = None; error = Some (string err) }
-  }
+  postCommand c "/api/sessions/create" (jsonStringify {| projects = [| projects |]; workingDirectory = workingDirectory |}) 30000
 
 let switchSession (sessionId: string) (c: Client) =
   promise {
@@ -243,14 +219,15 @@ let getSystemStatus (c: Client) =
   promise {
     try
       let! resp = httpGet c "/api/system/status" 3000
-      if resp.statusCode = 200 then
+      match resp.statusCode with
+      | 200 ->
         let parsed = jsonParse resp.body
         return
           Some
             { supervised = parsed?supervised |> unbox<bool>
               restartCount = parsed?restartCount |> unbox<int>
               version = parsed?version |> unbox<string> }
-      else
+      | _ ->
         return None
     with ex ->
       logWarn "getSystemStatus" ex
@@ -261,27 +238,25 @@ let getHotReloadState (sessionId: string) (c: Client) =
   promise {
     try
       let! resp = dashHttpGet c (sprintf "/api/sessions/%s/hotreload" sessionId) 5000
-      if resp.statusCode = 200 then
+      match resp.statusCode with
+      | 200 ->
         let parsed = jsonParse resp.body
         let rawFiles = parsed?files
-        if isNull rawFiles then
+        match isNull rawFiles with
+        | true ->
           return Some { files = [||]; watchedCount = 0 }
-        else
+        | false ->
           let files =
             rawFiles
             |> unbox<obj array>
             |> Array.choose (fun f ->
-              let p = f?path
-              if isNull p then None
-              else
-                Some
-                  { path = unbox<string> p
-                    watched =
-                      let w = f?watched
-                      if isNull w then false else unbox<bool> w })
-          let wc = parsed?watchedCount
-          return Some { files = files; watchedCount = if isNull wc then 0 else unbox<int> wc }
-      else
+              tryField<string> "path" f
+              |> Option.map (fun p ->
+                { path = p
+                  watched = tryField<bool> "watched" f |> Option.defaultValue false }))
+          let wc = tryField<int> "watchedCount" parsed |> Option.defaultValue 0
+          return Some { files = files; watchedCount = wc }
+      | _ ->
         return None
     with ex ->
       logWarn "getHotReloadState" ex
@@ -342,7 +317,8 @@ let getWarmupContext (sessionId: string) (c: Client) =
   promise {
     try
       let! resp = dashHttpGet c (sprintf "/api/sessions/%s/warmup-context" sessionId) 5000
-      if resp.statusCode = 200 then
+      match resp.statusCode with
+      | 200 ->
         let parsed = jsonParse resp.body
         let assemblies =
           parsed?AssembliesLoaded
@@ -370,7 +346,7 @@ let getWarmupContext (sessionId: string) (c: Client) =
               NamespacesOpened = opened
               FailedOpens = failed
               WarmupDurationMs = parsed?WarmupDurationMs |> unbox<int> }
-      else
+      | _ ->
         return None
     with ex ->
       logWarn "getWarmupContext" ex
@@ -390,7 +366,8 @@ let getCompletions (code: string) (cursorPosition: int) (workingDirectory: strin
            cursor_position = cursorPosition
            working_directory = workingDirectory |> Option.defaultValue "" |}
       let! resp = dashHttpPost c "/dashboard/completions" (jsonStringify payload) 10000
-      if resp.statusCode = 200 then
+      match resp.statusCode with
+      | 200 ->
         let parsed = jsonParse resp.body
         let items = parsed?completions |> unbox<obj array>
         return
@@ -399,7 +376,7 @@ let getCompletions (code: string) (cursorPosition: int) (workingDirectory: strin
             { label = item?label |> unbox<string>
               kind = item?kind |> unbox<string>
               insertText = item?insertText |> unbox<string> })
-      else
+      | _ ->
         return [||]
     with ex ->
       logWarn "getCompletions" ex
@@ -407,83 +384,24 @@ let getCompletions (code: string) (cursorPosition: int) (workingDirectory: strin
   }
 
 let runTests (pattern: string) (c: Client) =
-  promise {
-    try
-      let payload = {| pattern = pattern; category = "" |}
-      let! resp = httpPost c "/api/live-testing/run" (jsonStringify payload) 60000
-      let parsed = jsonParse resp.body
-      return
-        { success = parsed?success |> unbox<bool>
-          result =
-            let m = parsed?message
-            if isNull m then None else Some (unbox<string> m)
-          error =
-            let e = parsed?error
-            if isNull e then None else Some (unbox<string> e) }
-    with err ->
-      return { success = false; result = None; error = Some (string err) }
-  }
+  postCommand c "/api/live-testing/run" (jsonStringify {| pattern = pattern; category = "" |}) 60000
 
 let enableLiveTesting (c: Client) =
-  promise {
-    try
-      let! resp = httpPost c "/api/live-testing/enable" "{}" 5000
-      let parsed = jsonParse resp.body
-      return
-        { success = parsed?success |> unbox<bool>
-          result =
-            let m = parsed?message
-            if isNull m then None else Some (unbox<string> m)
-          error =
-            let e = parsed?error
-            if isNull e then None else Some (unbox<string> e) }
-    with err ->
-      return { success = false; result = None; error = Some (string err) }
-  }
+  postCommand c "/api/live-testing/enable" "{}" 5000
 
 let disableLiveTesting (c: Client) =
-  promise {
-    try
-      let! resp = httpPost c "/api/live-testing/disable" "{}" 5000
-      let parsed = jsonParse resp.body
-      return
-        { success = parsed?success |> unbox<bool>
-          result =
-            let m = parsed?message
-            if isNull m then None else Some (unbox<string> m)
-          error =
-            let e = parsed?error
-            if isNull e then None else Some (unbox<string> e) }
-    with err ->
-      return { success = false; result = None; error = Some (string err) }
-  }
+  postCommand c "/api/live-testing/disable" "{}" 5000
 
 let setRunPolicy (category: string) (policy: string) (c: Client) =
-  promise {
-    try
-      let payload = {| category = category; policy = policy |}
-      let! resp = httpPost c "/api/live-testing/policy" (jsonStringify payload) 5000
-      let parsed = jsonParse resp.body
-      return
-        { success = parsed?success |> unbox<bool>
-          result =
-            let m = parsed?message
-            if isNull m then None else Some (unbox<string> m)
-          error =
-            let e = parsed?error
-            if isNull e then None else Some (unbox<string> e) }
-    with err ->
-      return { success = false; result = None; error = Some (string err) }
-  }
+  postCommand c "/api/live-testing/policy" (jsonStringify {| category = category; policy = policy |}) 5000
 
 let explore(name: string) (c: Client) =
   promise {
     try
       let! resp = httpPost c "/api/explore" (jsonStringify {| name = name |}) 10000
-      if resp.statusCode = 200 then
-        return Some resp.body
-      else
-        return None
+      match resp.statusCode with
+      | 200 -> return Some resp.body
+      | _ -> return None
     with ex ->
       logWarn "explore" ex
       return None
@@ -493,10 +411,9 @@ let getRecentEvents (count: int) (c: Client) =
   promise {
     try
       let! resp = httpGet c (sprintf "/api/recent-events?count=%d" count) 10000
-      if resp.statusCode = 200 then
-        return Some resp.body
-      else
-        return None
+      match resp.statusCode with
+      | 200 -> return Some resp.body
+      | _ -> return None
     with ex ->
       logWarn "getRecentEvents" ex
       return None
@@ -506,52 +423,32 @@ let getDependencyGraph (symbol: string) (c: Client) =
   promise {
     try
       let path =
-        if symbol = "" then "/api/dependency-graph"
-        else sprintf "/api/dependency-graph?symbol=%s" (JS.encodeURIComponent symbol)
+        match symbol with
+        | "" -> "/api/dependency-graph"
+        | s -> sprintf "/api/dependency-graph?symbol=%s" (JS.encodeURIComponent s)
       let! resp = httpGet c path 10000
-      if resp.statusCode = 200 then
-        return Some resp.body
-      else
-        return None
+      match resp.statusCode with
+      | 200 -> return Some resp.body
+      | _ -> return None
     with ex ->
       logWarn "getDependencyGraph" ex
       return None
   }
 
 let cancelEval (c: Client) =
-  promise {
-    try
-      let! _resp = httpPost c "/api/cancel-eval" "{}" 5000
-      return { success = true; result = Some "Eval cancelled"; error = None }
-    with err ->
-      return { success = false; result = None; error = Some (string err) }
-  }
+  postCommand c "/api/cancel-eval" "{}" 5000
 
 let loadScript (filePath: string) (c: Client) =
   let code = sprintf "#load @\"%s\";;" filePath
-  promise {
-    try
-      let payload = {| code = code; working_directory = "" |}
-      let! resp = httpPost c "/exec" (jsonStringify payload) 30000
-      let parsed = jsonParse resp.body
-      return
-        { success = parsed?success |> unbox<bool>
-          result =
-            let r = parsed?result
-            if isNull r then None else Some (unbox<string> r)
-          error = None }
-    with err ->
-      return { success = false; result = None; error = Some (string err) }
-  }
+  postCommand c "/exec" (jsonStringify {| code = code; working_directory = "" |}) 30000
 
 let getPipelineTrace (c: Client) =
   promise {
     try
       let! resp = httpGet c "/api/live-testing/pipeline-trace" 5000
-      if resp.statusCode = 200 then
-        return Some resp.body
-      else
-        return None
+      match resp.statusCode with
+      | 200 -> return Some resp.body
+      | _ -> return None
     with ex ->
       logWarn "getPipelineTrace" ex
       return None

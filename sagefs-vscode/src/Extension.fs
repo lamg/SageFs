@@ -457,16 +457,13 @@ let evalSelection () =
                 let startTime = performanceNow ()
                 let! result = Client.evalCode code workDir c
                 let elapsed = performanceNow () - startTime
-                if not result.success then
-                  let errMsg =
-                    result.error
-                    |> Option.orElse result.result
-                    |> Option.defaultValue "Unknown error"
+                match result with
+                | Client.Failed errMsg ->
                   out.appendLine (sprintf "❌ Error:\n%s" errMsg)
                   out.show true
                   showInlineDiagnostic ed errMsg
-                else
-                  let output = result.result |> Option.defaultValue ""
+                | Client.Succeeded msg ->
+                  let output = msg |> Option.defaultValue ""
                   out.appendLine (sprintf "%s  (%s)" output (formatDuration elapsed))
                   showInlineResult ed output (Some elapsed)
               with err ->
@@ -495,10 +492,11 @@ let evalFile () =
             let startTime = performanceNow ()
             let! result = Client.evalCode code workDir c
             let elapsed = performanceNow () - startTime
-            if not result.success then
-              out.appendLine (sprintf "❌ Error:\n%s" (result.error |> Option.orElse result.result |> Option.defaultValue "Unknown error"))
-            else
-              out.appendLine (sprintf "%s  (%s)" (result.result |> Option.defaultValue "") (formatDuration elapsed))
+            match result with
+            | Client.Failed errMsg ->
+              out.appendLine (sprintf "❌ Error:\n%s" errMsg)
+            | Client.Succeeded msg ->
+              out.appendLine (sprintf "%s  (%s)" (msg |> Option.defaultValue "") (formatDuration elapsed))
           with err ->
             out.appendLine (sprintf "❌ Connection error: %s" (string err))
   }
@@ -524,10 +522,11 @@ let evalRange (args: obj) =
             let startTime = performanceNow ()
             let! result = Client.evalCode code workDir c
             let elapsed = performanceNow () - startTime
-            if not result.success then
-              out.appendLine (sprintf "❌ Error:\n%s" (result.error |> Option.orElse result.result |> Option.defaultValue "Unknown error"))
-            else
-              let output = result.result |> Option.defaultValue ""
+            match result with
+            | Client.Failed errMsg ->
+              out.appendLine (sprintf "❌ Error:\n%s" errMsg)
+            | Client.Succeeded msg ->
+              let output = msg |> Option.defaultValue ""
               out.appendLine (sprintf "%s  (%s)" output (formatDuration elapsed))
               showInlineResult ed output (Some elapsed)
           with err ->
@@ -540,7 +539,7 @@ let resetSessionCmd () =
     if ok then
       let c = getClient ()
       let! result = Client.resetSession c
-      let msg = result.result |> Option.orElse result.error |> Option.defaultValue "Reset complete"
+      let msg = result |> Client.ApiOutcome.messageOrDefault "Reset complete"
       Window.showInformationMessage (sprintf "SageFs: %s" msg) [||] |> ignore
       refreshStatus ()
   }
@@ -551,7 +550,7 @@ let hardResetCmd () =
     if ok then
       let c = getClient ()
       let! result = Client.hardReset true c
-      let msg = result.result |> Option.orElse result.error |> Option.defaultValue "Hard reset complete"
+      let msg = result |> Client.ApiOutcome.messageOrDefault "Hard reset complete"
       Window.showInformationMessage (sprintf "SageFs: %s" msg) [||] |> ignore
       refreshStatus ()
   }
@@ -570,10 +569,11 @@ let createSessionCmd () =
           promise {
             let c = getClient ()
             let! result = Client.createSession proj workDir c
-            if result.success then
+            match result with
+            | Client.Succeeded _ ->
               Window.showInformationMessage (sprintf "SageFs: Session created for %s" proj) [||] |> ignore
-            else
-              Window.showErrorMessage (sprintf "SageFs: %s" (result.error |> Option.defaultValue "Failed to create session")) [||] |> ignore
+            | Client.Failed err ->
+              Window.showErrorMessage (sprintf "SageFs: %s" err) [||] |> ignore
             refreshStatus ()
           }
         )
@@ -697,15 +697,12 @@ let evalAdvance () =
             let startTime = performanceNow ()
             let! result = Client.evalCode code workDir c
             let elapsed = performanceNow () - startTime
-            if not result.success then
-              let errMsg =
-                result.error
-                |> Option.orElse result.result
-                |> Option.defaultValue "Unknown error"
+            match result with
+            | Client.Failed errMsg ->
               out.appendLine (sprintf "❌ Error:\n%s" errMsg)
               showInlineDiagnostic ed errMsg
-            else
-              let output = result.result |> Option.defaultValue ""
+            | Client.Succeeded msg ->
+              let output = msg |> Option.defaultValue ""
               out.appendLine (sprintf "%s  (%s)" output (formatDuration elapsed))
               showInlineResult ed output (Some elapsed)
               // Advance cursor to next non-blank line after current block
@@ -728,11 +725,11 @@ let cancelEvalCmd () =
   | Some c ->
     Client.cancelEval c
     |> Promise.iter (fun result ->
-      if result.success then
+      match result with
+      | Client.Succeeded _ ->
         Window.showInformationMessage "Eval cancelled." [||] |> ignore
-      else
-        let msg = result.error |> Option.defaultValue "Failed to cancel"
-        Window.showWarningMessage msg [||] |> ignore)
+      | Client.Failed err ->
+        Window.showWarningMessage err [||] |> ignore)
   | None -> Window.showWarningMessage "SageFs is not connected" [||] |> ignore
 
 let loadScriptCmd () =
@@ -743,12 +740,12 @@ let loadScriptCmd () =
       | Some ed when ed.document.fileName.EndsWith(".fsx") ->
         let c = getClient ()
         let! result = Client.loadScript ed.document.fileName c
-        if result.success then
+        match result with
+        | Client.Succeeded _ ->
           let name = ed.document.fileName.Split([|'/'; '\\'|]) |> Array.last
           Window.showInformationMessage (sprintf "Script loaded: %s" name) [||] |> ignore
-        else
-          let msg = result.error |> Option.defaultValue "Failed to load script"
-          Window.showErrorMessage msg [||] |> ignore
+        | Client.Failed err ->
+          Window.showErrorMessage err [||] |> ignore
       | _ ->
         Window.showWarningMessage "Open an .fsx file to load it as a script." [||] |> ignore
   }
@@ -855,7 +852,7 @@ let activate (context: ExtensionContext) =
     | Some c ->
       Client.enableLiveTesting c
       |> Promise.iter (fun result ->
-        match result.result with
+        match Client.ApiOutcome.message result with
         | Some msg -> Window.showInformationMessage msg [||] |> ignore
         | None -> ())
     | None -> Window.showWarningMessage "SageFs is not connected" [||] |> ignore)
@@ -864,7 +861,7 @@ let activate (context: ExtensionContext) =
     | Some c ->
       Client.disableLiveTesting c
       |> Promise.iter (fun result ->
-        match result.result with
+        match Client.ApiOutcome.message result with
         | Some msg -> Window.showInformationMessage msg [||] |> ignore
         | None -> ())
     | None -> Window.showWarningMessage "SageFs is not connected" [||] |> ignore)
@@ -873,7 +870,7 @@ let activate (context: ExtensionContext) =
     | Some c ->
       Client.runTests "" c
       |> Promise.iter (fun result ->
-        match result.result with
+        match Client.ApiOutcome.message result with
         | Some msg -> Window.showInformationMessage msg [||] |> ignore
         | None -> ())
     | None -> Window.showWarningMessage "SageFs is not connected" [||] |> ignore)
@@ -894,7 +891,7 @@ let activate (context: ExtensionContext) =
             | Some pol ->
               Client.setRunPolicy cat pol c
               |> Promise.iter (fun result ->
-                match result.result with
+                match Client.ApiOutcome.message result with
                 | Some msg -> Window.showInformationMessage msg [||] |> ignore
                 | None -> ())
             | None -> ())
@@ -1083,8 +1080,10 @@ let activate (context: ExtensionContext) =
                 | Some "Create Session" ->
                   Client.createSession proj workDir c
                   |> Promise.iter (fun result ->
-                    if result.success then
+                    match result with
+                    | Client.Succeeded _ ->
                       Window.showInformationMessage (sprintf "SageFs: Session created for %s" proj) [||] |> ignore
+                    | Client.Failed _ -> ()
                     refreshStatus ()
                   )
                 | _ -> ()
