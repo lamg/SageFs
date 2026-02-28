@@ -109,7 +109,7 @@ let getChildren (element: obj option) : JS.Promise<obj array> =
             return
               wc.NamespacesOpened
               |> Array.map (fun b ->
-                let kind = if b.IsModule then "module" else "namespace"
+                let kind = match b.IsModule with true -> "module" | false -> "namespace"
                 leafItem b.Name (sprintf "%s via %s" kind b.Source) "symbol-namespace" :> obj)
           | "Failed Opens" ->
             return

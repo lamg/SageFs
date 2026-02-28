@@ -67,8 +67,9 @@ let createFileItem (file: Client.HotReloadFile) =
   let label = getFileName file.path
   let item = newTreeItem label TreeItemCollapsibleState.None
   let ctxVal, desc, iconColor =
-    if file.watched then "watchedFile", "● watching", "testing.iconPassed"
-    else "unwatchedFile", "○ not watching", "testing.iconSkipped"
+    match file.watched with
+    | true -> "watchedFile", "● watching", "testing.iconPassed"
+    | false -> "unwatchedFile", "○ not watching", "testing.iconSkipped"
   item?contextValue <- ctxVal
   item?description <- desc
   item?tooltip <- file.path
@@ -228,10 +229,11 @@ let register (ctx: ExtensionContext) =
           |> Array.filter (fun f -> getDirectory f.path = dir)
           |> Array.forall (fun f -> f.watched)
         promise {
-          if allWatched then
+          match allWatched with
+          | true ->
             let! _ = Client.unwatchDirectoryHotReload sid dir c
             ()
-          else
+          | false ->
             let! _ = Client.watchDirectoryHotReload sid dir c
             ()
           refresh ()

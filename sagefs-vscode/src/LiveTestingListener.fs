@@ -24,7 +24,7 @@ let duFirstField<'T> (du: obj) : 'T option =
     tryOfObj du?Fields
     |> Option.bind (fun fields ->
       let arr = fields :> obj array
-      if arr.Length > 0 then Some (unbox<'T> arr.[0]) else None))
+      match arr.Length with 0 -> None | _ -> Some (unbox<'T> arr.[0])))
 
 /// Extract DU Fields array from a Fable-serialized DU
 let duFields (du: obj) : obj array option =
@@ -107,8 +107,9 @@ let parseTestInfo (entry: obj) : VscTestInfo =
     match parseDuCase origin with
     | Some "SourceMapped" ->
       let fields = duFields origin |> Option.defaultValue [||]
-      if fields.Length >= 2 then Some(fields.[0] |> unbox<string>), Some(fields.[1] |> unbox<int>)
-      else None, None
+      match fields.Length >= 2 with
+      | true -> Some(fields.[0] |> unbox<string>), Some(fields.[1] |> unbox<int>)
+      | false -> None, None
     | _ -> None, None
   { Id = VscTestId.create testIdStr
     DisplayName = entry?DisplayName |> unbox<string>
@@ -172,7 +173,9 @@ let start (port: int) (callbacks: LiveTestingCallbacks) : LiveTestingListener =
         let newState, changes = VscLiveTestState.update evt state
         state <- newState
         allChanges <- allChanges @ changes
-      if not allChanges.IsEmpty then callbacks.OnStateChange allChanges
+      match allChanges.IsEmpty with
+      | false -> callbacks.OnStateChange allChanges
+      | true -> ()
     | "state" ->
       callbacks.OnStatusRefresh ()
     | "session" ->

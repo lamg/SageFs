@@ -12,7 +12,9 @@ let mutable staleDecorations: Map<int, TextEditorDecorationType> = Map.empty
 // ── Helpers ────────────────────────────────────────────────────
 
 let formatDuration (ms: float) =
-  if ms < 1000.0 then sprintf "%dms" (int ms) else sprintf "%.1fs" (ms / 1000.0)
+  match ms < 1000.0 with
+  | true -> sprintf "%dms" (int ms)
+  | false -> sprintf "%.1fs" (ms / 1000.0)
 
 // ── Core functions ─────────────────────────────────────────────
 
@@ -41,7 +43,9 @@ let markDecorationsStale (editor: TextEditor) =
     | Some deco ->
       deco.dispose () |> ignore
       blockDecorations <- Map.remove line blockDecorations
-      if not (Map.containsKey line staleDecorations) then
+      match Map.containsKey line staleDecorations with
+      | true -> ()
+      | false ->
         let staleOpts = createObj [
           "after" ==> createObj [
             "contentText" ==> "  // ⏸ stale"
@@ -63,22 +67,25 @@ let showInlineResult (editor: TextEditor) (text: string) (durationMs: float opti
   | "" -> ()
   | _ ->
     let line =
-      if editor.selection.isEmpty then int editor.selection.active.line
-      else int editor.selection.``end``.line
+      match editor.selection.isEmpty with
+      | true -> int editor.selection.active.line
+      | false -> int editor.selection.``end``.line
     clearBlockDecoration line
     let lines = trimmed.Split('\n')
-    let firstLine = if lines.Length > 0 then lines.[0] else ""
+    let firstLine = match lines.Length with 0 -> "" | _ -> lines.[0]
     let durSuffix =
       match durationMs with
       | Some ms -> sprintf "  %s" (formatDuration ms)
       | None -> ""
     let contentText =
-      if lines.Length <= 1 then
+      match lines.Length with
+      | 0 | 1 ->
         sprintf "  // → %s%s" firstLine durSuffix
-      else
+      | n ->
         let summary =
-          if lines.Length <= 4 then lines |> String.concat "  │  "
-          else sprintf "%s  │  ... (%d lines)" firstLine lines.Length
+          match n <= 4 with
+          | true -> lines |> String.concat "  │  "
+          | false -> sprintf "%s  │  ... (%d lines)" firstLine n
         sprintf "  // → %s%s" summary durSuffix
     let opts = createObj [
       "after" ==> createObj [
@@ -98,13 +105,14 @@ let showInlineResult (editor: TextEditor) (text: string) (durationMs: float opti
 let showInlineDiagnostic (editor: TextEditor) (text: string) =
   let firstLine =
     let parts = text.Split('\n')
-    if parts.Length > 0 then parts.[0].Trim() else ""
+    match parts.Length with 0 -> "" | _ -> parts.[0].Trim()
   match firstLine with
   | "" -> ()
   | _ ->
     let line =
-      if editor.selection.isEmpty then int editor.selection.active.line
-      else int editor.selection.``end``.line
+      match editor.selection.isEmpty with
+      | true -> int editor.selection.active.line
+      | false -> int editor.selection.``end``.line
     clearBlockDecoration line
     let opts = createObj [
       "after" ==> createObj [

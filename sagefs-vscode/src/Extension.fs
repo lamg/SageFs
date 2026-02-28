@@ -308,7 +308,9 @@ and ensureRunning () =
 let withClient (action: Client.Client -> JS.Promise<unit>) =
   promise {
     let! ok = ensureRunning ()
-    if ok then do! action (getClient ())
+    match ok with
+    | true -> do! action (getClient ())
+    | false -> ()
   }
 
 /// Fire a client action that returns ApiOutcome, show its message, then refresh.
@@ -342,6 +344,31 @@ let evalCore (code: string) : JS.Promise<EvalResult> =
       return EvalConnectionError (string err)
   }
 
+/// Log eval result to output channel. Returns the result for further handling.
+let logEvalResult (out: OutputChannel) (result: EvalResult) =
+  match result with
+  | EvalOk (output, elapsed) ->
+    out.appendLine (sprintf "%s  (%s)" output (formatDuration elapsed))
+  | EvalError errMsg ->
+    out.appendLine (sprintf "❌ Error:\n%s" errMsg)
+  | EvalConnectionError msg ->
+    out.appendLine (sprintf "❌ Connection error: %s" msg)
+  result
+
+/// Get code from selection or code block, append ;; if needed.
+let getEvalCode (ed: TextEditor) =
+  let raw =
+    match ed.selection.isEmpty with
+    | false ->
+      ed.document.getTextRange (newRange (int ed.selection.start.line) (int ed.selection.start.character) (int ed.selection.``end``.line) (int ed.selection.``end``.character))
+    | true -> getCodeBlock ed
+  match raw.Trim() with
+  | "" -> None
+  | _ ->
+    match raw.TrimEnd().EndsWith(";;") with
+    | true -> Some raw
+    | false -> Some (raw.TrimEnd() + ";;")
+
 let evalSelection () =
   promise {
     match Window.getActiveTextEditor () with
@@ -349,37 +376,27 @@ let evalSelection () =
       Window.showWarningMessage "No active editor." [||] |> ignore
     | Some ed ->
       let! ok = ensureRunning ()
-      if ok then
-        let mutable code =
-          if not ed.selection.isEmpty then
-            ed.document.getTextRange (newRange (int ed.selection.start.line) (int ed.selection.start.character) (int ed.selection.``end``.line) (int ed.selection.``end``.character))
-          else
-            getCodeBlock ed
-        match code.Trim() with
-        | "" -> ()
-        | _ ->
-          if not (code.TrimEnd().EndsWith(";;")) then code <- code.TrimEnd() + ";;"
-          let out = getOutput ()
-          do! Window.withProgress ProgressLocation.Window "SageFs: evaluating..." (fun _progress _token ->
-            promise {
-              out.appendLine "──── eval ────"
-              out.appendLine code
-              out.appendLine ""
-              let! result = evalCore code
-              match result with
-              | EvalError errMsg ->
-                out.appendLine (sprintf "❌ Error:\n%s" errMsg)
-                out.show true
-                showInlineDiagnostic ed errMsg
-              | EvalOk (output, elapsed) ->
-                out.appendLine (sprintf "%s  (%s)" output (formatDuration elapsed))
-                showInlineResult ed output (Some elapsed)
-              | EvalConnectionError msg ->
-                out.appendLine (sprintf "❌ Connection error: %s" msg)
-                out.show true
-                Window.showErrorMessage "Cannot reach SageFs daemon. Is it running?" [||] |> ignore
-            }
-          )
+      match ok, getEvalCode ed with
+      | false, _ | _, None -> ()
+      | true, Some code ->
+        let out = getOutput ()
+        do! Window.withProgress ProgressLocation.Window "SageFs: evaluating..." (fun _progress _token ->
+          promise {
+            out.appendLine "──── eval ────"
+            out.appendLine code
+            out.appendLine ""
+            let! result = evalCore code
+            match logEvalResult out result with
+            | EvalError errMsg ->
+              out.show true
+              showInlineDiagnostic ed errMsg
+            | EvalOk (output, elapsed) ->
+              showInlineResult ed output (Some elapsed)
+            | EvalConnectionError _ ->
+              out.show true
+              Window.showErrorMessage "Cannot reach SageFs daemon. Is it running?" [||] |> ignore
+          }
+        )
   }
 
 let evalFile () =
@@ -388,22 +405,15 @@ let evalFile () =
     | None -> ()
     | Some ed ->
       let! ok = ensureRunning ()
-      if ok then
-        let code = ed.document.getText ()
-        match code.Trim() with
-        | "" -> ()
-        | _ ->
-          let out = getOutput ()
-          out.show true
-          out.appendLine (sprintf "──── eval file: %s ────" ed.document.fileName)
-          let! result = evalCore code
-          match result with
-          | EvalError errMsg ->
-            out.appendLine (sprintf "❌ Error:\n%s" errMsg)
-          | EvalOk (output, elapsed) ->
-            out.appendLine (sprintf "%s  (%s)" output (formatDuration elapsed))
-          | EvalConnectionError msg ->
-            out.appendLine (sprintf "❌ Connection error: %s" msg)
+      let code = ed.document.getText ()
+      match ok, code.Trim() with
+      | false, _ | _, "" -> ()
+      | true, _ ->
+        let out = getOutput ()
+        out.show true
+        out.appendLine (sprintf "──── eval file: %s ────" ed.document.fileName)
+        let! result = evalCore code
+        logEvalResult out result |> ignore
   }
 
 let evalRange (args: obj) =
@@ -412,26 +422,21 @@ let evalRange (args: obj) =
     | None -> ()
     | Some ed ->
       let! ok = ensureRunning ()
-      if ok then
-        let range: Range = unbox args
-        let code = ed.document.getTextRange range
-        match code.Trim() with
-        | "" -> ()
-        | _ ->
-          let out = getOutput ()
-          out.show true
-          out.appendLine "──── eval block ────"
-          out.appendLine code
-          out.appendLine ""
-          let! result = evalCore code
-          match result with
-          | EvalError errMsg ->
-            out.appendLine (sprintf "❌ Error:\n%s" errMsg)
-          | EvalOk (output, elapsed) ->
-            out.appendLine (sprintf "%s  (%s)" output (formatDuration elapsed))
-            showInlineResult ed output (Some elapsed)
-          | EvalConnectionError msg ->
-            out.appendLine (sprintf "❌ Connection error: %s" msg)
+      let range: Range = unbox args
+      let code = ed.document.getTextRange range
+      match ok, code.Trim() with
+      | false, _ | _, "" -> ()
+      | true, _ ->
+        let out = getOutput ()
+        out.show true
+        out.appendLine "──── eval block ────"
+        out.appendLine code
+        out.appendLine ""
+        let! result = evalCore code
+        match logEvalResult out result with
+        | EvalOk (output, elapsed) ->
+          showInlineResult ed output (Some elapsed)
+        | _ -> ()
   }
 
 let resetSessionCmd () =
@@ -563,37 +568,29 @@ let evalAdvance () =
       Window.showWarningMessage "No active editor." [||] |> ignore
     | Some ed ->
       let! ok = ensureRunning ()
-      if ok then
-        let mutable code =
-          if not ed.selection.isEmpty then
-            ed.document.getTextRange (newRange (int ed.selection.start.line) (int ed.selection.start.character) (int ed.selection.``end``.line) (int ed.selection.``end``.character))
-          else
-            getCodeBlock ed
-        match code.Trim() with
-        | "" -> ()
-        | _ ->
-          if not (code.TrimEnd().EndsWith(";;")) then code <- code.TrimEnd() + ";;"
-          let out = getOutput ()
-          let! result = evalCore code
-          match result with
-          | EvalError errMsg ->
-            out.appendLine (sprintf "❌ Error:\n%s" errMsg)
-            showInlineDiagnostic ed errMsg
-          | EvalOk (output, elapsed) ->
-            out.appendLine (sprintf "%s  (%s)" output (formatDuration elapsed))
-            showInlineResult ed output (Some elapsed)
-            let curLine = int ed.selection.``end``.line
-            let lineCount = int ed.document.lineCount
-            let mutable nextLine = curLine + 1
-            while nextLine < lineCount && ed.document.lineAt(float nextLine).text.Trim() = "" do
-              nextLine <- nextLine + 1
-            if nextLine < lineCount then
-              let pos = newPosition nextLine 0
-              let sel = newSelection pos pos
-              setEditorSelection ed sel
-              revealEditorRange ed (newRange nextLine 0 nextLine 0)
-          | EvalConnectionError msg ->
-            out.appendLine (sprintf "❌ Connection error: %s" msg)
+      match ok, getEvalCode ed with
+      | false, _ | _, None -> ()
+      | true, Some code ->
+        let out = getOutput ()
+        let! result = evalCore code
+        match logEvalResult out result with
+        | EvalError errMsg ->
+          showInlineDiagnostic ed errMsg
+        | EvalOk (output, elapsed) ->
+          showInlineResult ed output (Some elapsed)
+          let curLine = int ed.selection.``end``.line
+          let lineCount = int ed.document.lineCount
+          let mutable nextLine = curLine + 1
+          while nextLine < lineCount && ed.document.lineAt(float nextLine).text.Trim() = "" do
+            nextLine <- nextLine + 1
+          match nextLine < lineCount with
+          | true ->
+            let pos = newPosition nextLine 0
+            let sel = newSelection pos pos
+            setEditorSelection ed sel
+            revealEditorRange ed (newRange nextLine 0 nextLine 0)
+          | false -> ()
+        | EvalConnectionError _ -> ()
   }
 
 let cancelEvalCmd () =
@@ -679,7 +676,9 @@ let activate (context: ExtensionContext) =
   let docChangeSub = Workspace.onDidChangeTextDocument (fun _evt ->
     match Window.getActiveTextEditor () with
     | Some ed when ed.document.fileName.EndsWith(".fs") || ed.document.fileName.EndsWith(".fsx") ->
-      if not (Map.isEmpty InlineDeco.blockDecorations) then markDecorationsStale ed
+      match Map.isEmpty InlineDeco.blockDecorations with
+      | true -> ()
+      | false -> markDecorationsStale ed
     | _ -> ())
   context.subscriptions.Add docChangeSub
 
@@ -927,15 +926,19 @@ let activate (context: ExtensionContext) =
 
   Client.isRunning c
   |> Promise.iter (fun running ->
-    if running then connectToRunningDaemon c
+    match running with
+    | true -> connectToRunningDaemon c
+    | false -> ()
   )
 
   // Config change listener
   context.subscriptions.Add (
     Workspace.onDidChangeConfiguration (fun e ->
-      if e.affectsConfiguration "sagefs" then
+      match e.affectsConfiguration "sagefs" with
+      | true ->
         let cfg = Workspace.getConfiguration "sagefs"
         Client.updatePorts (cfg.get("mcpPort", 37749)) (cfg.get("dashboardPort", 37750)) c
+      | false -> ()
     )
   )
 
@@ -948,17 +951,21 @@ let activate (context: ExtensionContext) =
 
   // Auto-start (silently — no prompt dialog)
   let autoStart = config.get("autoStart", true)
-  if autoStart then
+  match autoStart with
+  | true ->
     Client.isRunning c
     |> Promise.iter (fun running ->
-      if not running then
+      match running with
+      | false ->
         promise {
           let! projPath = findProject ()
           match projPath with
           | Some _ -> do! startDaemon ()
           | None -> ()
         } |> ignore
+      | true -> ()
     )
+  | false -> ()
 
 let deactivate () =
   diagnosticsDisposable |> Option.iter (fun d -> d.dispose () |> ignore)

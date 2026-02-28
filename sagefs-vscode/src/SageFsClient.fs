@@ -99,11 +99,12 @@ let dashHttpPost (c: Client) (path: string) (body: string) (timeout: int) =
 
 let parseOutcome (parsed: obj) : ApiOutcome =
   let success = tryField<bool> "success" parsed |> Option.defaultValue false
-  if success then
+  match success with
+  | true ->
     tryField<string> "message" parsed
     |> Option.orElse (tryField<string> "result" parsed)
     |> Succeeded
-  else
+  | false ->
     tryField<string> "error" parsed
     |> Option.defaultValue "Unknown error"
     |> Failed
