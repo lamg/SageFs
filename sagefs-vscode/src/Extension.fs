@@ -878,35 +878,30 @@ let activate (context: ExtensionContext) =
     context.subscriptions.Add (
       Window.onDidChangeActiveTextEditor (fun _editor -> refreshAllDecorations () |> ignore))
     // Auto-discover and create session if none exists
-    Client.listSessions c
-    |> Promise.iter (fun sessions ->
+    promise {
+      let! sessions = Client.listSessions c
       match sessions with
       | [||] ->
-        findProject ()
-        |> Promise.iter (fun projOpt ->
-          match projOpt with
-          | Some proj ->
-            let workDir = getWorkingDirectory () |> Option.defaultValue "."
+        let! projOpt = findProject ()
+        match projOpt with
+        | Some proj ->
+          let workDir = getWorkingDirectory () |> Option.defaultValue "."
+          let! choice =
             Window.showInformationMessage
               (sprintf "SageFs is running but has no session. Create one for %s?" proj)
               [| "Create Session"; "Not Now" |]
-            |> Promise.iter (fun choice ->
-              match choice with
-              | Some "Create Session" ->
-                Client.createSession proj workDir c
-                |> Promise.iter (fun result ->
-                  match result with
-                  | Client.Succeeded _ ->
-                    Window.showInformationMessage (sprintf "SageFs: Session created for %s" proj) [||] |> ignore
-                  | Client.Failed _ -> ()
-                  refreshStatus ()
-                )
-              | _ -> ()
-            )
-          | None -> ()
-        )
+          match choice with
+          | Some "Create Session" ->
+            let! result = Client.createSession proj workDir c
+            match result with
+            | Client.Succeeded _ ->
+              Window.showInformationMessage (sprintf "SageFs: Session created for %s" proj) [||] |> ignore
+            | Client.Failed _ -> ()
+            refreshStatus ()
+          | _ -> ()
+        | None -> ()
       | _ -> ()
-    )
+    } |> promiseIgnore
 
   // Wire up daemon-ready callback for startDaemon lifecycle
   onDaemonReady <- Some connectToRunningDaemon
