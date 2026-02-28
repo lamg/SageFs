@@ -8,9 +8,8 @@ let start (port: int) (dc: DiagnosticCollection) =
   let url = sprintf "http://localhost:%d/diagnostics" port
 
   let onData (data: obj) =
-    tryOfObj data?diagnostics
-    |> Option.iter (fun rawDiags ->
-      let diagnostics: obj array = rawDiags |> unbox
+    tryField<obj array> "diagnostics" data
+    |> Option.iter (fun diagnostics ->
       let byFile = System.Collections.Generic.Dictionary<string, ResizeArray<Diagnostic>>()
 
       for diag in diagnostics do
