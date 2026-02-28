@@ -13,6 +13,25 @@ let tryField<'T> (name: string) (obj: obj) : 'T option =
   let v = obj?(name)
   if isNull (box v) then None else Some (unbox<'T> v)
 
+// ── JSON ────────────────────────────────────────────────────────────────
+
+[<Emit("JSON.parse($0)")>]
+let jsonParse (s: string) : obj = jsNative
+
+[<Emit("JSON.stringify($0)")>]
+let jsonStringify (o: obj) : string = jsNative
+
+// ── Timers ──────────────────────────────────────────────────────────────
+
+[<Emit("setTimeout($0, $1)")>]
+let jsSetTimeout (fn: unit -> unit) (ms: int) : obj = jsNative
+
+[<Emit("performance.now()")>]
+let performanceNow () : float = jsNative
+
+[<Emit("new Promise(resolve => setTimeout(resolve, $0))")>]
+let sleep (ms: int) : JS.Promise<unit> = jsNative
+
 // ── SSE subscribers with exponential backoff reconnect ──────────────────
 
 /// Simple SSE subscriber: parses `data:` lines as JSON, calls onData(parsed).

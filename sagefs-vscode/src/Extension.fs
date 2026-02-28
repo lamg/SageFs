@@ -20,9 +20,6 @@ module InlineDeco = SageFs.Vscode.InlineDecorations
 
 open SageFs.Vscode.LiveTestingTypes
 
-[<Emit("JSON.parse($0)")>]
-let jsonParse (s: string) : obj = jsNative
-
 // ── Mutable state ──────────────────────────────────────────────
 
 let mutable client: Client.Client option = None
@@ -66,12 +63,6 @@ let onProcError (proc: obj) (handler: string -> unit) : unit = jsNative
 
 [<Emit("$0.on('exit', function(code, signal) { $1(code == null ? -1 : code, signal == null ? '' : signal) })")>]
 let onProcExit (proc: obj) (handler: int -> string -> unit) : unit = jsNative
-
-[<Emit("setTimeout($0, $1)")>]
-let setTimeout (fn: unit -> unit) (ms: int) : obj = jsNative
-
-[<Emit("new Promise(resolve => setTimeout(resolve, $0))")>]
-let sleep (ms: int) : JS.Promise<unit> = jsNative
 
 let mutable daemonProcess: obj option = None
 
@@ -129,7 +120,6 @@ let showInlineResult = InlineDeco.showInlineResult
 let showInlineDiagnostic = InlineDeco.showInlineDiagnostic
 let markDecorationsStale = InlineDeco.markDecorationsStale
 let clearAllDecorations = InlineDeco.clearAllDecorations
-let performanceNow = InlineDeco.performanceNow
 let formatDuration = InlineDeco.formatDuration
 
 // ── Status ─────────────────────────────────────────────────────

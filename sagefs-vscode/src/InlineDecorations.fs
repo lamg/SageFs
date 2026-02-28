@@ -1,27 +1,13 @@
 module SageFs.Vscode.InlineDecorations
 
-open Fable.Core
 open Fable.Core.JsInterop
 open Vscode
+open SageFs.Vscode.JsHelpers
 
 // ── Mutable state ──────────────────────────────────────────────
 
 let mutable blockDecorations: Map<int, TextEditorDecorationType> = Map.empty
 let mutable staleDecorations: Map<int, TextEditorDecorationType> = Map.empty
-
-// ── JS Interop ─────────────────────────────────────────────────
-
-[<Emit("new vscode.ThemeColor($0)")>]
-let newThemeColor (id: string) : obj = jsNative
-
-[<Emit("new vscode.Range($0, $1, $2, $3)")>]
-let newRange (startLine: int) (startChar: int) (endLine: int) (endChar: int) : Range = jsNative
-
-[<Emit("setTimeout($0, $1)")>]
-let setTimeout (fn: unit -> unit) (ms: int) : obj = jsNative
-
-[<Emit("performance.now()")>]
-let performanceNow () : float = jsNative
 
 // ── Helpers ────────────────────────────────────────────────────
 
@@ -107,7 +93,7 @@ let showInlineResult (editor: TextEditor) (text: string) (durationMs: float opti
     let range = newRange line endCol line endCol
     editor.setDecorations(deco, ResizeArray [| box range |])
     blockDecorations <- Map.add line deco blockDecorations
-    setTimeout (fun () -> clearBlockDecoration line) 30000 |> ignore
+    jsSetTimeout (fun () -> clearBlockDecoration line) 30000 |> ignore
 
 let showInlineDiagnostic (editor: TextEditor) (text: string) =
   let firstLine =
@@ -133,4 +119,4 @@ let showInlineDiagnostic (editor: TextEditor) (text: string) =
     let range = newRange line endCol line endCol
     editor.setDecorations(deco, ResizeArray [| box range |])
     blockDecorations <- Map.add line deco blockDecorations
-    setTimeout (fun () -> clearBlockDecoration line) 30000 |> ignore
+    jsSetTimeout (fun () -> clearBlockDecoration line) 30000 |> ignore

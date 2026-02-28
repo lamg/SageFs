@@ -22,7 +22,9 @@ let duFirstField<'T> (du: obj) : 'T option =
   tryOfObj du
   |> Option.bind (fun du ->
     tryOfObj du?Fields
-    |> Option.map (fun fields -> (fields :> obj array).[0] |> unbox<'T>))
+    |> Option.bind (fun fields ->
+      let arr = fields :> obj array
+      if arr.Length > 0 then Some (unbox<'T> arr.[0]) else None))
 
 /// Extract DU Fields array from a Fable-serialized DU
 let duFields (du: obj) : obj array option =

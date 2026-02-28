@@ -69,12 +69,6 @@ let httpGetRaw (url: string) (timeout: int) : JS.Promise<{| statusCode: int; bod
 [<Emit("new Promise((resolve, reject) => { const http = require('http'); const url = new URL($0); const req = http.request({ hostname: url.hostname, port: url.port, path: url.pathname, method: 'POST', headers: { 'Content-Type': 'application/json' }, timeout: $2 }, (res) => { let data = ''; res.on('data', (chunk) => data += chunk); res.on('end', () => resolve({ statusCode: res.statusCode || 0, body: data })); }); req.on('error', reject); req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); }); req.write($1); req.end(); })")>]
 let httpPostRaw (url: string) (body: string) (timeout: int) : JS.Promise<{| statusCode: int; body: string |}> = jsNative
 
-[<Emit("JSON.parse($0)")>]
-let jsonParse (s: string) : obj = jsNative
-
-[<Emit("JSON.stringify($0)")>]
-let jsonStringify (o: obj) : string = jsNative
-
 type Client =
   { mutable mcpPort: int
     mutable dashboardPort: int }
