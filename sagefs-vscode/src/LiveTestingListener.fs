@@ -5,6 +5,7 @@ open Fable.Core.JsInterop
 open Vscode
 
 open SageFs.Vscode.LiveTestingTypes
+open SageFs.Vscode.JsHelpers
 
 // ── Event-type-aware SSE subscriber ──────────────────────────
 
@@ -61,32 +62,31 @@ let subscribeTypedSse (url: string) (onEvent: string -> obj -> unit) : Disposabl
 
 /// Extract DU Case string from a Fable-serialized DU object
 let parseDuCase (du: obj) : string option =
-  if isNull du then None
-  else
-    let c = du?Case
-    if isNull c then Some (string du)
-    else Some (c |> unbox<string>)
+  tryOfObj du
+  |> Option.map (fun du ->
+    du?Case
+    |> tryOfObj
+    |> Option.map unbox<string>
+    |> Option.defaultValue (string du))
 
 /// Extract the first field from a Fable-serialized DU's Fields array
 let duFirstField<'T> (du: obj) : 'T option =
-  if isNull du then None
-  else
-    let fields = du?Fields
-    if isNull fields then None
-    else Some ((fields :> obj array).[0] |> unbox<'T>)
+  tryOfObj du
+  |> Option.bind (fun du ->
+    tryOfObj du?Fields
+    |> Option.map (fun fields -> (fields :> obj array).[0] |> unbox<'T>))
 
 /// Extract DU Fields array from a Fable-serialized DU
 let duFields (du: obj) : obj array option =
-  if isNull du then None
-  else
-    let fields = du?Fields
-    if isNull fields then None
-    else Some (fields |> unbox<obj array>)
+  tryOfObj du
+  |> Option.bind (fun du ->
+    tryOfObj du?Fields
+    |> Option.map unbox<obj array>)
 
 /// Parse HH:MM:SS duration string to milliseconds
 let parseDuration (dur: string) : float option =
-  if isNull (box dur) then None
-  else
+  tryOfObj dur
+  |> Option.bind (fun dur ->
     let parts = dur.Split(':')
     match parts.Length with
     | 3 ->
@@ -94,12 +94,16 @@ let parseDuration (dur: string) : float option =
       let m = float parts.[1]
       let s = float parts.[2]
       Some ((h * 3600.0 + m * 60.0 + s) * 1000.0)
-    | _ -> None
+    | _ -> None)
 
 /// Extract TestId string from a server TestId DU object
 let parseTestId (testIdObj: obj) : string =
-  if isNull testIdObj then ""
-  else duFirstField<string> testIdObj |> Option.defaultValue (string testIdObj)
+  tryOfObj testIdObj
+  |> Option.bind (duFirstField<string>)
+  |> Option.defaultValue (
+    tryOfObj testIdObj
+    |> Option.map string
+    |> Option.defaultValue "")
 
 /// Map server TestSummary JSON to VscTestSummary
 let parseSummary (data: obj) : VscTestSummary =
@@ -172,14 +176,15 @@ let parseFreshness (data: obj) : VscResultFreshness =
 /// Parse test_results_batch → VscLiveTestEvent pair (discovery + results)
 let parseResultsBatch (data: obj) : VscLiveTestEvent list =
   let entries = data?Entries
-  if isNull entries then []
-  else
+  tryOfObj entries
+  |> Option.map (fun entries ->
     let freshness = parseFreshness data
     let entryArray : obj array = entries |> unbox
     let testInfos = entryArray |> Array.map parseTestInfo
     let testResults = entryArray |> Array.map parseTestResult
     [ VscLiveTestEvent.TestsDiscovered testInfos
-      VscLiveTestEvent.TestResultBatch (testResults, freshness) ]
+      VscLiveTestEvent.TestResultBatch (testResults, freshness) ])
+  |> Option.defaultValue []
 
 // ── Listener lifecycle ───────────────────────────────────────
 
@@ -223,10 +228,10 @@ let start (port: int) (callbacks: LiveTestingCallbacks) : LiveTestingListener =
     | "session" ->
       ()
     | "bindings_snapshot" ->
-      let arr = data?Bindings
-      if not (isNull arr) then
+      tryOfObj data?Bindings
+      |> Option.iter (fun arr ->
         bindings <- arr |> unbox
-        callbacks.OnBindingsUpdate bindings
+        callbacks.OnBindingsUpdate bindings)
     | "pipeline_trace" ->
       pipelineTrace <- Some data
       callbacks.OnPipelineTraceUpdate data

@@ -2,6 +2,7 @@ module SageFs.Vscode.SageFsClient
 
 open Fable.Core
 open Fable.Core.JsInterop
+open SageFs.Vscode.JsHelpers
 
 [<Emit("console.warn('[SageFs]', $0, $1)")>]
 let logWarn (context: string) (err: obj) : unit = jsNative
@@ -101,15 +102,6 @@ let dashHttpPost (c: Client) (path: string) (body: string) (timeout: int) =
   httpPostRaw (sprintf "http://localhost:%d%s" c.dashboardPort path) body timeout
 
 // ── JSON field helpers (null-safe boundary parsing) ──────────────────────
-
-/// Convert a potentially-null value to Option.
-/// In Fable/JS: null and undefined → None, everything else → Some.
-let inline tryOfObj (x: 'a) : 'a option =
-  if isNull (box x) then None else Some x
-
-let tryField<'T> (name: string) (obj: obj) : 'T option =
-  let v = obj?(name)
-  if isNull v then None else Some (unbox<'T> v)
 
 let parseOutcome (parsed: obj) : ApiOutcome =
   let success = tryField<bool> "success" parsed |> Option.defaultValue false
