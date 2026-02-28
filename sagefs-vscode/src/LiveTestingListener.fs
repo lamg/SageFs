@@ -59,6 +59,56 @@ let subscribeTypedSse (url: string) (onEvent: string -> obj -> unit) : Disposabl
 
 // ── Server JSON → VscLiveTestEvent mappers ───────────────────
 
+/// Extract DU Case string from a Fable-serialized DU object
+let parseDuCase (du: obj) : string option =
+  match isNull du with
+  | true -> None
+  | false ->
+    let c = du?Case
+    match isNull c with
+    | true -> Some (string du)
+    | false -> Some (c |> unbox<string>)
+
+/// Extract the first field from a Fable-serialized DU's Fields array
+let duFirstField<'T> (du: obj) : 'T option =
+  match isNull du with
+  | true -> None
+  | false ->
+    let fields = du?Fields
+    match isNull fields with
+    | true -> None
+    | false -> Some ((fields :> obj array).[0] |> unbox<'T>)
+
+/// Extract DU Fields array from a Fable-serialized DU
+let duFields (du: obj) : obj array option =
+  match isNull du with
+  | true -> None
+  | false ->
+    let fields = du?Fields
+    match isNull fields with
+    | true -> None
+    | false -> Some (fields |> unbox<obj array>)
+
+/// Parse HH:MM:SS duration string to milliseconds
+let parseDuration (dur: string) : float option =
+  match isNull (box dur) with
+  | true -> None
+  | false ->
+    let parts = dur.Split(':')
+    match parts.Length with
+    | 3 ->
+      let h = float parts.[0]
+      let m = float parts.[1]
+      let s = float parts.[2]
+      Some ((h * 3600.0 + m * 60.0 + s) * 1000.0)
+    | _ -> None
+
+/// Extract TestId string from a server TestId DU object
+let parseTestId (testIdObj: obj) : string =
+  match isNull testIdObj with
+  | true -> ""
+  | false -> duFirstField<string> testIdObj |> Option.defaultValue (string testIdObj)
+
 /// Map server TestSummary JSON to VscTestSummary
 let parseSummary (data: obj) : VscTestSummary =
   { Total = data?Total |> unbox<int>
@@ -70,85 +120,48 @@ let parseSummary (data: obj) : VscTestSummary =
 
 /// Map a server TestStatusEntry to VscTestResult
 let parseTestResult (entry: obj) : VscTestResult =
-  let testIdObj = entry?TestId
-  let testIdStr : string =
-    if isNull testIdObj then ""
-    else
-      let fields = testIdObj?Fields
-      if isNull fields then string testIdObj
-      else (fields :> obj array).[0] |> unbox<string>
-  let id = VscTestId.create testIdStr
+  let id = entry?TestId |> parseTestId |> VscTestId.create
   let status = entry?Status
-  let statusCase : string =
-    if isNull status then "Detected"
-    else status?Case |> unbox<string>
+  let statusCase = parseDuCase status |> Option.defaultValue "Detected"
+  let fields = duFields status
   let outcome =
     match statusCase with
-    | "Passed" ->
-      VscTestOutcome.Passed
+    | "Passed" -> VscTestOutcome.Passed
     | "Failed" ->
-      let failure = status?Fields |> unbox<obj array>
-      let failObj = failure.[0]
       let msg =
-        if isNull failObj then "test failed"
-        else
-          let failFields = failObj?Fields
-          if isNull failFields then string failObj
-          else (failFields :> obj array).[0] |> unbox<string>
+        fields
+        |> Option.bind (fun f -> if f.Length > 0 then Some f.[0] else None)
+        |> Option.bind (fun failObj -> duFirstField<string> failObj)
+        |> Option.defaultValue "test failed"
       VscTestOutcome.Failed msg
     | "Skipped" ->
-      let fields = status?Fields |> unbox<obj array>
-      VscTestOutcome.Skipped(fields.[0] |> unbox<string>)
+      let reason = fields |> Option.bind (fun f -> Some (f.[0] |> unbox<string>)) |> Option.defaultValue "skipped"
+      VscTestOutcome.Skipped reason
     | "Running" -> VscTestOutcome.Running
     | "Stale" -> VscTestOutcome.Stale
     | "PolicyDisabled" -> VscTestOutcome.PolicyDisabled
     | _ -> VscTestOutcome.Skipped "unknown status"
   let durationMs =
-    match statusCase with
-    | "Passed" ->
-      let fields = status?Fields |> unbox<obj array>
-      let dur : string = fields.[0] |> unbox<string>
-      let parts = dur.Split(':')
-      if parts.Length = 3 then
-        let h = float parts.[0]
-        let m = float parts.[1]
-        let s = float parts.[2]
-        Some ((h * 3600.0 + m * 60.0 + s) * 1000.0)
-      else None
-    | "Failed" ->
-      let fields = status?Fields |> unbox<obj array>
-      if fields.Length >= 2 then
-        let dur : string = fields.[1] |> unbox<string>
-        let parts = dur.Split(':')
-        if parts.Length = 3 then
-          let h = float parts.[0]
-          let m = float parts.[1]
-          let s = float parts.[2]
-          Some ((h * 3600.0 + m * 60.0 + s) * 1000.0)
-        else None
-      else None
+    match statusCase, fields with
+    | "Passed", Some f when f.Length > 0 ->
+      f.[0] |> unbox<string> |> parseDuration
+    | "Failed", Some f when f.Length >= 2 ->
+      f.[1] |> unbox<string> |> parseDuration
     | _ -> None
   { Id = id; Outcome = outcome; DurationMs = durationMs; Output = None }
 
 /// Map a server TestStatusEntry to VscTestInfo
 let parseTestInfo (entry: obj) : VscTestInfo =
-  let testIdObj = entry?TestId
-  let testIdStr : string =
-    if isNull testIdObj then ""
-    else
-      let fields = testIdObj?Fields
-      if isNull fields then string testIdObj
-      else (fields :> obj array).[0] |> unbox<string>
+  let testIdStr = entry?TestId |> parseTestId
   let origin = entry?Origin
   let filePath, line =
-    if isNull origin then None, None
-    else
-      let originCase : string = origin?Case |> unbox<string>
-      match originCase with
-      | "SourceMapped" ->
-        let fields = origin?Fields |> unbox<obj array>
-        Some(fields.[0] |> unbox<string>), Some(fields.[1] |> unbox<int>)
-      | _ -> None, None
+    match parseDuCase origin with
+    | Some "SourceMapped" ->
+      let fields = duFields origin |> Option.defaultValue [||]
+      match fields.Length >= 2 with
+      | true -> Some(fields.[0] |> unbox<string>), Some(fields.[1] |> unbox<int>)
+      | false -> None, None
+    | _ -> None, None
   { Id = VscTestId.create testIdStr
     DisplayName = entry?DisplayName |> unbox<string>
     FullName = entry?FullName |> unbox<string>
@@ -157,17 +170,10 @@ let parseTestInfo (entry: obj) : VscTestInfo =
 
 /// Parse Freshness DU from server JSON (Case/Fields or plain string)
 let parseFreshness (data: obj) : VscResultFreshness =
-  let freshnessObj = data?Freshness
-  if isNull freshnessObj then VscResultFreshness.Fresh
-  else
-    let caseStr : string =
-      let c = freshnessObj?Case
-      if isNull c then string freshnessObj
-      else c |> unbox<string>
-    match caseStr with
-    | "StaleCodeEdited" -> VscResultFreshness.StaleCodeEdited
-    | "StaleWrongGeneration" -> VscResultFreshness.StaleWrongGeneration
-    | _ -> VscResultFreshness.Fresh
+  match parseDuCase (data?Freshness) with
+  | Some "StaleCodeEdited" -> VscResultFreshness.StaleCodeEdited
+  | Some "StaleWrongGeneration" -> VscResultFreshness.StaleWrongGeneration
+  | _ -> VscResultFreshness.Fresh
 
 /// Parse test_results_batch → VscLiveTestEvent pair (discovery + results)
 let parseResultsBatch (data: obj) : VscLiveTestEvent list =
