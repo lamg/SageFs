@@ -326,6 +326,27 @@ let withClient (action: Client.Client -> JS.Promise<unit>) =
     if ok then do! action (getClient ())
   }
 
+type EvalResult =
+  | EvalOk of output: string * elapsed: float
+  | EvalError of message: string
+  | EvalConnectionError of message: string
+
+let evalCore (code: string) : JS.Promise<EvalResult> =
+  promise {
+    try
+      let c = getClient ()
+      let workDir = getWorkingDirectory ()
+      let startTime = performanceNow ()
+      let! result = Client.evalCode code workDir c
+      let elapsed = performanceNow () - startTime
+      match result with
+      | Client.Failed errMsg -> return EvalError errMsg
+      | Client.Succeeded msg ->
+        return EvalOk (msg |> Option.defaultValue "", elapsed)
+    with err ->
+      return EvalConnectionError (string err)
+  }
+
 let evalSelection () =
   promise {
     match Window.getActiveTextEditor () with
@@ -343,29 +364,23 @@ let evalSelection () =
         | "" -> ()
         | _ ->
           if not (code.TrimEnd().EndsWith(";;")) then code <- code.TrimEnd() + ";;"
-          let workDir = getWorkingDirectory ()
           let out = getOutput ()
           do! Window.withProgress ProgressLocation.Window "SageFs: evaluating..." (fun _progress _token ->
             promise {
               out.appendLine "──── eval ────"
               out.appendLine code
               out.appendLine ""
-              try
-                let c = getClient ()
-                let startTime = performanceNow ()
-                let! result = Client.evalCode code workDir c
-                let elapsed = performanceNow () - startTime
-                match result with
-                | Client.Failed errMsg ->
-                  out.appendLine (sprintf "❌ Error:\n%s" errMsg)
-                  out.show true
-                  showInlineDiagnostic ed errMsg
-                | Client.Succeeded msg ->
-                  let output = msg |> Option.defaultValue ""
-                  out.appendLine (sprintf "%s  (%s)" output (formatDuration elapsed))
-                  showInlineResult ed output (Some elapsed)
-              with err ->
-                out.appendLine (sprintf "❌ Connection error: %s" (string err))
+              let! result = evalCore code
+              match result with
+              | EvalError errMsg ->
+                out.appendLine (sprintf "❌ Error:\n%s" errMsg)
+                out.show true
+                showInlineDiagnostic ed errMsg
+              | EvalOk (output, elapsed) ->
+                out.appendLine (sprintf "%s  (%s)" output (formatDuration elapsed))
+                showInlineResult ed output (Some elapsed)
+              | EvalConnectionError msg ->
+                out.appendLine (sprintf "❌ Connection error: %s" msg)
                 out.show true
                 Window.showErrorMessage "Cannot reach SageFs daemon. Is it running?" [||] |> ignore
             }
@@ -383,22 +398,17 @@ let evalFile () =
         match code.Trim() with
         | "" -> ()
         | _ ->
-          let workDir = getWorkingDirectory ()
           let out = getOutput ()
           out.show true
           out.appendLine (sprintf "──── eval file: %s ────" ed.document.fileName)
-          try
-            let c = getClient ()
-            let startTime = performanceNow ()
-            let! result = Client.evalCode code workDir c
-            let elapsed = performanceNow () - startTime
-            match result with
-            | Client.Failed errMsg ->
-              out.appendLine (sprintf "❌ Error:\n%s" errMsg)
-            | Client.Succeeded msg ->
-              out.appendLine (sprintf "%s  (%s)" (msg |> Option.defaultValue "") (formatDuration elapsed))
-          with err ->
-            out.appendLine (sprintf "❌ Connection error: %s" (string err))
+          let! result = evalCore code
+          match result with
+          | EvalError errMsg ->
+            out.appendLine (sprintf "❌ Error:\n%s" errMsg)
+          | EvalOk (output, elapsed) ->
+            out.appendLine (sprintf "%s  (%s)" output (formatDuration elapsed))
+          | EvalConnectionError msg ->
+            out.appendLine (sprintf "❌ Connection error: %s" msg)
   }
 
 let evalRange (args: obj) =
@@ -413,26 +423,20 @@ let evalRange (args: obj) =
         match code.Trim() with
         | "" -> ()
         | _ ->
-          let workDir = getWorkingDirectory ()
           let out = getOutput ()
           out.show true
           out.appendLine "──── eval block ────"
           out.appendLine code
           out.appendLine ""
-          try
-            let c = getClient ()
-            let startTime = performanceNow ()
-            let! result = Client.evalCode code workDir c
-            let elapsed = performanceNow () - startTime
-            match result with
-            | Client.Failed errMsg ->
-              out.appendLine (sprintf "❌ Error:\n%s" errMsg)
-            | Client.Succeeded msg ->
-              let output = msg |> Option.defaultValue ""
-              out.appendLine (sprintf "%s  (%s)" output (formatDuration elapsed))
-              showInlineResult ed output (Some elapsed)
-          with err ->
-            out.appendLine (sprintf "❌ Connection error: %s" (string err))
+          let! result = evalCore code
+          match result with
+          | EvalError errMsg ->
+            out.appendLine (sprintf "❌ Error:\n%s" errMsg)
+          | EvalOk (output, elapsed) ->
+            out.appendLine (sprintf "%s  (%s)" output (formatDuration elapsed))
+            showInlineResult ed output (Some elapsed)
+          | EvalConnectionError msg ->
+            out.appendLine (sprintf "❌ Connection error: %s" msg)
   }
 
 let resetSessionCmd () =
@@ -586,34 +590,27 @@ let evalAdvance () =
         | "" -> ()
         | _ ->
           if not (code.TrimEnd().EndsWith(";;")) then code <- code.TrimEnd() + ";;"
-          let workDir = getWorkingDirectory ()
           let out = getOutput ()
-          try
-            let c = getClient ()
-            let startTime = performanceNow ()
-            let! result = Client.evalCode code workDir c
-            let elapsed = performanceNow () - startTime
-            match result with
-            | Client.Failed errMsg ->
-              out.appendLine (sprintf "❌ Error:\n%s" errMsg)
-              showInlineDiagnostic ed errMsg
-            | Client.Succeeded msg ->
-              let output = msg |> Option.defaultValue ""
-              out.appendLine (sprintf "%s  (%s)" output (formatDuration elapsed))
-              showInlineResult ed output (Some elapsed)
-              // Advance cursor to next non-blank line after current block
-              let curLine = int ed.selection.``end``.line
-              let lineCount = int ed.document.lineCount
-              let mutable nextLine = curLine + 1
-              while nextLine < lineCount && ed.document.lineAt(float nextLine).text.Trim() = "" do
-                nextLine <- nextLine + 1
-              if nextLine < lineCount then
-                let pos = newPosition nextLine 0
-                let sel = newSelection pos pos
-                setEditorSelection ed sel
-                revealEditorRange ed (newRange nextLine 0 nextLine 0)
-          with err ->
-            out.appendLine (sprintf "❌ Connection error: %s" (string err))
+          let! result = evalCore code
+          match result with
+          | EvalError errMsg ->
+            out.appendLine (sprintf "❌ Error:\n%s" errMsg)
+            showInlineDiagnostic ed errMsg
+          | EvalOk (output, elapsed) ->
+            out.appendLine (sprintf "%s  (%s)" output (formatDuration elapsed))
+            showInlineResult ed output (Some elapsed)
+            let curLine = int ed.selection.``end``.line
+            let lineCount = int ed.document.lineCount
+            let mutable nextLine = curLine + 1
+            while nextLine < lineCount && ed.document.lineAt(float nextLine).text.Trim() = "" do
+              nextLine <- nextLine + 1
+            if nextLine < lineCount then
+              let pos = newPosition nextLine 0
+              let sel = newSelection pos pos
+              setEditorSelection ed sel
+              revealEditorRange ed (newRange nextLine 0 nextLine 0)
+          | EvalConnectionError msg ->
+            out.appendLine (sprintf "❌ Connection error: %s" msg)
   }
 
 let cancelEvalCmd () =
