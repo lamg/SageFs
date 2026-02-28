@@ -23,7 +23,7 @@ let duFirstField<'T> (du: obj) : 'T option =
   |> Option.bind (fun du ->
     tryOfObj du?Fields
     |> Option.bind (fun fields ->
-      let arr = fields :> obj array
+      let arr = unbox<obj array> fields
       match arr.Length with 0 -> None | _ -> Some (unbox<'T> arr.[0])))
 
 /// Extract DU Fields array from a Fable-serialized DU
@@ -176,9 +176,8 @@ let start (port: int) (callbacks: LiveTestingCallbacks) : LiveTestingListener =
         let newState, changes = VscLiveTestState.update evt state
         state <- newState
         allChanges <- allChanges @ changes
-      match allChanges.IsEmpty with
-      | false -> callbacks.OnStateChange allChanges
-      | true -> ()
+      if not allChanges.IsEmpty then
+        callbacks.OnStateChange allChanges
     | "state" ->
       callbacks.OnStatusRefresh ()
     | "session" ->

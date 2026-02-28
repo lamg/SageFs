@@ -29,9 +29,8 @@ let start (port: int) (dc: DiagnosticCollection) =
           let range = newRange startLine startCol endLine endCol
           let d = newDiagnostic range message severity
 
-          match byFile.ContainsKey file with
-          | false -> byFile.[file] <- ResizeArray()
-          | true -> ()
+          if not (byFile.ContainsKey file) then
+            byFile.[file] <- ResizeArray()
           byFile.[file].Add(d))
 
       dc.clear ()

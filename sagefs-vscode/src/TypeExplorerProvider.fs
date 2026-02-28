@@ -12,10 +12,7 @@ module Client = SageFs.Vscode.SageFsClient
 let mutable currentClient: Client.Client option = None
 let mutable refreshEmitter: EventEmitter<obj> option = None
 
-[<Emit("JSON.parse($0)")>]
-let jsonParse (s: string) : obj = jsNative
-
-// ── Tree item builders ───────────────────────────────────────────
+// ── Tree item builders───────────────────────────────────────────
 
 let leafItem (label: string) (desc: string) (icon: string) =
   let item = newTreeItem label TreeItemCollapsibleState.None

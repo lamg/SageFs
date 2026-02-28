@@ -12,9 +12,8 @@ let mutable staleDecorations: Map<int, TextEditorDecorationType> = Map.empty
 // ── Helpers ────────────────────────────────────────────────────
 
 let formatDuration (ms: float) =
-  match ms < 1000.0 with
-  | true -> sprintf "%dms" (int ms)
-  | false -> sprintf "%.1fs" (ms / 1000.0)
+  if ms < 1000.0 then sprintf "%dms" (int ms)
+  else sprintf "%.1fs" (ms / 1000.0)
 
 // ── Core functions ─────────────────────────────────────────────
 
@@ -43,9 +42,7 @@ let markDecorationsStale (editor: TextEditor) =
     | Some deco ->
       deco.dispose () |> ignore
       blockDecorations <- Map.remove line blockDecorations
-      match Map.containsKey line staleDecorations with
-      | true -> ()
-      | false ->
+      if not (Map.containsKey line staleDecorations) then
         let staleOpts = createObj [
           "after" ==> createObj [
             "contentText" ==> "  // ⏸ stale"
@@ -63,9 +60,9 @@ let markDecorationsStale (editor: TextEditor) =
 
 /// Get the line number for inline decoration placement.
 let private getEditorLine (editor: TextEditor) =
-  match editor.selection.isEmpty with
-  | true -> int editor.selection.active.line
-  | false -> int editor.selection.``end``.line
+  if editor.selection.isEmpty
+  then int editor.selection.active.line
+  else int editor.selection.``end``.line
 
 let showInlineResult (editor: TextEditor) (text: string) (durationMs: float option) =
   let trimmed = text.Trim()
@@ -86,9 +83,8 @@ let showInlineResult (editor: TextEditor) (text: string) (durationMs: float opti
         sprintf "  // → %s%s" firstLine durSuffix
       | n ->
         let summary =
-          match n <= 4 with
-          | true -> lines |> String.concat "  │  "
-          | false -> sprintf "%s  │  ... (%d lines)" firstLine n
+          if n <= 4 then lines |> String.concat "  │  "
+          else sprintf "%s  │  ... (%d lines)" firstLine n
         sprintf "  // → %s%s" summary durSuffix
     let opts = createObj [
       "after" ==> createObj [

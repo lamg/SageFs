@@ -205,14 +205,15 @@ let rec startDaemon () =
     match isStarting with
     | true -> ()
     | false ->
+    isStarting <- true
     let c = getClient ()
     let! running = Client.isRunning c
     match running with
     | true ->
+      isStarting <- false
       Window.showInformationMessage "SageFs daemon is already running." [||] |> ignore
       refreshStatus ()
     | false ->
-      isStarting <- true
       let! projPath = findProject ()
       match projPath with
       | None ->
@@ -309,9 +310,7 @@ and ensureRunning () =
 let withClient (action: Client.Client -> JS.Promise<unit>) =
   promise {
     let! ok = ensureRunning ()
-    match ok with
-    | true -> do! action (getClient ())
-    | false -> ()
+    if ok then do! action (getClient ())
   }
 
 /// Fire a client action that returns ApiOutcome, show its message, then refresh.
@@ -359,16 +358,14 @@ let logEvalResult (out: OutputChannel) (result: EvalResult) =
 /// Get code from selection or code block, append ;; if needed.
 let getEvalCode (ed: TextEditor) =
   let raw =
-    match ed.selection.isEmpty with
-    | false ->
+    if not ed.selection.isEmpty then
       ed.document.getTextRange (newRange (int ed.selection.start.line) (int ed.selection.start.character) (int ed.selection.``end``.line) (int ed.selection.``end``.character))
-    | true -> getCodeBlock ed
+    else getCodeBlock ed
   match raw.Trim() with
   | "" -> None
   | _ ->
-    match raw.TrimEnd().EndsWith(";;") with
-    | true -> Some raw
-    | false -> Some (raw.TrimEnd() + ";;")
+    if raw.TrimEnd().EndsWith(";;") then Some raw
+    else Some (raw.TrimEnd() + ";;")
 
 let evalSelection () =
   promise {
@@ -475,7 +472,7 @@ let private formatSessionLabel (s: Client.SessionInfo) =
     | ps -> ps |> String.concat ", "
   sprintf "%s (%s) [%s]" s.id proj s.status
 
-let switchSessionCmd () =
+let sessionPickCommand (prompt: string) (action: Client.SessionInfo -> Client.Client -> JS.Promise<Client.ApiOutcome>) (onSuccess: Client.SessionInfo -> unit) =
   withClient (fun c ->
     promise {
       let! sessions = Client.listSessions c
@@ -484,54 +481,36 @@ let switchSessionCmd () =
         Window.showInformationMessage "No sessions available." [||] |> ignore
       | _ ->
         let items = sessions |> Array.map formatSessionLabel
-        let! picked = Window.showQuickPick items "Select a session"
+        let! picked = Window.showQuickPick items prompt
         match picked with
         | Some label ->
-          let idx = items |> Array.tryFindIndex (fun i -> i = label)
-          match idx with
+          match items |> Array.tryFindIndex ((=) label) with
           | Some i ->
             let sess = sessions.[i]
-            let! result = Client.switchSession sess.id c
+            let! result = action sess c
             match result with
             | Client.Succeeded _ ->
-              activeSessionId <- Some sess.id
-              Window.showInformationMessage (sprintf "Switched to session %s" sess.id) [||] |> ignore
+              onSuccess sess
+              Window.showInformationMessage (result |> Client.ApiOutcome.messageOrDefault prompt) [||] |> ignore
             | Client.Failed err ->
-              Window.showErrorMessage (sprintf "Failed to switch session: %s" err) [||] |> ignore
+              Window.showErrorMessage (sprintf "Failed: %s" err) [||] |> ignore
             refreshStatus ()
           | None -> ()
         | None -> ()
     })
 
+let switchSessionCmd () =
+  sessionPickCommand "Select a session"
+    (fun sess c -> Client.switchSession sess.id c)
+    (fun sess -> activeSessionId <- Some sess.id)
+
 let stopSessionCmd () =
-  withClient (fun c ->
-    promise {
-      let! sessions = Client.listSessions c
-      match sessions with
-      | [||] ->
-        Window.showInformationMessage "No sessions available." [||] |> ignore
-      | _ ->
-        let items = sessions |> Array.map formatSessionLabel
-        let! picked = Window.showQuickPick items "Select a session to stop"
-        match picked with
-        | Some label ->
-          let idx = items |> Array.tryFindIndex (fun i -> i = label)
-          match idx with
-          | Some i ->
-            let sess = sessions.[i]
-            let! result = Client.stopSession sess.id c
-            match result with
-            | Client.Succeeded _ ->
-              match activeSessionId with
-              | Some id when id = sess.id -> activeSessionId <- None
-              | _ -> ()
-              Window.showInformationMessage (sprintf "Stopped session %s" sess.id) [||] |> ignore
-            | Client.Failed err ->
-              Window.showErrorMessage (sprintf "Failed to stop session: %s" err) [||] |> ignore
-            refreshStatus ()
-          | None -> ()
-        | None -> ()
-    })
+  sessionPickCommand "Select a session to stop"
+    (fun sess c -> Client.stopSession sess.id c)
+    (fun sess ->
+      match activeSessionId with
+      | Some id when id = sess.id -> activeSessionId <- None
+      | _ -> ())
 
 let stopDaemon () =
   daemonProcess |> Option.iter killProc
@@ -677,9 +656,8 @@ let activate (context: ExtensionContext) =
   let docChangeSub = Workspace.onDidChangeTextDocument (fun _evt ->
     match Window.getActiveTextEditor () with
     | Some ed when ed.document.fileName.EndsWith(".fs") || ed.document.fileName.EndsWith(".fsx") ->
-      match Map.isEmpty InlineDeco.blockDecorations with
-      | true -> ()
-      | false -> InlineDeco.markDecorationsStale ed
+      if not (Map.isEmpty InlineDeco.blockDecorations) then
+        InlineDeco.markDecorationsStale ed
     | _ -> ())
   context.subscriptions.Add docChangeSub
 
@@ -864,15 +842,18 @@ let activate (context: ExtensionContext) =
     // Initialize inline test decorations
     TestDeco.initialize ()
     // Live testing listener — handles test_summary, test_results_batch, and state events
-    // NOTE: Circular ref — callbacks capture `listenerRef` which is set AFTER listener creation.
-    // Works because JS closures capture the mutable cell reference, not its value at creation time.
-    let mutable listenerRef: LiveTest.LiveTestingListener option = None
+    let refreshAllDecorations () =
+      liveTestListener
+      |> Option.map (fun l -> l.State ())
+      |> Option.defaultValue VscLiveTestState.empty
+      |> fun state ->
+        TestDeco.applyToAllEditors state
+        TestDeco.applyCoverageToAllEditors state
+        state
     let listener = LiveTest.start c.mcpPort {
       OnStateChange = fun changes ->
         adapter.Refresh changes
-        let state = listenerRef |> Option.map (fun l -> l.State ()) |> Option.defaultValue VscLiveTestState.empty
-        TestDeco.applyToAllEditors state
-        TestDeco.applyCoverageToAllEditors state
+        let state = refreshAllDecorations ()
         TestDeco.updateDiagnostics state
         TestLens.updateState state
       OnSummaryUpdate = fun summary -> updateTestStatusBar summary
@@ -880,22 +861,15 @@ let activate (context: ExtensionContext) =
       OnBindingsUpdate = fun _ -> ()
       OnPipelineTraceUpdate = fun _ -> ()
     }
-    listenerRef <- Some listener
     liveTestListener <- Some listener
     sseDisposable <- Some {
       new Disposable with member _.dispose () = listener.Dispose(); null
     }
     // Re-apply decorations when editors change
     context.subscriptions.Add (
-      Window.onDidChangeVisibleTextEditors (fun _editors ->
-        let state = listenerRef |> Option.map (fun l -> l.State ()) |> Option.defaultValue VscLiveTestState.empty
-        TestDeco.applyToAllEditors state
-        TestDeco.applyCoverageToAllEditors state))
+      Window.onDidChangeVisibleTextEditors (fun _editors -> refreshAllDecorations () |> ignore))
     context.subscriptions.Add (
-      Window.onDidChangeActiveTextEditor (fun _editor ->
-        let state = listenerRef |> Option.map (fun l -> l.State ()) |> Option.defaultValue VscLiveTestState.empty
-        TestDeco.applyToAllEditors state
-        TestDeco.applyCoverageToAllEditors state))
+      Window.onDidChangeActiveTextEditor (fun _editor -> refreshAllDecorations () |> ignore))
     // Auto-discover and create session if none exists
     Client.listSessions c
     |> Promise.iter (fun sessions ->
@@ -929,9 +903,7 @@ let activate (context: ExtensionContext) =
 
   Client.isRunning c
   |> Promise.iter (fun running ->
-    match running with
-    | true -> connectToRunningDaemon c
-    | false -> ()
+    if running then connectToRunningDaemon c
   )
 
   // Config change listener

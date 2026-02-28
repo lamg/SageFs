@@ -7,17 +7,31 @@ function createSseSubscriber(url, onMessage) {
   let buffer = '';
   let currentEvent = 'message';
   let retryDelay = 1000;
+  let inactivityTimer;
   const maxDelay = 30000;
+  const inactivityTimeout = 60000;
+
+  const resetInactivity = () => {
+    if (inactivityTimer) clearTimeout(inactivityTimer);
+    inactivityTimer = setTimeout(() => {
+      console.warn('[SageFs SSE] No data for 60s, reconnecting...');
+      if (req) req.destroy();
+    }, inactivityTimeout);
+  };
 
   const reconnect = () => {
+    if (inactivityTimer) clearTimeout(inactivityTimer);
     retryDelay = Math.min(retryDelay * 2, maxDelay);
-    setTimeout(startListening, retryDelay);
+    const jitter = retryDelay * 0.3 * Math.random();
+    setTimeout(startListening, retryDelay + jitter);
   };
 
   const startListening = () => {
     req = http.get(url, { timeout: 0 }, (res) => {
       retryDelay = 1000;
+      resetInactivity();
       res.on('data', (chunk) => {
+        resetInactivity();
         buffer += chunk.toString();
         const lines = buffer.split('\n');
         buffer = lines.pop() || '';
@@ -42,7 +56,7 @@ function createSseSubscriber(url, onMessage) {
   };
 
   startListening();
-  return { dispose: () => { if (req) req.destroy(); } };
+  return { dispose: () => { if (inactivityTimer) clearTimeout(inactivityTimer); if (req) req.destroy(); } };
 }
 
 module.exports = { createSseSubscriber };
