@@ -61,15 +61,18 @@ let markDecorationsStale (editor: TextEditor) =
         staleDecorations <- Map.add line staleDeco staleDecorations
     | None -> ()
 
+/// Get the line number for inline decoration placement.
+let private getEditorLine (editor: TextEditor) =
+  match editor.selection.isEmpty with
+  | true -> int editor.selection.active.line
+  | false -> int editor.selection.``end``.line
+
 let showInlineResult (editor: TextEditor) (text: string) (durationMs: float option) =
   let trimmed = text.Trim()
   match trimmed with
   | "" -> ()
   | _ ->
-    let line =
-      match editor.selection.isEmpty with
-      | true -> int editor.selection.active.line
-      | false -> int editor.selection.``end``.line
+    let line = getEditorLine editor
     clearBlockDecoration line
     let lines = trimmed.Split('\n')
     let firstLine = match lines.Length with 0 -> "" | _ -> lines.[0]
@@ -109,10 +112,7 @@ let showInlineDiagnostic (editor: TextEditor) (text: string) =
   match firstLine with
   | "" -> ()
   | _ ->
-    let line =
-      match editor.selection.isEmpty with
-      | true -> int editor.selection.active.line
-      | false -> int editor.selection.``end``.line
+    let line = getEditorLine editor
     clearBlockDecoration line
     let opts = createObj [
       "after" ==> createObj [

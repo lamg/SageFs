@@ -65,6 +65,7 @@ let onProcError (proc: obj) (handler: string -> unit) : unit = jsNative
 let onProcExit (proc: obj) (handler: int -> string -> unit) : unit = jsNative
 
 let mutable daemonProcess: obj option = None
+let mutable isStarting = false
 
 // ── Helpers ────────────────────────────────────────────────────
 
@@ -209,15 +210,21 @@ let refreshStatus () =
 
 let rec startDaemon () =
   promise {
+    match isStarting with
+    | true -> ()
+    | false ->
     let c = getClient ()
     let! running = Client.isRunning c
-    if running then
+    match running with
+    | true ->
       Window.showInformationMessage "SageFs daemon is already running." [||] |> ignore
       refreshStatus ()
-    else
+    | false ->
+      isStarting <- true
       let! projPath = findProject ()
       match projPath with
       | None ->
+        isStarting <- false
         Window.showErrorMessage "No .fsproj or .sln found. Open an F# project first." [||] |> ignore
       | Some proj ->
         let out = getOutput ()
@@ -261,6 +268,7 @@ let rec startDaemon () =
             |> Promise.iter (fun ready ->
               if ready then
                 intervalId |> Option.iter jsClearInterval
+                isStarting <- false
                 out.appendLine "SageFs daemon is ready."
                 Window.showInformationMessage "SageFs daemon started." [||] |> ignore
                 match diagnosticCollection with
@@ -271,6 +279,7 @@ let rec startDaemon () =
                 refreshStatus ()
               elif attempts > 60 then
                 intervalId |> Option.iter jsClearInterval
+                isStarting <- false
                 out.appendLine "Timed out waiting for SageFs daemon after 120s."
                 Window.showErrorMessage "SageFs daemon failed to start after 120s." [||] |> ignore
                 sb.text <- "$(error) SageFs: offline"
@@ -758,7 +767,7 @@ let activate (context: ExtensionContext) =
           Window.showWarningMessage "Could not fetch dependency graph" [||] |> ignore
         | Some body ->
           let parsed = jsonParse body
-          let total: int = parsed?TotalSymbols |> unbox
+          let total = tryField<int> "TotalSymbols" parsed |> Option.defaultValue 0
           match total with
           | 0 ->
             Window.showInformationMessage "No dependency graph available yet" [||] |> ignore
@@ -772,15 +781,15 @@ let activate (context: ExtensionContext) =
                 Window.showWarningMessage "Could not fetch graph" [||] |> ignore
               | Some detail ->
                 let parsed2 = jsonParse detail
-                let tests: obj array = parsed2?Tests |> unbox
+                let tests = tryField<obj array> "Tests" parsed2 |> Option.defaultValue [||]
                 match tests with
                 | [||] ->
                   Window.showInformationMessage (sprintf "No tests cover '%s'" sym) [||] |> ignore
                 | _ ->
                   let items =
                     tests |> Array.map (fun t ->
-                      let name: string = t?TestName |> unbox
-                      let status: string = t?Status |> unbox
+                      let name = tryField<string> "TestName" t |> Option.defaultValue "?"
+                      let status = tryField<string> "Status" t |> Option.defaultValue "unknown"
                       let icon = match status with "passed" -> "✓" | "failed" -> "✗" | _ -> "●"
                       sprintf "%s %s [%s]" icon name status)
                   Window.showQuickPick items (sprintf "Tests covering '%s'" sym) |> Promise.start
@@ -863,6 +872,8 @@ let activate (context: ExtensionContext) =
     // Initialize inline test decorations
     TestDeco.initialize ()
     // Live testing listener — handles test_summary, test_results_batch, and state events
+    // NOTE: Circular ref — callbacks capture `listenerRef` which is set AFTER listener creation.
+    // Works because JS closures capture the mutable cell reference, not its value at creation time.
     let mutable listenerRef: LiveTest.LiveTestingListener option = None
     let listener = LiveTest.start c.mcpPort {
       OnStateChange = fun changes ->

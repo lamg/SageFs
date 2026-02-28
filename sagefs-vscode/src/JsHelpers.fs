@@ -45,96 +45,17 @@ let promiseIgnore (p: JS.Promise<_>) : unit =
 
 // ── SSE subscribers with exponential backoff reconnect ──────────────────
 
+[<Import("createSseSubscriber", "./sse-helpers.js")>]
+let private createSseSubscriber (url: string) (onMessage: string -> obj -> unit) : Disposable = jsNative
+
 /// Simple SSE subscriber: parses `data:` lines as JSON, calls onData(parsed).
-[<Emit("""(() => {
-  const http = require('http');
-  let req;
-  let buffer = '';
-  let retryDelay = 1000;
-  const maxDelay = 30000;
-  const startListening = () => {
-    req = http.get($0, { timeout: 0 }, (res) => {
-      retryDelay = 1000;
-      res.on('data', (chunk) => {
-        buffer += chunk.toString();
-        let lines = buffer.split('\\n');
-        buffer = lines.pop() || '';
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            try {
-              const data = JSON.parse(line.slice(6));
-              $1(data);
-            } catch (_) {}
-          }
-        }
-      });
-      res.on('end', () => {
-        retryDelay = Math.min(retryDelay * 2, maxDelay);
-        setTimeout(startListening, retryDelay);
-      });
-      res.on('error', () => {
-        retryDelay = Math.min(retryDelay * 2, maxDelay);
-        setTimeout(startListening, retryDelay);
-      });
-    });
-    req.on('error', () => {
-      retryDelay = Math.min(retryDelay * 2, maxDelay);
-      setTimeout(startListening, retryDelay);
-    });
-  };
-  startListening();
-  return { dispose: () => { if (req) req.destroy(); } };
-})()""")>]
-let subscribeSse (url: string) (onData: obj -> unit) : Disposable = jsNative
+let subscribeSse (url: string) (onData: obj -> unit) : Disposable =
+  createSseSubscriber url (fun _eventType data -> onData data)
 
 /// Typed SSE subscriber: tracks `event:` type and `data:` payload.
 /// Calls onEvent(eventType, parsedData) for each complete SSE message.
-[<Emit("""(() => {
-  const http = require('http');
-  let req;
-  let buffer = '';
-  let currentEvent = 'message';
-  let retryDelay = 1000;
-  const maxDelay = 30000;
-  const startListening = () => {
-    req = http.get($0, { timeout: 0 }, (res) => {
-      retryDelay = 1000;
-      res.on('data', (chunk) => {
-        buffer += chunk.toString();
-        let lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-        for (const line of lines) {
-          if (line.startsWith('event: ')) {
-            currentEvent = line.slice(7).trim();
-          } else if (line.startsWith('data: ')) {
-            try {
-              const data = JSON.parse(line.slice(6));
-              $1(currentEvent, data);
-            } catch (_) {}
-            currentEvent = 'message';
-          } else if (line.trim() === '') {
-            currentEvent = 'message';
-          }
-        }
-      });
-      res.on('end', () => {
-        retryDelay = Math.min(retryDelay * 2, maxDelay);
-        setTimeout(startListening, retryDelay);
-      });
-      res.on('error', () => {
-        retryDelay = Math.min(retryDelay * 2, maxDelay);
-        setTimeout(startListening, retryDelay);
-      });
-    });
-    req.on('error', () => {
-      retryDelay = Math.min(retryDelay * 2, maxDelay);
-      setTimeout(startListening, retryDelay);
-    });
-  };
-  startListening();
-  return { dispose: () => { if (req) req.destroy(); } };
-})()""")>]
-let subscribeTypedSse (url: string) (onEvent: string -> obj -> unit) : Disposable = jsNative
+let subscribeTypedSse (url: string) (onEvent: string -> obj -> unit) : Disposable =
+  createSseSubscriber url onEvent
 
 // ── Timer helpers ───────────────────────────────────────────────────────
 

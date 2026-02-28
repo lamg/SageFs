@@ -209,12 +209,13 @@ let hardReset (rebuild: bool) (c: Client) =
   postCommand c "/hard-reset" (jsonStringify {| rebuild = rebuild |}) 60000
 
 let parseSessions (parsed: obj) =
-  let sessions: obj array = parsed?sessions |> unbox
-  sessions |> Array.map (fun s ->
-    { id = s?id |> unbox<string>
+  tryField<obj array> "sessions" parsed
+  |> Option.defaultValue [||]
+  |> Array.map (fun s ->
+    { id = tryField<string> "id" s |> Option.defaultValue ""
       name = None
-      workingDirectory = s?workingDirectory |> unbox<string>
-      status = s?status |> unbox<string>
+      workingDirectory = tryField<string> "workingDirectory" s |> Option.defaultValue ""
+      status = tryField<string> "status" s |> Option.defaultValue "unknown"
       projects = tryField<string array> "projects" s |> Option.defaultValue [||]
       evalCount = tryField<int> "evalCount" s |> Option.defaultValue 0 })
 
@@ -234,9 +235,9 @@ let stopSession (sessionId: string) (c: Client) =
   postCommand c "/api/sessions/stop" (jsonStringify {| sessionId = sessionId |}) 10000
 
 let parseSystemStatus (parsed: obj) =
-  { supervised = parsed?supervised |> unbox<bool>
-    restartCount = parsed?restartCount |> unbox<int>
-    version = parsed?version |> unbox<string> }
+  { supervised = tryField<bool> "supervised" parsed |> Option.defaultValue false
+    restartCount = tryField<int> "restartCount" parsed |> Option.defaultValue 0
+    version = tryField<string> "version" parsed |> Option.defaultValue "?" }
 
 let getSystemStatus (c: Client) =
   getJson "getSystemStatus" "/api/system/status" 3000 parseSystemStatus c
@@ -276,29 +277,29 @@ let unwatchDirectoryHotReload (sessionId: string) (directory: string) (c: Client
 
 let parseWarmupContext (parsed: obj) =
   let assemblies =
-    parsed?AssembliesLoaded
-    |> unbox<obj array>
+    tryField<obj array> "AssembliesLoaded" parsed
+    |> Option.defaultValue [||]
     |> Array.map (fun a ->
-      { Name = a?Name |> unbox<string>
-        Path = a?Path |> unbox<string>
-        NamespaceCount = a?NamespaceCount |> unbox<int>
-        ModuleCount = a?ModuleCount |> unbox<int> })
+      { Name = tryField<string> "Name" a |> Option.defaultValue ""
+        Path = tryField<string> "Path" a |> Option.defaultValue ""
+        NamespaceCount = tryField<int> "NamespaceCount" a |> Option.defaultValue 0
+        ModuleCount = tryField<int> "ModuleCount" a |> Option.defaultValue 0 })
   let opened =
-    parsed?NamespacesOpened
-    |> unbox<obj array>
+    tryField<obj array> "NamespacesOpened" parsed
+    |> Option.defaultValue [||]
     |> Array.map (fun b ->
-      { Name = b?Name |> unbox<string>
-        IsModule = b?IsModule |> unbox<bool>
-        Source = b?Source |> unbox<string> })
+      { Name = tryField<string> "Name" b |> Option.defaultValue ""
+        IsModule = tryField<bool> "IsModule" b |> Option.defaultValue false
+        Source = tryField<string> "Source" b |> Option.defaultValue "" })
   let failed =
-    parsed?FailedOpens
-    |> unbox<obj array>
-    |> Array.map (fun f -> f |> unbox<string array>)
-  { SourceFilesScanned = parsed?SourceFilesScanned |> unbox<int>
+    tryField<obj array> "FailedOpens" parsed
+    |> Option.defaultValue [||]
+    |> Array.map (fun f -> tryOfObj f |> Option.map unbox<string array> |> Option.defaultValue [||])
+  { SourceFilesScanned = tryField<int> "SourceFilesScanned" parsed |> Option.defaultValue 0
     AssembliesLoaded = assemblies
     NamespacesOpened = opened
     FailedOpens = failed
-    WarmupDurationMs = parsed?WarmupDurationMs |> unbox<int> }
+    WarmupDurationMs = tryField<int> "WarmupDurationMs" parsed |> Option.defaultValue 0 }
 
 let getWarmupContext (sessionId: string) (c: Client) =
   dashGetJson "getWarmupContext" (sprintf "/api/sessions/%s/warmup-context" sessionId) 5000 parseWarmupContext c
@@ -319,13 +320,13 @@ let getCompletions (code: string) (cursorPosition: int) (workingDirectory: strin
       match resp.statusCode with
       | 200 ->
         let parsed = jsonParse resp.body
-        let items = parsed?completions |> unbox<obj array>
+        let items = tryField<obj array> "completions" parsed |> Option.defaultValue [||]
         return
           items
           |> Array.map (fun item ->
-            { label = item?label |> unbox<string>
-              kind = item?kind |> unbox<string>
-              insertText = item?insertText |> unbox<string> })
+            { label = tryField<string> "label" item |> Option.defaultValue ""
+              kind = tryField<string> "kind" item |> Option.defaultValue ""
+              insertText = tryField<string> "insertText" item |> Option.defaultValue "" })
       | _ ->
         return [||]
     with ex ->
