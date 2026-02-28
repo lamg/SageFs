@@ -40,6 +40,7 @@ let private logPromiseError (err: obj) : unit = jsNative
 /// Ignore a promise's result but log rejections instead of swallowing them silently.
 let promiseIgnore (p: JS.Promise<_>) : unit =
   p
+  |> Promise.map ignore
   |> Promise.catch (fun err -> logPromiseError err)
   |> Promise.start
 

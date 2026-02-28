@@ -258,8 +258,8 @@ let rec startDaemon () =
           jsSetInterval (fun () ->
             attempts <- attempts + 1
             sb.text <- sprintf "$(loading~spin) SageFs starting... (%ds)" (attempts * 2)
-            Client.isRunning c
-            |> Promise.iter (fun ready ->
+            promise {
+              let! ready = Client.isRunning c
               if ready then
                 intervalId |> Option.iter jsClearInterval
                 isStarting <- false
@@ -273,7 +273,7 @@ let rec startDaemon () =
                 out.appendLine "Timed out waiting for SageFs daemon after 120s."
                 Window.showErrorMessage "SageFs daemon failed to start after 120s." [||] |> ignore
                 sb.text <- "$(error) SageFs: offline"
-            )
+            } |> promiseIgnore
           ) 2000
         intervalId <- Some id
   }
@@ -612,9 +612,9 @@ let hijackIonideSendToFsi (subs: ResizeArray<Disposable>) =
         Commands.registerCommand cmd (fun _ ->
           match cmd with
           | "fsi.SendFile" ->
-            Commands.executeCommand "sagefs.evalFile" |> ignore
+            Commands.executeCommand "sagefs.evalFile" |> promiseIgnore
           | _ ->
-            Commands.executeCommand "sagefs.eval" |> ignore
+            Commands.executeCommand "sagefs.eval" |> promiseIgnore
         )
       subs.Add disp
     with _ -> ()
@@ -722,7 +722,7 @@ let activate (context: ExtensionContext) =
           let lines = body.Split('\n') |> Array.filter (fun l -> l.Trim().Length > 0)
           match lines with
           | [||] -> Window.showInformationMessage "No recent events" [||] |> ignore
-          | _ -> Window.showQuickPick lines "Recent SageFs events" |> Promise.start
+          | _ -> Window.showQuickPick lines "Recent SageFs events" |> promiseIgnore
         | None -> Window.showWarningMessage "Could not fetch events" [||] |> ignore
       }) |> promiseIgnore)
   reg "sagefs.showCallGraph" (fun _ ->
@@ -759,7 +759,7 @@ let activate (context: ExtensionContext) =
                       let status = tryField<string> "Status" t |> Option.defaultValue "unknown"
                       let icon = match status with "passed" -> "✓" | "failed" -> "✗" | _ -> "●"
                       sprintf "%s %s [%s]" icon name status)
-                  Window.showQuickPick items (sprintf "Tests covering '%s'" sym) |> Promise.start
+                  Window.showQuickPick items (sprintf "Tests covering '%s'" sym) |> promiseIgnore
             | _ -> ()
       }) |> promiseIgnore)
   reg "sagefs.showBindings" (fun _ ->
@@ -776,7 +776,7 @@ let activate (context: ExtensionContext) =
             Some (sprintf "%s : %s%s" name typeSig shadowLabel)
           | _ -> None)
       Window.showQuickPick items "FSI Bindings"
-      |> Promise.start)
+      |> promiseIgnore)
   reg "sagefs.showPipelineTrace" (fun _ ->
     match liveTestListener |> Option.bind (fun l -> l.PipelineTrace ()) with
     | Some trace ->
@@ -789,7 +789,7 @@ let activate (context: ExtensionContext) =
           (tryField "Summary" trace |> Option.bind (tryField<int> "Passed") |> Option.defaultValue 0)
           (tryField "Summary" trace |> Option.bind (tryField<int> "Failed") |> Option.defaultValue 0)
       |]
-      Window.showQuickPick items "Pipeline Trace" |> Promise.start
+      Window.showQuickPick items "Pipeline Trace" |> promiseIgnore
     | None -> Window.showInformationMessage "No pipeline trace data yet" [||] |> ignore)
 
   reg "sagefs.exportSession" (fun _ ->
@@ -808,7 +808,8 @@ let activate (context: ExtensionContext) =
             | 0 -> Window.showInformationMessage "No evaluations to export" [||] |> ignore
             | _ ->
               let! doc = Workspace.openTextDocument r.content "fsharp"
-              Window.showTextDocument doc |> Promise.start
+              let! _ = Window.showTextDocument doc
+              ()
       }) |> promiseIgnore)
   let lensProvider = Lens.create ()
   context.subscriptions.Add (Languages.registerCodeLensProvider "fsharp" lensProvider)
@@ -906,10 +907,10 @@ let activate (context: ExtensionContext) =
   // Wire up daemon-ready callback for startDaemon lifecycle
   onDaemonReady <- Some connectToRunningDaemon
 
-  Client.isRunning c
-  |> Promise.iter (fun running ->
+  promise {
+    let! running = Client.isRunning c
     if running then connectToRunningDaemon c
-  )
+  } |> promiseIgnore
 
   // Config change listener
   context.subscriptions.Add (
@@ -933,18 +934,14 @@ let activate (context: ExtensionContext) =
   let autoStart = config.get("autoStart", true)
   match autoStart with
   | true ->
-    Client.isRunning c
-    |> Promise.iter (fun running ->
-      match running with
-      | false ->
-        promise {
-          let! projPath = findProject ()
-          match projPath with
-          | Some _ -> do! startDaemon ()
-          | None -> ()
-        } |> promiseIgnore
-      | true -> ()
-    )
+    promise {
+      let! running = Client.isRunning c
+      if not running then
+        let! projPath = findProject ()
+        match projPath with
+        | Some _ -> do! startDaemon ()
+        | None -> ()
+    } |> promiseIgnore
   | false -> ()
 
 let deactivate () =
