@@ -87,7 +87,7 @@ internal class TestStatusCodeLens : CodeLens
 
     var (info, testResult) = result.Value;
     var text = Core.LiveTestingSubscriber.formatTestLabel(info, testResult);
-    var tooltip = Core.LiveTestingSubscriber.formatTestTooltip(info, testResult);
+    var tooltip = Core.LiveTestingSubscriber.formatTestTooltip(info, testResult, FSharpOption<Core.ResultFreshness>.None);
 
     return Task.FromResult(new CodeLensLabel
     {
