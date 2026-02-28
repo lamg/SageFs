@@ -57,12 +57,12 @@ let parseTestId (testIdObj: obj) : string =
 
 /// Map server TestSummary JSON to VscTestSummary
 let parseSummary (data: obj) : VscTestSummary =
-  { Total = data?Total |> unbox<int>
-    Passed = data?Passed |> unbox<int>
-    Failed = data?Failed |> unbox<int>
-    Running = data?Running |> unbox<int>
-    Stale = data?Stale |> unbox<int>
-    Disabled = data?Disabled |> unbox<int> }
+  { Total = tryField<int> "Total" data |> Option.defaultValue 0
+    Passed = tryField<int> "Passed" data |> Option.defaultValue 0
+    Failed = tryField<int> "Failed" data |> Option.defaultValue 0
+    Running = tryField<int> "Running" data |> Option.defaultValue 0
+    Stale = tryField<int> "Stale" data |> Option.defaultValue 0
+    Disabled = tryField<int> "Disabled" data |> Option.defaultValue 0 }
 
 /// Map a server TestStatusEntry to VscTestResult
 let parseTestResult (entry: obj) : VscTestResult =
@@ -84,7 +84,7 @@ let parseTestResult (entry: obj) : VscTestResult =
         |> Option.defaultValue "test failed"
       VscTestOutcome.Failed msg
     | "Skipped" ->
-      let reason = fields |> Option.bind (fun f -> Some (f.[0] |> unbox<string>)) |> Option.defaultValue "skipped"
+      let reason = fields |> Option.bind Array.tryHead |> Option.bind (fun x -> tryOfObj (unbox<string> x)) |> Option.defaultValue "skipped"
       VscTestOutcome.Skipped reason
     | "Running" -> VscTestOutcome.Running
     | "Stale" -> VscTestOutcome.Stale
@@ -92,10 +92,10 @@ let parseTestResult (entry: obj) : VscTestResult =
     | _ -> VscTestOutcome.Skipped "unknown status"
   let durationMs =
     match statusCase, fields with
-    | "Passed", Some f when f.Length > 0 ->
-      f.[0] |> unbox<string> |> parseDuration
+    | "Passed", Some f ->
+      f |> Array.tryHead |> Option.bind (fun x -> tryOfObj (unbox<string> x)) |> Option.bind parseDuration
     | "Failed", Some f when f.Length >= 2 ->
-      f.[1] |> unbox<string> |> parseDuration
+      f |> Array.tryItem 1 |> Option.bind (fun x -> tryOfObj (unbox<string> x)) |> Option.bind parseDuration
     | _ -> None
   { Id = id; Outcome = outcome; DurationMs = durationMs; Output = None }
 

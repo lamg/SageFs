@@ -28,7 +28,7 @@ function createSseSubscriber(url, onMessage) {
             try {
               const data = JSON.parse(line.slice(6));
               onMessage(currentEvent, data);
-            } catch (_) {}
+            } catch (e) { console.warn('[SageFs SSE] JSON parse error:', e.message); }
             currentEvent = 'message';
           } else if (line.trim() === '') {
             currentEvent = 'message';

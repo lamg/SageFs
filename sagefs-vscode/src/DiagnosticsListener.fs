@@ -14,19 +14,19 @@ let start (port: int) (dc: DiagnosticCollection) =
       let byFile = System.Collections.Generic.Dictionary<string, ResizeArray<Diagnostic>>()
 
       for diag in diagnostics do
-        tryOfObj (diag?file |> unbox<string>)
+        tryField<string> "file" diag
         |> Option.iter (fun file ->
-          let message = tryOfObj (diag?message) |> Option.map unbox<string> |> Option.defaultValue ""
+          let message = tryField<string> "message" diag |> Option.defaultValue ""
           let severity =
-            match diag?severity |> unbox<string> with
+            match tryField<string> "severity" diag |> Option.defaultValue "" with
             | "error" -> VDiagnosticSeverity.Error
             | "warning" -> VDiagnosticSeverity.Warning
             | "info" -> VDiagnosticSeverity.Information
             | _ -> VDiagnosticSeverity.Hint
-          let startLine = (diag?startLine |> unbox<int>) - 1 |> max 0
-          let startCol = (diag?startColumn |> unbox<int>) - 1 |> max 0
-          let endLine = (diag?endLine |> unbox<int>) - 1 |> max 0
-          let endCol = (diag?endColumn |> unbox<int>) - 1 |> max 0
+          let startLine = (tryField<int> "startLine" diag |> Option.defaultValue 1) - 1 |> max 0
+          let startCol = (tryField<int> "startColumn" diag |> Option.defaultValue 1) - 1 |> max 0
+          let endLine = (tryField<int> "endLine" diag |> Option.defaultValue 1) - 1 |> max 0
+          let endCol = (tryField<int> "endColumn" diag |> Option.defaultValue 1) - 1 |> max 0
           let range = newRange startLine startCol endLine endCol
           let d = newDiagnostic range message severity
 

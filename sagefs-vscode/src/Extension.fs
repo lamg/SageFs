@@ -115,14 +115,6 @@ let getCodeBlock (editor: TextEditor) =
   let range = newRange startLine 0 endLine (int (doc.lineAt(float endLine).text.Length))
   doc.getTextRange range
 
-// ── Inline decorations (delegated to InlineDecorations module) ──
-
-let showInlineResult = InlineDeco.showInlineResult
-let showInlineDiagnostic = InlineDeco.showInlineDiagnostic
-let markDecorationsStale = InlineDeco.markDecorationsStale
-let clearAllDecorations = InlineDeco.clearAllDecorations
-let formatDuration = InlineDeco.formatDuration
-
 // ── Status ─────────────────────────────────────────────────────
 
 let updateTestStatusBar (summary: VscTestSummary) =
@@ -357,7 +349,7 @@ let evalCore (code: string) : JS.Promise<EvalResult> =
 let logEvalResult (out: OutputChannel) (result: EvalResult) =
   match result with
   | EvalOk (output, elapsed) ->
-    out.appendLine (sprintf "%s  (%s)" output (formatDuration elapsed))
+    out.appendLine (sprintf "%s  (%s)" output (InlineDeco.formatDuration elapsed))
   | EvalError errMsg ->
     out.appendLine (sprintf "❌ Error:\n%s" errMsg)
   | EvalConnectionError msg ->
@@ -398,9 +390,9 @@ let evalSelection () =
             match logEvalResult out result with
             | EvalError errMsg ->
               out.show true
-              showInlineDiagnostic ed errMsg
+              InlineDeco.showInlineDiagnostic ed errMsg
             | EvalOk (output, elapsed) ->
-              showInlineResult ed output (Some elapsed)
+              InlineDeco.showInlineResult ed output (Some elapsed)
             | EvalConnectionError _ ->
               out.show true
               Window.showErrorMessage "Cannot reach SageFs daemon. Is it running?" [||] |> ignore
@@ -444,7 +436,7 @@ let evalRange (args: obj) =
         let! result = evalCore code
         match logEvalResult out result with
         | EvalOk (output, elapsed) ->
-          showInlineResult ed output (Some elapsed)
+          InlineDeco.showInlineResult ed output (Some elapsed)
         | _ -> ()
   }
 
@@ -584,9 +576,9 @@ let evalAdvance () =
         let! result = evalCore code
         match logEvalResult out result with
         | EvalError errMsg ->
-          showInlineDiagnostic ed errMsg
+          InlineDeco.showInlineDiagnostic ed errMsg
         | EvalOk (output, elapsed) ->
-          showInlineResult ed output (Some elapsed)
+          InlineDeco.showInlineResult ed output (Some elapsed)
           let curLine = int ed.selection.``end``.line
           let lineCount = int ed.document.lineCount
           let mutable nextLine = curLine + 1
@@ -687,7 +679,7 @@ let activate (context: ExtensionContext) =
     | Some ed when ed.document.fileName.EndsWith(".fs") || ed.document.fileName.EndsWith(".fsx") ->
       match Map.isEmpty InlineDeco.blockDecorations with
       | true -> ()
-      | false -> markDecorationsStale ed
+      | false -> InlineDeco.markDecorationsStale ed
     | _ -> ())
   context.subscriptions.Add docChangeSub
 
@@ -719,7 +711,7 @@ let activate (context: ExtensionContext) =
   reg "sagefs.createSession" (fun _ -> createSessionCmd () |> ignore)
   reg "sagefs.switchSession" (fun _ -> switchSessionCmd () |> ignore)
   reg "sagefs.stopSession" (fun _ -> stopSessionCmd () |> ignore)
-  reg "sagefs.clearResults" (fun _ -> clearAllDecorations ())
+  reg "sagefs.clearResults" (fun _ -> InlineDeco.clearAllDecorations ())
   reg "sagefs.enableLiveTesting" (fun _ ->
     simpleCommand "Live testing enabled" Client.enableLiveTesting |> ignore)
   reg "sagefs.disableLiveTesting" (fun _ ->
@@ -990,4 +982,4 @@ let deactivate () =
   dashboardPanel |> Option.iter (fun p -> p.dispose () |> ignore)
   dashboardPanel <- None
   TestDeco.dispose ()
-  clearAllDecorations ()
+  InlineDeco.clearAllDecorations ()
