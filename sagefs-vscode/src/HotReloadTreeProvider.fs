@@ -52,7 +52,10 @@ let getFileName (path: string) =
 // ── TreeDataProvider ─────────────────────────────────────────────
 
 let createDirItem (dirPath: string) (childCount: int) (watchedCount: int) =
-  let label = if dirPath = "" then "(root)" else dirPath
+  let label =
+    match dirPath with
+    | "" -> "(root)"
+    | p -> p
   let item = newTreeItem label TreeItemCollapsibleState.Expanded
   item?contextValue <- "directory"
   item?description <- sprintf "%d/%d watched" watchedCount childCount
@@ -129,7 +132,10 @@ let createProvider () =
   createObj [
     "onDidChangeTreeData" ==> emitter.event
     "getChildren" ==> fun (el: obj) ->
-      let elOpt = if isNull el then None else Some el
+      let elOpt =
+        match isNull el with
+        | true -> None
+        | false -> Some el
       getChildren elOpt
     "getTreeItem" ==> getTreeItem
   ]

@@ -45,8 +45,9 @@ let summaryItem (ctx: Client.WarmupContextInfo) =
   item?description <- desc
   item?iconPath <- Vscode.newThemeIcon "symbol-event"
   item?contextValue <- "summary"
-  if failCount > 0 then
-    item?description <- sprintf "%s | %d failed" desc failCount
+  match failCount with
+  | 0 -> ()
+  | _ -> item?description <- sprintf "%s | %d failed" desc failCount
   item
 
 // ── TreeDataProvider ─────────────────────────────────────────────
@@ -70,23 +71,29 @@ let getChildren (element: obj option) : JS.Promise<obj array> =
         | None -> return [||]
         | Some wc ->
           let sections = ResizeArray<obj>()
-          if wc.AssembliesLoaded.Length > 0 then
+          match wc.AssembliesLoaded with
+          | [||] -> ()
+          | loaded ->
             sections.Add(
               sectionItem
                 "Assemblies"
-                (sprintf "%d loaded" wc.AssembliesLoaded.Length)
+                (sprintf "%d loaded" loaded.Length)
                 "package" :> obj)
-          if wc.NamespacesOpened.Length > 0 then
+          match wc.NamespacesOpened with
+          | [||] -> ()
+          | opened ->
             sections.Add(
               sectionItem
                 "Namespaces"
-                (sprintf "%d opened" wc.NamespacesOpened.Length)
+                (sprintf "%d opened" opened.Length)
                 "symbol-namespace" :> obj)
-          if wc.FailedOpens.Length > 0 then
+          match wc.FailedOpens with
+          | [||] -> ()
+          | failed ->
             sections.Add(
               sectionItem
                 "Failed Opens"
-                (sprintf "%d failed" wc.FailedOpens.Length)
+                (sprintf "%d failed" failed.Length)
                 "error" :> obj)
           return sections.ToArray()
       | "section" ->
@@ -107,14 +114,23 @@ let getChildren (element: obj option) : JS.Promise<obj array> =
             return
               wc.NamespacesOpened
               |> Array.map (fun b ->
-                let kind = if b.IsModule then "module" else "namespace"
+                let kind =
+                  match b.IsModule with
+                  | true -> "module"
+                  | false -> "namespace"
                 leafItem b.Name (sprintf "%s via %s" kind b.Source) "symbol-namespace" :> obj)
           | "Failed Opens" ->
             return
               wc.FailedOpens
               |> Array.map (fun pair ->
-                let name = if pair.Length > 0 then pair.[0] else "?"
-                let err = if pair.Length > 1 then pair.[1] else "unknown"
+                let name =
+                  match pair.Length with
+                  | 0 -> "?"
+                  | _ -> pair.[0]
+                let err =
+                  match pair.Length with
+                  | n when n > 1 -> pair.[1]
+                  | _ -> "unknown"
                 leafItem name err "error" :> obj)
           | _ -> return [||]
       | _ -> return [||]
@@ -128,7 +144,10 @@ let createProvider () =
   createObj [
     "onDidChangeTreeData" ==> emitter.event
     "getChildren" ==> fun (el: obj) ->
-      let elOpt = if isNull el then None else Some el
+      let elOpt =
+        match isNull el with
+        | true -> None
+        | false -> Some el
       getChildren elOpt
     "getTreeItem" ==> getTreeItem
   ]

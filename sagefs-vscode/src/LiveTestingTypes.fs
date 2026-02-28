@@ -208,8 +208,9 @@ module VscLiveTestState =
       let stillRunning = Set.difference state.RunningTests completedIds
       let changes = [
         VscStateChange.TestsCompleted results
-        if freshness <> VscResultFreshness.Fresh then
-          VscStateChange.ResultsStale freshness
+        match freshness with
+        | VscResultFreshness.Fresh -> ()
+        | _ -> VscStateChange.ResultsStale freshness
       ]
       { state with Results = newResults; RunningTests = stillRunning; Freshness = freshness },
       changes
@@ -248,14 +249,15 @@ module VscLiveTestState =
       | VscTestOutcome.PolicyDisabled -> disabled <- disabled + 1
       | _ -> ())
     let stale =
-      if state.Freshness <> VscResultFreshness.Fresh then
+      match state.Freshness with
+      | VscResultFreshness.Fresh -> stale
+      | _ ->
         state.Results
         |> Map.filter (fun _ r ->
           match r.Outcome with
           | VscTestOutcome.Running -> false
           | _ -> true)
         |> Map.count
-      else stale
     { Total = total; Passed = passed; Failed = failed
       Running = state.RunningTests.Count; Stale = stale; Disabled = disabled }
 

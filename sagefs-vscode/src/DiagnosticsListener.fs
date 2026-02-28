@@ -50,15 +50,22 @@ let start (port: int) (dc: DiagnosticCollection) =
 
   let onData (data: obj) =
     let rawDiags = data?diagnostics
-    if isNull rawDiags then () else
+    match isNull rawDiags with
+    | true -> ()
+    | false ->
     let diagnostics: obj array = rawDiags |> unbox
     let byFile = System.Collections.Generic.Dictionary<string, ResizeArray<Diagnostic>>()
 
     for diag in diagnostics do
       let file: string = diag?file |> unbox
-      if isNull file then () else
+      match isNull file with
+      | true -> ()
+      | false ->
       let msg = diag?message
-      let message: string = if isNull msg then "" else unbox<string> msg
+      let message: string =
+        match isNull msg with
+        | true -> ""
+        | false -> unbox<string> msg
       let severity =
         match diag?severity |> unbox<string> with
         | "error" -> VDiagnosticSeverity.Error
@@ -72,8 +79,9 @@ let start (port: int) (dc: DiagnosticCollection) =
       let range = newRange startLine startCol endLine endCol
       let d = newDiagnostic range message severity
 
-      if not (byFile.ContainsKey file) then
-        byFile.[file] <- ResizeArray()
+      match byFile.ContainsKey file with
+      | true -> ()
+      | false -> byFile.[file] <- ResizeArray()
       byFile.[file].Add(d)
 
     dc.clear ()

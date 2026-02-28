@@ -130,7 +130,10 @@ let parseTestResult (entry: obj) : VscTestResult =
     | "Failed" ->
       let msg =
         fields
-        |> Option.bind (fun f -> if f.Length > 0 then Some f.[0] else None)
+        |> Option.bind (fun f ->
+          match f.Length with
+          | 0 -> None
+          | _ -> Some f.[0])
         |> Option.bind (fun failObj -> duFirstField<string> failObj)
         |> Option.defaultValue "test failed"
       VscTestOutcome.Failed msg
@@ -178,8 +181,9 @@ let parseFreshness (data: obj) : VscResultFreshness =
 /// Parse test_results_batch → VscLiveTestEvent pair (discovery + results)
 let parseResultsBatch (data: obj) : VscLiveTestEvent list =
   let entries = data?Entries
-  if isNull entries then []
-  else
+  match isNull entries with
+  | true -> []
+  | false ->
     let freshness = parseFreshness data
     let entryArray : obj array = entries |> unbox
     let testInfos = entryArray |> Array.map parseTestInfo
@@ -223,15 +227,18 @@ let start (port: int) (callbacks: LiveTestingCallbacks) : LiveTestingListener =
         let newState, changes = VscLiveTestState.update evt state
         state <- newState
         allChanges <- allChanges @ changes
-      if not allChanges.IsEmpty then
-        callbacks.OnStateChange allChanges
+      match allChanges.IsEmpty with
+      | true -> ()
+      | false -> callbacks.OnStateChange allChanges
     | "state" ->
       callbacks.OnStatusRefresh ()
     | "session" ->
       ()
     | "bindings_snapshot" ->
       let arr = data?Bindings
-      if not (isNull arr) then
+      match isNull arr with
+      | true -> ()
+      | false ->
         bindings <- arr |> unbox
         callbacks.OnBindingsUpdate bindings
     | "pipeline_trace" ->
