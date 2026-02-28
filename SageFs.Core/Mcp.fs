@@ -821,6 +821,55 @@ module McpTools =
 
   type OutputFormat = Text | Json
 
+  /// Evaluate a single FSI statement, dispatch Elm events, return formatted output.
+  let private evalSingleStatement (ctx: McpContext) (sid: string) (format: OutputFormat) (statement: string) = task {
+    notifyElm ctx (SageFsEvent.EvalStarted (sid, statement))
+    let! routeResult =
+      routeToSession ctx sid
+        (fun replyId -> WorkerProtocol.WorkerMessage.EvalCode(statement, replyId))
+    return
+      match routeResult with
+      | Ok response ->
+        let formatted =
+          match format with
+          | Json -> McpAdapter.formatWorkerEvalResultJson response
+          | Text -> formatWorkerEvalResult response
+        match response with
+        | WorkerProtocol.WorkerResponse.EvalResult(_, Ok _, diags, metadata) ->
+          notifyElm ctx (
+            SageFsEvent.EvalCompleted (sid, formatted, diags |> List.map WorkerProtocol.WorkerDiagnostic.toDiagnostic))
+          match metadata |> Map.tryFind "liveTestHookResult" with
+          | Some json ->
+            try
+              let hookResult =
+                WorkerProtocol.Serialization.deserialize<Features.LiveTesting.LiveTestHookResultDto> json
+              if not (List.isEmpty hookResult.DetectedProviders) then
+                notifyElm ctx (SageFsEvent.ProvidersDetected hookResult.DetectedProviders)
+              if not (Array.isEmpty hookResult.DiscoveredTests) then
+                notifyElm ctx (SageFsEvent.TestsDiscovered (sid, hookResult.DiscoveredTests))
+              if not (Array.isEmpty hookResult.AffectedTestIds) then
+                notifyElm ctx (SageFsEvent.AffectedTestsComputed hookResult.AffectedTestIds)
+            with _ -> ()
+          | None -> ()
+          match metadata |> Map.tryFind "assemblyLoadErrors" with
+          | Some json ->
+            try
+              let errors =
+                WorkerProtocol.Serialization.deserialize<Features.LiveTesting.AssemblyLoadError list> json
+              if not (List.isEmpty errors) then
+                notifyElm ctx (SageFsEvent.AssemblyLoadFailed errors)
+            with _ -> ()
+          | None -> ()
+        | WorkerProtocol.WorkerResponse.EvalResult(_, Error err, _, _) ->
+          notifyElm ctx (
+            SageFsEvent.EvalFailed (sid, SageFsError.describe err))
+        | _ -> ()
+        formatted
+      | Error msg ->
+        notifyElm ctx (SageFsEvent.EvalFailed (sid, msg))
+        sprintf "Error: %s" msg
+  }
+
   let sendFSharpCode (ctx: McpContext) (agentName: string) (code: string) (format: OutputFormat) (sessionId: string option) (workingDirectory: string option) : Task<string> =
     withSession ctx agentName sessionId workingDirectory (fun sid -> task {
       let statements = McpAdapter.splitStatements code
@@ -832,53 +881,7 @@ module McpTools =
 
       let mutable allOutputs = []
       for statement in statements do
-        notifyElm ctx (SageFsEvent.EvalStarted (sid, statement))
-        let! routeResult =
-          routeToSession ctx sid
-            (fun replyId -> WorkerProtocol.WorkerMessage.EvalCode(statement, replyId))
-        let output =
-          match routeResult with
-          | Ok response ->
-            let formatted =
-              match format with
-              | Json -> McpAdapter.formatWorkerEvalResultJson response
-              | Text -> formatWorkerEvalResult response
-            match response with
-            | WorkerProtocol.WorkerResponse.EvalResult(_, Ok _, diags, metadata) ->
-              notifyElm ctx (
-                SageFsEvent.EvalCompleted (sid, formatted, diags |> List.map WorkerProtocol.WorkerDiagnostic.toDiagnostic))
-              // Dispatch live testing events from hook metadata
-              match metadata |> Map.tryFind "liveTestHookResult" with
-              | Some json ->
-                try
-                  let hookResult =
-                    WorkerProtocol.Serialization.deserialize<Features.LiveTesting.LiveTestHookResultDto> json
-                  if not (List.isEmpty hookResult.DetectedProviders) then
-                    notifyElm ctx (SageFsEvent.ProvidersDetected hookResult.DetectedProviders)
-                  if not (Array.isEmpty hookResult.DiscoveredTests) then
-                    notifyElm ctx (SageFsEvent.TestsDiscovered (sid, hookResult.DiscoveredTests))
-                  if not (Array.isEmpty hookResult.AffectedTestIds) then
-                    notifyElm ctx (SageFsEvent.AffectedTestsComputed hookResult.AffectedTestIds)
-                with _ -> ()
-              | None -> ()
-              // Dispatch assembly load errors if present
-              match metadata |> Map.tryFind "assemblyLoadErrors" with
-              | Some json ->
-                try
-                  let errors =
-                    WorkerProtocol.Serialization.deserialize<Features.LiveTesting.AssemblyLoadError list> json
-                  if not (List.isEmpty errors) then
-                    notifyElm ctx (SageFsEvent.AssemblyLoadFailed errors)
-                with _ -> ()
-              | None -> ()
-            | WorkerProtocol.WorkerResponse.EvalResult(_, Error err, _, _) ->
-              notifyElm ctx (
-                SageFsEvent.EvalFailed (sid, SageFsError.describe err))
-            | _ -> ()
-            formatted
-          | Error msg ->
-            notifyElm ctx (SageFsEvent.EvalFailed (sid, msg))
-            sprintf "Error: %s" msg
+        let! output = evalSingleStatement ctx sid format statement
         allOutputs <- output :: allOutputs
 
       let finalOutput =
