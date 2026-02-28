@@ -1084,9 +1084,20 @@ module SageFsEffectHandler =
                     proxy <- deps.GetStreamingTestProxy sid
                   match proxy with
                   | Some streamProxy ->
+                    let resultBuffer = System.Collections.Concurrent.ConcurrentQueue<Features.LiveTesting.TestRunResult>()
+                    let flushBuffer () =
+                      let batch = System.Collections.Generic.List<Features.LiveTesting.TestRunResult>()
+                      let mutable item = Unchecked.defaultof<_>
+                      while resultBuffer.TryDequeue(&item) do
+                        batch.Add(item)
+                      if batch.Count > 0 then
+                        Instrumentation.testResultBatchSize.Record(int64 batch.Count)
+                        dispatch (SageFsMsg.Event (SageFsEvent.TestResultsBatch (batch.ToArray())))
+                    let batchSize = 50
                     let onResult (result: Features.LiveTesting.TestRunResult) =
-                      Instrumentation.testResultBatchSize.Record(1L)
-                      dispatch (SageFsMsg.Event (SageFsEvent.TestResultsBatch [| result |]))
+                      resultBuffer.Enqueue(result)
+                      if resultBuffer.Count >= batchSize then
+                        flushBuffer ()
                     let onCoverage (hits: bool array) =
                       let mergedMap = Features.LiveTesting.InstrumentationMap.merge instrumentationMaps
                       if mergedMap.TotalProbes > 0 && hits.Length = mergedMap.TotalProbes then
@@ -1099,6 +1110,7 @@ module SageFsEffectHandler =
                           activity.SetTag("coverage.hit_probes", Features.LiveTesting.CoverageBitmap.popCount bitmap) |> ignore
                           activity.SetTag("coverage.tests_in_batch", testIds.Length) |> ignore
                     do! streamProxy tests 4 onResult onCoverage
+                    flushBuffer () // flush any remaining results
                   | None ->
                     let notRunResults =
                       tests |> Array.map (fun tc ->

@@ -459,20 +459,21 @@ module TestOrchestrator =
     (ct: Threading.CancellationToken)
     : Async<unit> =
     async {
-      let semaphore = new Threading.SemaphoreSlim(maxParallelism)
-      let! _ =
-        tests
-        |> Array.map (fun tc ->
-          async {
-            do! Async.AwaitTask (semaphore.WaitAsync(ct))
-            try
+      // Process in chunks to avoid scheduling all tests to ThreadPool at once
+      let chunkSize = maxParallelism
+      for chunkStart in 0 .. chunkSize .. tests.Length - 1 do
+        ct.ThrowIfCancellationRequested()
+        let chunkEnd = min (chunkStart + chunkSize) tests.Length
+        let chunk = tests.[chunkStart .. chunkEnd - 1]
+        let! _ =
+          chunk
+          |> Array.map (fun tc ->
+            async {
               let! result = executeOne runTest tc
               onResult result
-            finally
-              semaphore.Release() |> ignore
-          })
-        |> Async.Parallel
-      return ()
+            })
+          |> Async.Parallel
+        ()
     }
 
 // --- Hot-reload integration hook ---
