@@ -63,6 +63,8 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
         ) |> ignore
     )
   let log = loggerFactory.CreateLogger("SageFs.Daemon")
+  // Shared HttpClient for all daemon→worker HTTP calls (avoids socket exhaustion)
+  let httpClient = new Net.Http.HttpClient()
 
   log.LogInformation("SageFs daemon v{Version} starting on port {Port}", version, mcpPort)
 
@@ -329,7 +331,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
             SessionManager.SessionCommand.GetSession(sessionId, reply))
         match managed with
         | Some s when s.WorkerBaseUrl.Length > 0 ->
-          let client = new Net.Http.HttpClient()
+          let client = httpClient
           let! resp =
             client.GetStringAsync(sprintf "%s/warmup-context" s.WorkerBaseUrl)
             |> Async.AwaitTask
@@ -400,7 +402,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
         let snapshot = readSnapshot()
         match Map.tryFind sessionId snapshot.WorkerBaseUrls with
         | Some baseUrl when baseUrl.Length > 0 ->
-          let client = new Net.Http.HttpClient()
+          let client = httpClient
           client.Timeout <- System.TimeSpan.FromSeconds(5.0)
           let! resp = client.GetStringAsync(sprintf "%s/warmup-context" baseUrl)
           let ctx = WorkerProtocol.Serialization.deserialize<WarmupContext> resp
@@ -416,7 +418,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
         let snapshot = readSnapshot()
         match Map.tryFind sessionId snapshot.WorkerBaseUrls with
         | Some baseUrl when baseUrl.Length > 0 ->
-          let client = new Net.Http.HttpClient()
+          let client = httpClient
           client.Timeout <- System.TimeSpan.FromSeconds(5.0)
           let! resp = client.GetStringAsync(sprintf "%s/hotreload" baseUrl)
           let doc = System.Text.Json.JsonDocument.Parse(resp)
@@ -550,7 +552,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
     match SessionManager.QuerySnapshot.tryGetSession sid snapshot, Map.tryFind sid snapshot.WorkerBaseUrls with
     | Some _, Some baseUrl when baseUrl.Length > 0 ->
       try
-        let client = new Net.Http.HttpClient()
+        let client = httpClient
         client.Timeout <- TimeSpan.FromSeconds(2.0)
         let! resp = client.GetStringAsync(sprintf "%s/status?replyId=dash" baseUrl)
         use doc = Text.Json.JsonDocument.Parse(resp)
@@ -589,7 +591,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
     match Map.tryFind sid snapshot.WorkerBaseUrls with
     | Some baseUrl when baseUrl.Length > 0 ->
       try
-        let client = new Net.Http.HttpClient()
+        let client = httpClient
         client.Timeout <- TimeSpan.FromSeconds(2.0)
         let! resp = client.GetStringAsync(sprintf "%s/status?replyId=dash-stats" baseUrl)
         use doc = Text.Json.JsonDocument.Parse(resp)
@@ -741,7 +743,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
         match getWorkerBaseUrl sessionId with
         | Some baseUrl ->
           try
-            let client = new Net.Http.HttpClient()
+            let client = httpClient
             client.Timeout <- TimeSpan.FromSeconds(2.0)
             let! resp = client.GetStringAsync(sprintf "%s/hotreload" baseUrl)
             use doc = Text.Json.JsonDocument.Parse(resp)
@@ -761,7 +763,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
         match getWorkerBaseUrl sessionId with
         | Some baseUrl ->
           try
-            let client = new Net.Http.HttpClient()
+            let client = httpClient
             client.Timeout <- TimeSpan.FromSeconds(2.0)
             let! resp = client.GetStringAsync(sprintf "%s/warmup-context" baseUrl)
             let ctx = WorkerProtocol.Serialization.deserialize<WarmupContext> resp
@@ -823,14 +825,13 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
                 Summary = summary |})
 
   // Hot-reload proxy endpoints — forward to worker HTTP servers
-  let hotReloadHttpClient = new Net.Http.HttpClient()
   let hotReloadProxyEndpoints : HttpEndpoint list =
     let proxyGet (sid: string) (workerPath: string) (ctx: Microsoft.AspNetCore.Http.HttpContext) = task {
       match getWorkerBaseUrl sid with
       | Some baseUrl ->
         try
           let url = sprintf "%s%s" baseUrl workerPath
-          let! resp = hotReloadHttpClient.GetStringAsync(url)
+          let! resp = httpClient.GetStringAsync(url)
           ctx.Response.ContentType <- "application/json"
           do! ctx.Response.WriteAsync(resp)
         with ex ->
@@ -848,7 +849,7 @@ let run (mcpPort: int) (args: Args.Arguments list) = task {
           use reader = new IO.StreamReader(ctx.Request.Body)
           let! body = reader.ReadToEndAsync()
           use content = new Net.Http.StringContent(body, Text.Encoding.UTF8, "application/json")
-          let! resp = hotReloadHttpClient.PostAsync(url, content)
+          let! resp = httpClient.PostAsync(url, content)
           let! respBody = resp.Content.ReadAsStringAsync()
           ctx.Response.ContentType <- "application/json"
           ctx.Response.StatusCode <- int resp.StatusCode

@@ -8,6 +8,14 @@ type DaemonStateChange =
   | HotReloadChanged
   | ModelChanged of json: string
 
+module DaemonStateChange =
+  /// Serialize to JSON for SSE wire format. Single source of truth — used by bridge and SSE stream.
+  let toJson = function
+    | ModelChanged j -> j
+    | SessionReady sid -> sprintf """{"sessionReady":"%s"}""" sid
+    | HotReloadChanged -> """{"hotReloadChanged":true}"""
+    | StandbyProgress -> """{"standbyProgress":true}"""
+
 // DaemonInfo and DaemonState are now in SageFs namespace (SageFs.Core).
 // This module re-exports functions so existing code using SageFs.Server.DaemonState compiles.
 module DaemonState =

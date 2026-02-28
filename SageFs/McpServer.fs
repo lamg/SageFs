@@ -349,14 +349,7 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
             let stateChangedStr : IEvent<string> option =
               stateChanged |> Option.map (fun evt ->
                 let bridge = Event<string>()
-                evt.Add(fun change ->
-                  let json =
-                    match change with
-                    | DaemonStateChange.ModelChanged j -> j
-                    | DaemonStateChange.SessionReady sid -> sprintf """{"sessionReady":"%s"}""" sid
-                    | DaemonStateChange.HotReloadChanged -> """{"hotReloadChanged":true}"""
-                    | DaemonStateChange.StandbyProgress -> """{"standbyProgress":true}"""
-                  bridge.Trigger(json))
+                evt.Add(DaemonStateChange.toJson >> bridge.Trigger)
                 bridge.Publish)
             // Create MCP context
             let mcpContext = (mkContext persistence diagnosticsChanged stateChangedStr sessionOps port dispatch getElmModel getElmRegions getWarmupContext)
@@ -751,12 +744,7 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                         use _heartbeat = heartbeat
                         use _sub = evt.Subscribe(fun change ->
                             try
-                                let json =
-                                  match change with
-                                  | DaemonStateChange.ModelChanged j -> j
-                                  | DaemonStateChange.SessionReady sid -> sprintf """{"sessionReady":"%s"}""" sid
-                                  | DaemonStateChange.HotReloadChanged -> """{"hotReloadChanged":true}"""
-                                  | DaemonStateChange.StandbyProgress -> """{"standbyProgress":true}"""
+                                let json = DaemonStateChange.toJson change
                                 let sseEvent = SageFs.SseWriter.formatSseEvent "state" json
                                 let bytes = System.Text.Encoding.UTF8.GetBytes(sseEvent)
                                 ctx.Response.Body.WriteAsync(bytes).AsTask()
