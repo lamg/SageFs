@@ -1,50 +1,8 @@
 module SageFs.Vscode.DiagnosticsListener
 
-open Fable.Core
 open Fable.Core.JsInterop
 open Vscode
 open SageFs.Vscode.JsHelpers
-
-[<Emit("""(() => {
-  const http = require('http');
-  let req;
-  let buffer = '';
-  let retryDelay = 1000;
-  const maxDelay = 30000;
-  const startListening = () => {
-    req = http.get($0, { timeout: 0 }, (res) => {
-      retryDelay = 1000;
-      res.on('data', (chunk) => {
-        buffer += chunk.toString();
-        let lines = buffer.split('\\n');
-        buffer = lines.pop() || '';
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            try {
-              const data = JSON.parse(line.slice(6));
-              $1(data);
-            } catch (_) {}
-          }
-        }
-      });
-      res.on('end', () => {
-        retryDelay = Math.min(retryDelay * 2, maxDelay);
-        setTimeout(startListening, retryDelay);
-      });
-      res.on('error', () => {
-        retryDelay = Math.min(retryDelay * 2, maxDelay);
-        setTimeout(startListening, retryDelay);
-      });
-    });
-    req.on('error', () => {
-      retryDelay = Math.min(retryDelay * 2, maxDelay);
-      setTimeout(startListening, retryDelay);
-    });
-  };
-  startListening();
-  return { dispose: () => { if (req) req.destroy(); } };
-})()""")>]
-let subscribeSse (url: string) (onData: obj -> unit) : Disposable = jsNative
 
 let start (port: int) (dc: DiagnosticCollection) =
   let url = sprintf "http://localhost:%d/diagnostics" port
