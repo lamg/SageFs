@@ -147,7 +147,14 @@ let clearAllDecorations () =
   blockDecorations |> Map.iter (fun _ deco -> deco.dispose () |> ignore)
   blockDecorations <- Map.empty
 
-let showInlineResult (editor: TextEditor) (text: string) =
+[<Emit("performance.now()")>]
+let performanceNow () : float = jsNative
+
+let formatDuration (ms: float) =
+  if ms < 1000.0 then sprintf "%dms" (int ms)
+  else sprintf "%.1fs" (ms / 1000.0)
+
+let showInlineResult (editor: TextEditor) (text: string) (durationMs: float option) =
   let trimmed = text.Trim()
   if trimmed = "" then () else
   let line =
@@ -156,14 +163,18 @@ let showInlineResult (editor: TextEditor) (text: string) =
   clearBlockDecoration line
   let lines = trimmed.Split('\n')
   let firstLine = if lines.Length > 0 then lines.[0] else ""
+  let durSuffix =
+    match durationMs with
+    | Some ms -> sprintf "  %s" (formatDuration ms)
+    | None -> ""
   let contentText =
     if lines.Length <= 1 then
-      sprintf "  // → %s" firstLine
+      sprintf "  // → %s%s" firstLine durSuffix
     else
       let summary =
         if lines.Length <= 4 then lines |> String.concat "  │  "
         else sprintf "%s  │  ... (%d lines)" firstLine lines.Length
-      sprintf "  // → %s" summary
+      sprintf "  // → %s%s" summary durSuffix
   let opts = createObj [
     "after" ==> createObj [
       "contentText" ==> contentText
@@ -406,7 +417,9 @@ let evalSelection () =
               out.appendLine ""
               try
                 let c = getClient ()
+                let startTime = performanceNow ()
                 let! result = Client.evalCode code workDir c
+                let elapsed = performanceNow () - startTime
                 if not result.success then
                   let errMsg =
                     result.error
@@ -417,8 +430,8 @@ let evalSelection () =
                   showInlineDiagnostic ed errMsg
                 else
                   let output = result.result |> Option.defaultValue ""
-                  out.appendLine output
-                  showInlineResult ed output
+                  out.appendLine (sprintf "%s  (%s)" output (formatDuration elapsed))
+                  showInlineResult ed output (Some elapsed)
               with err ->
                 out.appendLine (sprintf "❌ Connection error: %s" (string err))
                 out.show true
@@ -442,11 +455,13 @@ let evalFile () =
           out.appendLine (sprintf "──── eval file: %s ────" ed.document.fileName)
           try
             let c = getClient ()
+            let startTime = performanceNow ()
             let! result = Client.evalCode code workDir c
+            let elapsed = performanceNow () - startTime
             if not result.success then
               out.appendLine (sprintf "❌ Error:\n%s" (result.error |> Option.orElse result.result |> Option.defaultValue "Unknown error"))
             else
-              out.appendLine (result.result |> Option.defaultValue "")
+              out.appendLine (sprintf "%s  (%s)" (result.result |> Option.defaultValue "") (formatDuration elapsed))
           with err ->
             out.appendLine (sprintf "❌ Connection error: %s" (string err))
   }
@@ -469,11 +484,15 @@ let evalRange (args: obj) =
           out.appendLine ""
           try
             let c = getClient ()
+            let startTime = performanceNow ()
             let! result = Client.evalCode code workDir c
+            let elapsed = performanceNow () - startTime
             if not result.success then
               out.appendLine (sprintf "❌ Error:\n%s" (result.error |> Option.orElse result.result |> Option.defaultValue "Unknown error"))
             else
-              out.appendLine (result.result |> Option.defaultValue "")
+              let output = result.result |> Option.defaultValue ""
+              out.appendLine (sprintf "%s  (%s)" output (formatDuration elapsed))
+              showInlineResult ed output (Some elapsed)
           with err ->
             out.appendLine (sprintf "❌ Connection error: %s" (string err))
   }
@@ -618,6 +637,85 @@ let openDashboard () =
     panel.onDidDispose (fun () -> dashboardPanel <- None) |> ignore
     dashboardPanel <- Some panel
 
+let evalAdvance () =
+  promise {
+    match Window.getActiveTextEditor () with
+    | None ->
+      Window.showWarningMessage "No active editor." [||] |> ignore
+    | Some ed ->
+      let! ok = ensureRunning ()
+      if ok then
+        let mutable code =
+          if not ed.selection.isEmpty then
+            ed.document.getTextRange (newRange (int ed.selection.start.line) (int ed.selection.start.character) (int ed.selection.``end``.line) (int ed.selection.``end``.character))
+          else
+            getCodeBlock ed
+        if code.Trim() <> "" then
+          if not (code.TrimEnd().EndsWith(";;")) then
+            code <- code.TrimEnd() + ";;"
+          let workDir = getWorkingDirectory ()
+          let out = getOutput ()
+          try
+            let c = getClient ()
+            let startTime = performanceNow ()
+            let! result = Client.evalCode code workDir c
+            let elapsed = performanceNow () - startTime
+            if not result.success then
+              let errMsg =
+                result.error
+                |> Option.orElse result.result
+                |> Option.defaultValue "Unknown error"
+              out.appendLine (sprintf "❌ Error:\n%s" errMsg)
+              showInlineDiagnostic ed errMsg
+            else
+              let output = result.result |> Option.defaultValue ""
+              out.appendLine (sprintf "%s  (%s)" output (formatDuration elapsed))
+              showInlineResult ed output (Some elapsed)
+              // Advance cursor to next non-blank line after current block
+              let curLine = int ed.selection.``end``.line
+              let lineCount = int ed.document.lineCount
+              let mutable nextLine = curLine + 1
+              while nextLine < lineCount && ed.document.lineAt(float nextLine).text.Trim() = "" do
+                nextLine <- nextLine + 1
+              if nextLine < lineCount then
+                let pos = newPosition nextLine 0
+                let sel = newSelection pos pos
+                setEditorSelection ed sel
+                revealEditorRange ed (newRange nextLine 0 nextLine 0)
+          with err ->
+            out.appendLine (sprintf "❌ Connection error: %s" (string err))
+  }
+
+let cancelEvalCmd () =
+  match client with
+  | Some c ->
+    Client.cancelEval c
+    |> Promise.iter (fun result ->
+      if result.success then
+        Window.showInformationMessage "Eval cancelled." [||] |> ignore
+      else
+        let msg = result.error |> Option.defaultValue "Failed to cancel"
+        Window.showWarningMessage msg [||] |> ignore)
+  | None -> Window.showWarningMessage "SageFs is not connected" [||] |> ignore
+
+let loadScriptCmd () =
+  promise {
+    let! ok = ensureRunning ()
+    if ok then
+      match Window.getActiveTextEditor () with
+      | Some ed when ed.document.fileName.EndsWith(".fsx") ->
+        let c = getClient ()
+        let! result = Client.loadScript ed.document.fileName c
+        if result.success then
+          let name = ed.document.fileName.Split([|'/'; '\\'|]) |> Array.last
+          Window.showInformationMessage (sprintf "Script loaded: %s" name) [||] |> ignore
+        else
+          let msg = result.error |> Option.defaultValue "Failed to load script"
+          Window.showErrorMessage msg [||] |> ignore
+      | _ ->
+        Window.showWarningMessage "Open an .fsx file to load it as a script." [||] |> ignore
+  }
+
 let promptAutoStart () =
   promise {
     let! projPath = findProject ()
@@ -694,6 +792,9 @@ let activate (context: ExtensionContext) =
   reg "sagefs.eval" (fun _ -> evalSelection () |> ignore)
   reg "sagefs.evalFile" (fun _ -> evalFile () |> ignore)
   reg "sagefs.evalRange" (fun args -> evalRange args |> ignore)
+  reg "sagefs.evalAdvance" (fun _ -> evalAdvance () |> ignore)
+  reg "sagefs.cancelEval" (fun _ -> cancelEvalCmd ())
+  reg "sagefs.loadScript" (fun _ -> loadScriptCmd () |> ignore)
   reg "sagefs.start" (fun _ -> startDaemon () |> ignore)
   reg "sagefs.stop" (fun _ -> stopDaemon ())
   reg "sagefs.openDashboard" (fun _ -> openDashboard ())

@@ -412,6 +412,16 @@ let newRange (sl: int) (sc: int) (el: int) (ec: int) = _newRange vscodeAll sl sc
 let _newPosition (v: obj) (l: int) (c: int) : Position = jsNative
 let newPosition (l: int) (c: int) = _newPosition vscodeAll l c
 
+[<Emit("new $0.Selection($1, $2)")>]
+let _newSelection (v: obj) (anchor: Position) (active: Position) : Selection = jsNative
+let newSelection (anchor: Position) (active: Position) = _newSelection vscodeAll anchor active
+
+[<Emit("$0.selection = $1")>]
+let setEditorSelection (ed: TextEditor) (sel: Selection) : unit = jsNative
+
+[<Emit("$0.revealRange($1)")>]
+let revealEditorRange (ed: TextEditor) (range: Range) : unit = jsNative
+
 [<Emit("new $0.ThemeColor($1)")>]
 let _newThemeColor (v: obj) (id: string) : obj = jsNative
 let newThemeColor (id: string) = _newThemeColor vscodeAll id

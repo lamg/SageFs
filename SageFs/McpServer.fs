@@ -447,6 +447,34 @@ let startMcpServer (diagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.
                 }) :> Task
             ) |> ignore
 
+            // POST /cancel — cancel a running evaluation
+            // Also mapped as /api/cancel-eval for Neovim plugin compatibility
+            app.MapPost("/cancel", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+                withErrorHandling ctx (fun () -> task {
+                    let! _result = SageFs.McpTools.cancelEval mcpContext "http" None
+                    do! jsonResponse ctx 200 {| received = true |}
+                }) :> Task
+            ) |> ignore
+
+            app.MapPost("/api/cancel-eval", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+                withErrorHandling ctx (fun () -> task {
+                    let! _result = SageFs.McpTools.cancelEval mcpContext "http" None
+                    do! jsonResponse ctx 200 {| received = true |}
+                }) :> Task
+            ) |> ignore
+
+            // POST /load-script — load an .fsx script file
+            app.MapPost("/load-script", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+                withErrorHandling ctx (fun () -> task {
+                    use reader = new System.IO.StreamReader(ctx.Request.Body)
+                    let! body = reader.ReadToEndAsync()
+                    let json = System.Text.Json.JsonDocument.Parse(body)
+                    let filePath = json.RootElement.GetProperty("path").GetString()
+                    let! _result = SageFs.McpTools.loadFSharpScript mcpContext "http" filePath None None
+                    do! jsonResponse ctx 200 {| received = true |}
+                }) :> Task
+            ) |> ignore
+
             // GET /health — session health check
             app.MapGet("/health", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
                 withErrorHandling ctx (fun () -> task {

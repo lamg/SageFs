@@ -136,6 +136,10 @@ export function newPosition(l, c) {
     return new vscode.Position(l, c);
 }
 
+export function newSelection(anchor, active) {
+    return new vscode.Selection(anchor, active);
+}
+
 export function newThemeColor(id) {
     return new vscode.ThemeColor(id);
 }

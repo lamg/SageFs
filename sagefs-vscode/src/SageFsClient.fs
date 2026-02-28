@@ -517,3 +517,29 @@ let getDependencyGraph (symbol: string) (c: Client) =
       logWarn "getDependencyGraph" ex
       return None
   }
+
+let cancelEval (c: Client) =
+  promise {
+    try
+      let! _resp = httpPost c "/api/cancel-eval" "{}" 5000
+      return { success = true; result = Some "Eval cancelled"; error = None }
+    with err ->
+      return { success = false; result = None; error = Some (string err) }
+  }
+
+let loadScript (filePath: string) (c: Client) =
+  let code = sprintf "#load @\"%s\";;" filePath
+  promise {
+    try
+      let payload = {| code = code; working_directory = "" |}
+      let! resp = httpPost c "/exec" (jsonStringify payload) 30000
+      let parsed = jsonParse resp.body
+      return
+        { success = parsed?success |> unbox<bool>
+          result =
+            let r = parsed?result
+            if isNull r then None else Some (unbox<string> r)
+          error = None }
+    with err ->
+      return { success = false; result = None; error = Some (string err) }
+  }

@@ -528,3 +528,22 @@ export function getDependencyGraph(symbol, c) {
     }))));
 }
 
+export function cancelEval(c) {
+    return PromiseBuilder__Run_212F1D4B(promise, PromiseBuilder__Delay_62FBFDE1(promise, () => (PromiseBuilder__Delay_62FBFDE1(promise, () => (httpPost(c, "/api/cancel-eval", "{}", 5000).then((_arg) => (Promise.resolve(new EvalResult(true, "Eval cancelled", undefined)))))).catch((_arg_1) => (Promise.resolve(new EvalResult(false, undefined, toString(_arg_1))))))));
+}
+
+export function loadScript(filePath, c) {
+    const code = toText(printf("#load @\"%s\";;"))(filePath);
+    return PromiseBuilder__Run_212F1D4B(promise, PromiseBuilder__Delay_62FBFDE1(promise, () => (PromiseBuilder__Delay_62FBFDE1(promise, () => {
+        const payload = {
+            code: code,
+            working_directory: "",
+        };
+        return httpPost(c, "/exec", JSON.stringify(payload), 30000).then((_arg) => {
+            let r;
+            const parsed = JSON.parse(_arg.body);
+            return Promise.resolve(new EvalResult(parsed.success, (r = parsed.result, (r == null) ? undefined : r), undefined));
+        });
+    }).catch((_arg_1) => (Promise.resolve(new EvalResult(false, undefined, toString(_arg_1))))))));
+}
+

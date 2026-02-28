@@ -1,12 +1,12 @@
 import { defaultOf, equals, comparePrimitives, createAtom } from "./fable_modules/fable-library-js.4.29.0/Util.js";
 import { add, iterate, remove, tryFind, empty } from "./fable_modules/fable-library-js.4.29.0/Map.js";
-import { Workspace_onDidChangeConfiguration, Window_onDidChangeActiveTextEditor, Window_onDidChangeVisibleTextEditors, Languages_registerCompletionItemProvider, Languages_registerCodeLensProvider, Window_showInputBox, Languages_createDiagnosticCollection, Window_createStatusBarItem, Window_createOutputChannel, Commands_executeCommand, Commands_registerCommand, Window_createWebviewPanel, Window_withProgress, Window_getActiveTextEditor, Window_showWarningMessage, Window_showErrorMessage, Window_showInformationMessage, newThemeColor, Window_createTextEditorDecorationType, newRange, Window_showQuickPick, Workspace_asRelativePath, Workspace_findFiles, Workspace_getConfiguration, Workspace_workspaceFolders } from "./Vscode.fs.js";
+import { Workspace_onDidChangeConfiguration, Window_onDidChangeActiveTextEditor, Window_onDidChangeVisibleTextEditors, Languages_registerCompletionItemProvider, Languages_registerCodeLensProvider, Window_showInputBox, Languages_createDiagnosticCollection, Window_createStatusBarItem, Window_createOutputChannel, Commands_executeCommand, Commands_registerCommand, newSelection, newPosition, Window_createWebviewPanel, Window_withProgress, Window_getActiveTextEditor, Window_showWarningMessage, Window_showErrorMessage, Window_showInformationMessage, newThemeColor, Window_createTextEditorDecorationType, newRange, Window_showQuickPick, Workspace_asRelativePath, Workspace_findFiles, Workspace_getConfiguration, Workspace_workspaceFolders } from "./Vscode.fs.js";
 import { tryFindIndex, last, tryFind as tryFind_1, tryHead, map, append, item } from "./fable_modules/fable-library-js.4.29.0/Array.js";
-import { PromiseBuilder__For_1565554B, PromiseBuilder__Delay_62FBFDE1, PromiseBuilder__Run_212F1D4B } from "./fable_modules/Fable.Promise.3.2.0/Promise.fs.js";
+import { PromiseBuilder__While_2044D34, PromiseBuilder__For_1565554B, PromiseBuilder__Delay_62FBFDE1, PromiseBuilder__Run_212F1D4B } from "./fable_modules/Fable.Promise.3.2.0/Promise.fs.js";
 import { promise } from "./fable_modules/Fable.Promise.3.2.0/PromiseImpl.fs.js";
 import { substring, split, join, printf, toText, trimEnd } from "./fable_modules/fable-library-js.4.29.0/String.js";
 import { map as map_1, bind, orElse, toArray, defaultArg, some } from "./fable_modules/fable-library-js.4.29.0/Option.js";
-import { updatePorts, getDependencyGraph, getRecentEvents, setRunPolicy, runTests, disableLiveTesting, enableLiveTesting, create, dashboardUrl, stopSession, switchSession, createSession, hardReset, resetSession, evalCode, listSessions, getSystemStatus, getStatus, isRunning } from "./SageFsClient.fs.js";
+import { updatePorts, getDependencyGraph, getRecentEvents, setRunPolicy, runTests, disableLiveTesting, enableLiveTesting, create, loadScript, cancelEval, dashboardUrl, stopSession, switchSession, createSession, hardReset, resetSession, evalCode, listSessions, getSystemStatus, getStatus, isRunning } from "./SageFsClient.fs.js";
 import { register, setSession } from "./HotReloadTreeProvider.fs.js";
 import { register as register_1, setSession as setSession_1 } from "./SessionContextTreeProvider.fs.js";
 import { iterate as iterate_1 } from "./fable_modules/fable-library-js.4.29.0/Seq.js";
@@ -161,8 +161,19 @@ export function clearAllDecorations() {
     }));
 }
 
-export function showInlineResult(editor, text) {
-    let summary, arg_2;
+export function formatDuration(ms) {
+    if (ms < 1000) {
+        const arg = ~~ms | 0;
+        return toText(printf("%dms"))(arg);
+    }
+    else {
+        const arg_1 = ms / 1000;
+        return toText(printf("%.1fs"))(arg_1);
+    }
+}
+
+export function showInlineResult(editor, text, durationMs) {
+    let summary, arg_4;
     const trimmed = text.trim();
     if (trimmed === "") {
     }
@@ -171,9 +182,17 @@ export function showInlineResult(editor, text) {
         clearBlockDecoration(line);
         const lines = trimmed.split("\n");
         const firstLine = (lines.length > 0) ? item(0, lines) : "";
+        let durSuffix;
+        if (durationMs == null) {
+            durSuffix = "";
+        }
+        else {
+            const arg = formatDuration(durationMs);
+            durSuffix = toText(printf("  %s"))(arg);
+        }
         const deco = Window_createTextEditorDecorationType({
             after: {
-                contentText: (lines.length <= 1) ? toText(printf("  // → %s"))(firstLine) : ((summary = ((lines.length <= 4) ? join("  │  ", lines) : ((arg_2 = (lines.length | 0), toText(printf("%s  │  ... (%d lines)"))(firstLine)(arg_2)))), toText(printf("  // → %s"))(summary))),
+                contentText: (lines.length <= 1) ? toText(printf("  // → %s%s"))(firstLine)(durSuffix) : ((summary = ((lines.length <= 4) ? join("  │  ", lines) : ((arg_4 = (lines.length | 0), toText(printf("%s  │  ... (%d lines)"))(firstLine)(arg_4)))), toText(printf("  // → %s%s"))(summary)(durSuffix))),
                 color: newThemeColor("sagefs.successForeground"),
                 fontStyle: "italic",
             },
@@ -443,8 +462,11 @@ export function evalSelection() {
                             out.appendLine("");
                             return PromiseBuilder__Delay_62FBFDE1(promise, () => {
                                 const c = getClient();
+                                const startTime = performance.now();
                                 return evalCode(code, workDir, c).then((_arg_1) => {
+                                    let arg_2;
                                     const result = _arg_1;
+                                    const elapsed = (performance.now()) - startTime;
                                     if (!result.success) {
                                         const errMsg = defaultArg(orElse(result.error, result.result), "Unknown error");
                                         out.appendLine(toText(printf("❌ Error:\n%s"))(errMsg));
@@ -454,14 +476,14 @@ export function evalSelection() {
                                     }
                                     else {
                                         const output = defaultArg(result.result, "");
-                                        out.appendLine(output);
-                                        showInlineResult(ed, output);
+                                        out.appendLine((arg_2 = formatDuration(elapsed), toText(printf("%s  (%s)"))(output)(arg_2)));
+                                        showInlineResult(ed, output, elapsed);
                                         return Promise.resolve();
                                     }
                                 });
                             }).catch((_arg_2) => {
-                                let arg_1;
-                                out.appendLine((arg_1 = toString(_arg_2), toText(printf("❌ Connection error: %s"))(arg_1)));
+                                let arg_3;
+                                out.appendLine((arg_3 = toString(_arg_2), toText(printf("❌ Connection error: %s"))(arg_3)));
                                 out.show(true);
                                 Window_showErrorMessage("Cannot reach SageFs daemon. Is it running?", []);
                                 return Promise.resolve();
@@ -497,21 +519,23 @@ export function evalFile() {
                         out.appendLine((arg = ed.document.fileName, toText(printf("──── eval file: %s ────"))(arg)));
                         return PromiseBuilder__Delay_62FBFDE1(promise, () => {
                             const c = getClient();
+                            const startTime = performance.now();
                             return evalCode(code, workDir, c).then((_arg_1) => {
-                                let arg_1;
+                                let arg_1, arg_2, arg_3;
                                 const result = _arg_1;
+                                const elapsed = (performance.now()) - startTime;
                                 if (!result.success) {
                                     out.appendLine((arg_1 = defaultArg(orElse(result.error, result.result), "Unknown error"), toText(printf("❌ Error:\n%s"))(arg_1)));
                                     return Promise.resolve();
                                 }
                                 else {
-                                    out.appendLine(defaultArg(result.result, ""));
+                                    out.appendLine((arg_2 = defaultArg(result.result, ""), (arg_3 = formatDuration(elapsed), toText(printf("%s  (%s)"))(arg_2)(arg_3))));
                                     return Promise.resolve();
                                 }
                             });
                         }).catch((_arg_2) => {
-                            let arg_2;
-                            out.appendLine((arg_2 = toString(_arg_2), toText(printf("❌ Connection error: %s"))(arg_2)));
+                            let arg_4;
+                            out.appendLine((arg_4 = toString(_arg_2), toText(printf("❌ Connection error: %s"))(arg_4)));
                             return Promise.resolve();
                         });
                     }
@@ -547,21 +571,25 @@ export function evalRange(args) {
                         out.appendLine("");
                         return PromiseBuilder__Delay_62FBFDE1(promise, () => {
                             const c = getClient();
+                            const startTime = performance.now();
                             return evalCode(code, workDir, c).then((_arg_1) => {
-                                let arg;
+                                let arg, arg_2;
                                 const result = _arg_1;
+                                const elapsed = (performance.now()) - startTime;
                                 if (!result.success) {
                                     out.appendLine((arg = defaultArg(orElse(result.error, result.result), "Unknown error"), toText(printf("❌ Error:\n%s"))(arg)));
                                     return Promise.resolve();
                                 }
                                 else {
-                                    out.appendLine(defaultArg(result.result, ""));
+                                    const output = defaultArg(result.result, "");
+                                    out.appendLine((arg_2 = formatDuration(elapsed), toText(printf("%s  (%s)"))(output)(arg_2)));
+                                    showInlineResult(ed, output, elapsed);
                                     return Promise.resolve();
                                 }
                             });
                         }).catch((_arg_2) => {
-                            let arg_1;
-                            out.appendLine((arg_1 = toString(_arg_2), toText(printf("❌ Connection error: %s"))(arg_1)));
+                            let arg_3;
+                            out.appendLine((arg_3 = toString(_arg_2), toText(printf("❌ Connection error: %s"))(arg_3)));
                             return Promise.resolve();
                         });
                     }
@@ -759,6 +787,136 @@ export function openDashboard() {
     }
 }
 
+export function evalAdvance() {
+    return PromiseBuilder__Run_212F1D4B(promise, PromiseBuilder__Delay_62FBFDE1(promise, () => {
+        const matchValue = Window_getActiveTextEditor();
+        if (matchValue != null) {
+            const ed = matchValue;
+            return ensureRunning().then((_arg) => {
+                if (_arg) {
+                    let code = !ed.selection.isEmpty ? (ed.document.getText(newRange(~~ed.selection.start.line, ~~ed.selection.start.character, ~~ed.selection.end.line, ~~ed.selection.end.character))) : getCodeBlock(ed);
+                    return (code.trim() !== "") ? ((!trimEnd(code).endsWith(";;") ? ((code = (trimEnd(code) + ";;"), Promise.resolve())) : (Promise.resolve())).then(() => PromiseBuilder__Delay_62FBFDE1(promise, () => {
+                        const workDir = getWorkingDirectory();
+                        const out = getOutput();
+                        return PromiseBuilder__Delay_62FBFDE1(promise, () => {
+                            const c = getClient();
+                            const startTime = performance.now();
+                            return evalCode(code, workDir, c).then((_arg_1) => {
+                                let arg_2;
+                                const result = _arg_1;
+                                const elapsed = (performance.now()) - startTime;
+                                if (!result.success) {
+                                    const errMsg = defaultArg(orElse(result.error, result.result), "Unknown error");
+                                    out.appendLine(toText(printf("❌ Error:\n%s"))(errMsg));
+                                    showInlineDiagnostic(ed, errMsg);
+                                    return Promise.resolve();
+                                }
+                                else {
+                                    const output = defaultArg(result.result, "");
+                                    out.appendLine((arg_2 = formatDuration(elapsed), toText(printf("%s  (%s)"))(output)(arg_2)));
+                                    showInlineResult(ed, output, elapsed);
+                                    const curLine = ~~ed.selection.end.line | 0;
+                                    const lineCount = ~~ed.document.lineCount | 0;
+                                    let nextLine = curLine + 1;
+                                    return PromiseBuilder__While_2044D34(promise, () => ((nextLine < lineCount) && (ed.document.lineAt(nextLine).text.trim() === "")), PromiseBuilder__Delay_62FBFDE1(promise, () => {
+                                        nextLine = ((nextLine + 1) | 0);
+                                        return Promise.resolve();
+                                    })).then(() => PromiseBuilder__Delay_62FBFDE1(promise, () => {
+                                        if (nextLine < lineCount) {
+                                            const pos = newPosition(nextLine, 0);
+                                            const sel = newSelection(pos, pos);
+                                            ed.selection = sel;
+                                            ed.revealRange(newRange(nextLine, 0, nextLine, 0));
+                                            return Promise.resolve();
+                                        }
+                                        else {
+                                            return Promise.resolve();
+                                        }
+                                    }));
+                                }
+                            });
+                        }).catch((_arg_2) => {
+                            let arg_3;
+                            out.appendLine((arg_3 = toString(_arg_2), toText(printf("❌ Connection error: %s"))(arg_3)));
+                            return Promise.resolve();
+                        });
+                    }))) : (Promise.resolve());
+                }
+                else {
+                    return Promise.resolve();
+                }
+            });
+        }
+        else {
+            Window_showWarningMessage("No active editor.", []);
+            return Promise.resolve();
+        }
+    }));
+}
+
+export function cancelEvalCmd() {
+    if (client() == null) {
+        Window_showWarningMessage("SageFs is not connected", []);
+    }
+    else {
+        const pr = cancelEval(client());
+        void (pr.then((result) => {
+            if (result.success) {
+                Window_showInformationMessage("Eval cancelled.", []);
+            }
+            else {
+                Window_showWarningMessage(defaultArg(result.error, "Failed to cancel"), []);
+            }
+        }));
+    }
+}
+
+export function loadScriptCmd() {
+    return PromiseBuilder__Run_212F1D4B(promise, PromiseBuilder__Delay_62FBFDE1(promise, () => (ensureRunning().then((_arg) => {
+        let ed;
+        if (_arg) {
+            const matchValue = Window_getActiveTextEditor();
+            let matchResult, ed_1;
+            if (matchValue != null) {
+                if ((ed = matchValue, ed.document.fileName.endsWith(".fsx"))) {
+                    matchResult = 0;
+                    ed_1 = matchValue;
+                }
+                else {
+                    matchResult = 1;
+                }
+            }
+            else {
+                matchResult = 1;
+            }
+            switch (matchResult) {
+                case 0: {
+                    const c = getClient();
+                    return loadScript(ed_1.document.fileName, c).then((_arg_1) => {
+                        const result = _arg_1;
+                        if (result.success) {
+                            const name = last(split(ed_1.document.fileName, ["/", "\\"]));
+                            Window_showInformationMessage(toText(printf("Script loaded: %s"))(name), []);
+                            return Promise.resolve();
+                        }
+                        else {
+                            Window_showErrorMessage(defaultArg(result.error, "Failed to load script"), []);
+                            return Promise.resolve();
+                        }
+                    });
+                }
+                default: {
+                    Window_showWarningMessage("Open an .fsx file to load it as a script.", []);
+                    return Promise.resolve();
+                }
+            }
+        }
+        else {
+            return Promise.resolve();
+        }
+    }))));
+}
+
 export function promptAutoStart() {
     return PromiseBuilder__Run_212F1D4B(promise, PromiseBuilder__Delay_62FBFDE1(promise, () => (findProject().then((_arg) => {
         const projPath = _arg;
@@ -860,34 +1018,43 @@ export function activate(context) {
     reg("sagefs.evalRange", (args) => {
         evalRange(args);
     });
-    reg("sagefs.start", (_arg_2) => {
+    reg("sagefs.evalAdvance", (_arg_2) => {
+        evalAdvance();
+    });
+    reg("sagefs.cancelEval", (_arg_3) => {
+        cancelEvalCmd();
+    });
+    reg("sagefs.loadScript", (_arg_4) => {
+        loadScriptCmd();
+    });
+    reg("sagefs.start", (_arg_5) => {
         startDaemon();
     });
-    reg("sagefs.stop", (_arg_3) => {
+    reg("sagefs.stop", (_arg_6) => {
         stopDaemon();
     });
-    reg("sagefs.openDashboard", (_arg_4) => {
+    reg("sagefs.openDashboard", (_arg_7) => {
         openDashboard();
     });
-    reg("sagefs.resetSession", (_arg_5) => {
+    reg("sagefs.resetSession", (_arg_8) => {
         resetSessionCmd();
     });
-    reg("sagefs.hardReset", (_arg_6) => {
+    reg("sagefs.hardReset", (_arg_9) => {
         hardResetCmd();
     });
-    reg("sagefs.createSession", (_arg_7) => {
+    reg("sagefs.createSession", (_arg_10) => {
         createSessionCmd();
     });
-    reg("sagefs.switchSession", (_arg_8) => {
+    reg("sagefs.switchSession", (_arg_11) => {
         switchSessionCmd();
     });
-    reg("sagefs.stopSession", (_arg_9) => {
+    reg("sagefs.stopSession", (_arg_12) => {
         stopSessionCmd();
     });
-    reg("sagefs.clearResults", (_arg_10) => {
+    reg("sagefs.clearResults", (_arg_13) => {
         clearAllDecorations();
     });
-    reg("sagefs.enableLiveTesting", (_arg_11) => {
+    reg("sagefs.enableLiveTesting", (_arg_14) => {
         if (client() == null) {
             Window_showWarningMessage("SageFs is not connected", []);
         }
@@ -903,7 +1070,7 @@ export function activate(context) {
             }));
         }
     });
-    reg("sagefs.disableLiveTesting", (_arg_12) => {
+    reg("sagefs.disableLiveTesting", (_arg_15) => {
         if (client() == null) {
             Window_showWarningMessage("SageFs is not connected", []);
         }
@@ -919,7 +1086,7 @@ export function activate(context) {
             }));
         }
     });
-    reg("sagefs.runTests", (_arg_13) => {
+    reg("sagefs.runTests", (_arg_16) => {
         if (client() == null) {
             Window_showWarningMessage("SageFs is not connected", []);
         }
@@ -935,7 +1102,7 @@ export function activate(context) {
             }));
         }
     });
-    reg("sagefs.setRunPolicy", (_arg_14) => {
+    reg("sagefs.setRunPolicy", (_arg_17) => {
         if (client() == null) {
             Window_showWarningMessage("SageFs is not connected", []);
         }
@@ -967,7 +1134,7 @@ export function activate(context) {
             }));
         }
     });
-    reg("sagefs.showHistory", (_arg_15) => {
+    reg("sagefs.showHistory", (_arg_18) => {
         if (client() == null) {
             Window_showWarningMessage("SageFs is not connected", []);
         }
@@ -987,14 +1154,14 @@ export function activate(context) {
                     }
                     else {
                         const pr_6 = Window_showQuickPick(lines, "Recent SageFs events");
-                        void (pr_6.then((_arg_16) => {
+                        void (pr_6.then((_arg_19) => {
                         }));
                     }
                 }
             }));
         }
     });
-    reg("sagefs.showCallGraph", (_arg_17) => {
+    reg("sagefs.showCallGraph", (_arg_20) => {
         if (client() == null) {
             Window_showWarningMessage("SageFs is not connected", []);
         }
@@ -1050,7 +1217,7 @@ export function activate(context) {
                                                     const icon = (status === "passed") ? "✓" : ((status === "failed") ? "✗" : "●");
                                                     return toText(printf("%s %s [%s]"))(icon)(name)(status);
                                                 }, tests), toText(printf("Tests covering \'%s\'"))(sym_1));
-                                                void (pr_8.then((_arg_18) => {
+                                                void (pr_8.then((_arg_21) => {
                                                 }));
                                             }
                                         }
@@ -1185,7 +1352,14 @@ export function activate(context) {
         const pr_17 = isRunning(c);
         void (pr_17.then((running_1) => {
             if (!running_1) {
-                promptAutoStart();
+                PromiseBuilder__Run_212F1D4B(promise, PromiseBuilder__Delay_62FBFDE1(promise, () => (findProject().then((_arg_22) => {
+                    if (_arg_22 == null) {
+                        return Promise.resolve();
+                    }
+                    else {
+                        return startDaemon().then(() => (Promise.resolve(undefined)));
+                    }
+                }))));
             }
         }));
     }

@@ -2,7 +2,7 @@
   "name": "sagefs",
   "displayName": "SageFs — Live F# Development",
   "description": "Send F# code to SageFs for instant evaluation, type-checking, and hot reload.",
-  "version": "0.5.303",
+  "version": "0.5.304",
   "publisher": "sagefs",
   "license": "MIT",
   "repository": {
@@ -137,6 +137,19 @@
       {
         "command": "sagefs.showCallGraph",
         "title": "SageFs: Show Test Call Graph"
+      },
+      {
+        "command": "sagefs.evalAdvance",
+        "title": "SageFs: Evaluate & Advance",
+        "icon": "$(run-below)"
+      },
+      {
+        "command": "sagefs.cancelEval",
+        "title": "SageFs: Cancel Evaluation"
+      },
+      {
+        "command": "sagefs.loadScript",
+        "title": "SageFs: Load Current Script"
       }
     ],
     "keybindings": [
@@ -148,6 +161,16 @@
       {
         "command": "sagefs.evalFile",
         "key": "alt+shift+enter",
+        "when": "editorTextFocus && editorLangId == fsharp"
+      },
+      {
+        "command": "sagefs.evalAdvance",
+        "key": "shift+enter",
+        "when": "editorTextFocus && editorLangId == fsharp"
+      },
+      {
+        "command": "sagefs.cancelEval",
+        "key": "ctrl+shift+c",
         "when": "editorTextFocus && editorLangId == fsharp"
       }
     ],
@@ -305,6 +328,7 @@
     "@types/node": "^20.0.0",
     "@types/vscode": "^1.85.0",
     "esbuild": "^0.24.2",
-    "typescript": "^5.5.0"
+    "typescript": "^5.5.0",
+    "webpack-cli": "^6.0.1"
   }
 }
