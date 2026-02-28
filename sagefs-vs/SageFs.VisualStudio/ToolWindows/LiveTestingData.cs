@@ -1,7 +1,6 @@
 namespace SageFs.VisualStudio.ToolWindows;
 
 using System;
-using System.Linq;
 using System.Runtime.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
@@ -19,7 +18,10 @@ internal class LiveTestingData : NotifyPropertyChangedObject, IDisposable
   private string summaryText = "";
   private string testResultsText = "";
   private string recentEventsText = "";
+  private string filterLabel = "All";
   private bool isEnabled;
+  private Core.TestStatusFilter currentFilter = Core.TestStatusFilter.All;
+  private string searchQuery = "";
 
   public LiveTestingData(
     VisualStudioExtensibility extensibility,
@@ -32,6 +34,8 @@ internal class LiveTestingData : NotifyPropertyChangedObject, IDisposable
     this.RefreshCommand = new AsyncCommand(this.RefreshAsync);
     this.ToggleCommand = new AsyncCommand(this.ToggleAsync);
     this.RunAllCommand = new AsyncCommand(this.RunAllAsync);
+    this.CycleFilterCommand = new AsyncCommand(this.CycleFilterAsync);
+    this.ClearSearchCommand = new AsyncCommand(this.ClearSearchAsync);
 
     subscriber.StateChanged += OnStateChanged;
     subscriber.SummaryChanged += OnSummaryChanged;
@@ -42,6 +46,8 @@ internal class LiveTestingData : NotifyPropertyChangedObject, IDisposable
   [DataMember] public IAsyncCommand RefreshCommand { get; }
   [DataMember] public IAsyncCommand ToggleCommand { get; }
   [DataMember] public IAsyncCommand RunAllCommand { get; }
+  [DataMember] public IAsyncCommand CycleFilterCommand { get; }
+  [DataMember] public IAsyncCommand ClearSearchCommand { get; }
 
   [DataMember]
   public string EnabledStatus
@@ -78,6 +84,24 @@ internal class LiveTestingData : NotifyPropertyChangedObject, IDisposable
     set => SetProperty(ref isEnabled, value);
   }
 
+  [DataMember]
+  public string FilterLabel
+  {
+    get => filterLabel;
+    set => SetProperty(ref filterLabel, value);
+  }
+
+  [DataMember]
+  public string SearchQuery
+  {
+    get => searchQuery;
+    set
+    {
+      if (SetProperty(ref searchQuery, value))
+        UpdateTestResults();
+    }
+  }
+
   private void OnStateChanged(object? sender, Core.LiveTestState state)
   {
     UpdateFromState(state);
@@ -93,31 +117,25 @@ internal class LiveTestingData : NotifyPropertyChangedObject, IDisposable
       SummaryText += $", {summary.Stale} stale";
   }
 
+  private Core.LiveTestState? lastState;
+
   private void UpdateFromState(Core.LiveTestState state)
   {
+    lastState = state;
     IsEnabled = state.Enabled.IsOn;
     EnabledStatus = IsEnabled ? "● Live Testing ON" : "○ Live Testing OFF";
 
     if (state.LastSummary != null)
       OnSummaryChanged(null, state.LastSummary.Value);
 
-    var testCount = state.Tests.Count;
-    if (testCount == 0)
-    {
-      TestResultsText = "No tests discovered yet.";
-      return;
-    }
+    UpdateTestResults();
+  }
 
-    var lines = state.Tests
-      .Select(kv =>
-      {
-        var info = kv.Value;
-        var result = Microsoft.FSharp.Collections.MapModule.TryFind(info.Id, state.Results);
-        var label = Core.LiveTestingSubscriber.formatTestLabel(info, result);
-        return $"  {label}";
-      })
-      .ToArray();
-    TestResultsText = $"Tests ({testCount}):\n" + string.Join("\n", lines);
+  private void UpdateTestResults()
+  {
+    if (lastState == null) return;
+    TestResultsText = Core.TestTreeViewModel.formatGroupedOutput(
+      currentFilter, searchQuery, lastState);
   }
 
   private async Task RefreshAsync(object? parameter, CancellationToken ct)
@@ -170,6 +188,20 @@ internal class LiveTestingData : NotifyPropertyChangedObject, IDisposable
       await client.RunTestsAsync("", ct);
     }
     catch { /* best effort */ }
+  }
+
+  private Task CycleFilterAsync(object? parameter, CancellationToken ct)
+  {
+    currentFilter = Core.TestTreeViewModel.nextFilter(currentFilter);
+    FilterLabel = Core.TestTreeViewModel.filterLabel(currentFilter);
+    UpdateTestResults();
+    return Task.CompletedTask;
+  }
+
+  private Task ClearSearchAsync(object? parameter, CancellationToken ct)
+  {
+    SearchQuery = "";
+    return Task.CompletedTask;
   }
 
   public void Dispose()

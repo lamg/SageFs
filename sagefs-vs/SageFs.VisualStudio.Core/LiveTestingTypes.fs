@@ -269,3 +269,183 @@ module LiveTestState =
     |> Array.map (fun (_, info) ->
       let result = Map.tryFind info.Id state.Results
       struct (info, result))
+
+/// Filter for test status in the tree view
+[<RequireQualifiedAccess>]
+type TestStatusFilter =
+  | All
+  | FailedOnly
+  | RunningOnly
+  | StaleOnly
+  | PassedOnly
+
+/// Tests grouped by file
+type TestFileGroup = {
+  FilePath: string
+  Tests: (TestInfo * TestResult option) array
+}
+
+/// Pure ViewModel functions for the test tree panel
+[<RequireQualifiedAccess>]
+module TestTreeViewModel =
+
+  let private outcomeIcon (outcome: TestOutcome) =
+    match outcome with
+    | TestOutcome.Passed _ -> "✓"
+    | TestOutcome.Failed _ | TestOutcome.Errored _ -> "✗"
+    | TestOutcome.Running -> "●"
+    | TestOutcome.Stale -> "◌"
+    | TestOutcome.Detected -> "○"
+    | TestOutcome.Skipped _ -> "⊘"
+    | TestOutcome.PolicyDisabled -> "⊘"
+
+  let private outcomeOrder (outcome: TestOutcome) =
+    match outcome with
+    | TestOutcome.Failed _ | TestOutcome.Errored _ -> 0
+    | TestOutcome.Running -> 1
+    | TestOutcome.Stale -> 2
+    | TestOutcome.Detected -> 3
+    | TestOutcome.Passed _ -> 4
+    | TestOutcome.Skipped _ -> 5
+    | TestOutcome.PolicyDisabled -> 6
+
+  let private formatDuration (ms: float option) =
+    match ms with
+    | None -> ""
+    | Some d when d < 1.0 -> "(<1ms)"
+    | Some d when d < 1000.0 -> sprintf "(%.0fms)" d
+    | Some d -> sprintf "(%.1fs)" (d / 1000.0)
+
+  /// Group tests by file path, sorted by filename
+  let groupByFile (state: LiveTestState) : TestFileGroup array =
+    state.Tests
+    |> Map.toArray
+    |> Array.map (fun (_, info) ->
+      let result = Map.tryFind info.Id state.Results
+      let path = info.FilePath |> Option.defaultValue "(no file)"
+      path, (info, result))
+    |> Array.groupBy fst
+    |> Array.map (fun (path, items) ->
+      { FilePath = path; Tests = items |> Array.map snd })
+    |> Array.sortBy (fun g -> IO.Path.GetFileName g.FilePath)
+
+  /// Filter groups by status
+  let filterGroups (filter: TestStatusFilter) (groups: TestFileGroup array) : TestFileGroup array =
+    match filter with
+    | TestStatusFilter.All -> groups
+    | _ ->
+      let predicate (_, result: TestResult option) =
+        match filter, result with
+        | TestStatusFilter.FailedOnly, Some r ->
+          match r.Outcome with TestOutcome.Failed _ | TestOutcome.Errored _ -> true | _ -> false
+        | TestStatusFilter.RunningOnly, Some r ->
+          match r.Outcome with TestOutcome.Running -> true | _ -> false
+        | TestStatusFilter.StaleOnly, Some r ->
+          match r.Outcome with TestOutcome.Stale -> true | _ -> false
+        | TestStatusFilter.PassedOnly, Some r ->
+          match r.Outcome with TestOutcome.Passed _ -> true | _ -> false
+        | _ -> false
+      groups
+      |> Array.choose (fun g ->
+        let filtered = g.Tests |> Array.filter predicate
+        if filtered.Length > 0 then Some { g with Tests = filtered }
+        else None)
+
+  /// Search groups by text (case-insensitive on DisplayName and FullName)
+  let searchGroups (query: string) (groups: TestFileGroup array) : TestFileGroup array =
+    if String.IsNullOrWhiteSpace query then groups
+    else
+      let q = query.ToLowerInvariant()
+      groups
+      |> Array.choose (fun g ->
+        let filtered =
+          g.Tests |> Array.filter (fun (info, _) ->
+            info.DisplayName.ToLowerInvariant().Contains(q) ||
+            info.FullName.ToLowerInvariant().Contains(q))
+        if filtered.Length > 0 then Some { g with Tests = filtered }
+        else None)
+
+  /// Sort tests within a group: failures first, then running, then passed
+  let sortTests (tests: (TestInfo * TestResult option) array) =
+    tests |> Array.sortBy (fun (info, result) ->
+      let order =
+        match result with
+        | Some r -> outcomeOrder r.Outcome
+        | None -> 3
+      order, info.DisplayName)
+
+  /// Format a file group header line
+  let formatGroupHeader (group: TestFileGroup) =
+    let fileName = IO.Path.GetFileName group.FilePath
+    let total = group.Tests.Length
+    let passed =
+      group.Tests
+      |> Array.filter (fun (_, r) ->
+        match r with Some { Outcome = TestOutcome.Passed _ } -> true | _ -> false)
+      |> Array.length
+    let failed =
+      group.Tests
+      |> Array.filter (fun (_, r) ->
+        match r with
+        | Some { Outcome = TestOutcome.Failed _ }
+        | Some { Outcome = TestOutcome.Errored _ } -> true
+        | _ -> false)
+      |> Array.length
+    if failed > 0 then
+      sprintf "✗ %s (%d/%d passed, %d failed)" fileName passed total failed
+    else
+      sprintf "✓ %s (%d/%d passed)" fileName passed total
+
+  /// Format a single test line
+  let formatTestLine (info: TestInfo) (result: TestResult option) =
+    let icon =
+      match result with
+      | Some r -> outcomeIcon r.Outcome
+      | None -> "○"
+    let duration =
+      match result with
+      | Some r -> formatDuration r.DurationMs
+      | None -> ""
+    if duration = "" then sprintf "%s %s" icon info.DisplayName
+    else sprintf "%s %s %s" icon info.DisplayName duration
+
+  /// Filter label for button text
+  let filterLabel (filter: TestStatusFilter) =
+    match filter with
+    | TestStatusFilter.All -> "All"
+    | TestStatusFilter.FailedOnly -> "Failed"
+    | TestStatusFilter.RunningOnly -> "Running"
+    | TestStatusFilter.StaleOnly -> "Stale"
+    | TestStatusFilter.PassedOnly -> "Passed"
+
+  /// Cycle to next filter
+  let nextFilter (filter: TestStatusFilter) =
+    match filter with
+    | TestStatusFilter.All -> TestStatusFilter.FailedOnly
+    | TestStatusFilter.FailedOnly -> TestStatusFilter.RunningOnly
+    | TestStatusFilter.RunningOnly -> TestStatusFilter.StaleOnly
+    | TestStatusFilter.StaleOnly -> TestStatusFilter.PassedOnly
+    | TestStatusFilter.PassedOnly -> TestStatusFilter.All
+
+  /// Produce the complete formatted output for the text-based tool window
+  let formatGroupedOutput (filter: TestStatusFilter) (search: string) (state: LiveTestState) =
+    if state.Tests.Count = 0 then "No tests discovered yet."
+    else
+      let groups =
+        groupByFile state
+        |> filterGroups filter
+        |> searchGroups search
+      if groups.Length = 0 then
+        sprintf "No tests match filter '%s'%s"
+          (filterLabel filter)
+          (if String.IsNullOrWhiteSpace search then ""
+           else sprintf " and search '%s'" search)
+      else
+        let sb = Text.StringBuilder()
+        for group in groups do
+          sb.AppendLine(formatGroupHeader group) |> ignore
+          let sorted = sortTests group.Tests
+          for (info, result) in sorted do
+            sb.Append("  ").AppendLine(formatTestLine info result) |> ignore
+          sb.AppendLine() |> ignore
+        sb.ToString().TrimEnd()

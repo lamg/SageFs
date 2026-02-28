@@ -4,7 +4,7 @@
   <Border Padding="8">
     <ScrollViewer VerticalScrollBarVisibility="Auto">
       <StackPanel>
-        <!-- Toolbar: Toggle + Run All + Refresh -->
+        <!-- Toolbar: Toggle + Run All + Filter + Refresh -->
         <DockPanel Margin="0,0,0,8">
           <StackPanel Orientation="Horizontal" DockPanel.Dock="Left">
             <Button Content="{Binding EnabledStatus}"
@@ -15,10 +15,28 @@
                     Command="{Binding RunAllCommand}"
                     MinHeight="24" MinWidth="80"
                     Margin="0,0,4,0" />
+            <Button Content="{Binding FilterLabel}"
+                    Command="{Binding CycleFilterCommand}"
+                    MinHeight="24" MinWidth="60"
+                    Margin="0,0,4,0"
+                    ToolTip="Click to cycle: All → Failed → Running → Stale → Passed" />
             <Button Content="↻"
                     Command="{Binding RefreshCommand}"
                     MinHeight="24" MinWidth="30" />
           </StackPanel>
+        </DockPanel>
+
+        <!-- Search -->
+        <DockPanel Margin="0,0,0,8">
+          <Button Content="✕"
+                  Command="{Binding ClearSearchCommand}"
+                  MinHeight="24" MinWidth="24"
+                  DockPanel.Dock="Right"
+                  Margin="4,0,0,0" />
+          <TextBox Text="{Binding SearchQuery, UpdateSourceTrigger=PropertyChanged}"
+                   MinHeight="24"
+                   FontFamily="Cascadia Code,Consolas,Courier New"
+                   FontSize="11" />
         </DockPanel>
 
         <!-- Summary -->
@@ -28,7 +46,7 @@
                    TextWrapping="Wrap"
                    Margin="0,0,0,12" />
 
-        <!-- Test results -->
+        <!-- Test results (grouped by file) -->
         <TextBlock Text="{Binding TestResultsText}"
                    FontFamily="Cascadia Code,Consolas,Courier New"
                    FontSize="11"
