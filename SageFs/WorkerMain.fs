@@ -57,6 +57,7 @@ let handleMessage
       use cts = new CancellationTokenSource()
       let! response =
         actor.PostAndAsyncReply(fun rc -> Eval(request, cts.Token, rc))
+        |> Instrumentation.tracedActorPost Instrumentation.EvalCategory.Repl
       let diags = response.Diagnostics |> Array.map toWorkerDiagnostic |> Array.toList
       let result =
         match response.EvaluationResult with
@@ -83,12 +84,16 @@ let handleMessage
       return WorkerResponse.EvalResult(replyId, result |> Result.mapError SageFsError.EvalFailed, diags, metadata)
 
     | WorkerMessage.CheckCode(code, replyId) ->
-      let! diags = actor.PostAndAsyncReply(fun rc -> GetDiagnostics(code, rc))
+      let! diags =
+        actor.PostAndAsyncReply(fun rc -> GetDiagnostics(code, rc))
+        |> Instrumentation.tracedActorPost Instrumentation.EvalCategory.Check
       let workerDiags = diags |> Array.map toWorkerDiagnostic |> Array.toList
       return WorkerResponse.CheckResult(replyId, workerDiags)
 
     | WorkerMessage.TypeCheckWithSymbols(code, filePath, replyId) ->
-      let! result = actor.PostAndAsyncReply(fun rc -> GetTypeCheckWithSymbols(code, filePath, rc))
+      let! result =
+        actor.PostAndAsyncReply(fun rc -> GetTypeCheckWithSymbols(code, filePath, rc))
+        |> Instrumentation.tracedActorPost Instrumentation.EvalCategory.Check
       let workerDiags = result.Diagnostics |> Array.map toWorkerDiagnostic |> Array.toList
       let workerSymRefs = result.SymbolRefs |> List.map WorkerProtocol.WorkerSymbolRef.fromDomain
       return WorkerResponse.TypeCheckWithSymbolsResult(replyId, result.HasErrors, workerDiags, workerSymRefs)
@@ -97,6 +102,7 @@ let handleMessage
       let word = ""
       let! completions =
         actor.PostAndAsyncReply(fun rc -> Autocomplete(code, cursorPos, word, rc))
+        |> Instrumentation.tracedActorPost Instrumentation.EvalCategory.Completion
       let names = completions |> List.map (fun c -> c.DisplayText)
       return WorkerResponse.CompletionResult(replyId, names)
 
@@ -110,6 +116,7 @@ let handleMessage
       use cts = new CancellationTokenSource()
       let! response =
         actor.PostAndAsyncReply(fun rc -> Eval(request, cts.Token, rc))
+        |> Instrumentation.tracedActorPost Instrumentation.EvalCategory.HotReload
       let result =
         match response.EvaluationResult with
         | Ok output -> Ok output
@@ -117,12 +124,15 @@ let handleMessage
       return WorkerResponse.ScriptLoaded(replyId, result |> Result.mapError SageFsError.ScriptLoadFailed)
 
     | WorkerMessage.ResetSession replyId ->
-      let! result = actor.PostAndAsyncReply(fun rc -> ResetSession rc)
+      let! result =
+        actor.PostAndAsyncReply(fun rc -> ResetSession rc)
+        |> Instrumentation.tracedActorPost Instrumentation.EvalCategory.Warmup
       return WorkerResponse.ResetResult(replyId, result)
 
     | WorkerMessage.HardResetSession(rebuild, replyId) ->
       let! result =
         actor.PostAndAsyncReply(fun rc -> HardResetSession(rebuild, rc))
+        |> Instrumentation.tracedActorPost Instrumentation.EvalCategory.Warmup
       return WorkerResponse.HardResetResult(replyId, result)
 
     | WorkerMessage.GetStatus replyId ->

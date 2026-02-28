@@ -126,6 +126,20 @@ module Instrumentation =
   let testExecutionActiveCount =
     pipelineMeter.CreateUpDownCounter<int64>("sagefs.live_testing.active_executions", description = "Currently executing test runs")
 
+  // Eval actor queue diagnostics (Level 1)
+  let evalQueueWaitMs =
+    mcpMeter.CreateHistogram<float>(
+      "sagefs.evalactor.queue_wait_ms", unit = "ms",
+      description = "Time eval requests wait in the actor queue before processing starts")
+  let evalQueueDepth =
+    mcpMeter.CreateUpDownCounter<int64>(
+      "sagefs.evalactor.queue_depth",
+      description = "Current eval actor queue depth")
+  let evalCategoryCount =
+    mcpMeter.CreateCounter<int64>(
+      "sagefs.evalactor.eval_by_category_total",
+      description = "Eval requests by category (repl/test/hotreload/warmup/check/completion)")
+
   // P2: DevReload connected clients
   let devReloadConnectedClients =
     mcpMeter.CreateUpDownCounter<int64>("sagefs.devreload.connected_clients", description = "Currently connected SSE reload clients")
@@ -281,6 +295,30 @@ module Instrumentation =
           activity.Stop()
           activity.Dispose()
         return raise ex
+    }
+
+  /// Category of eval request for queue diagnostics.
+  type EvalCategory = Repl | Test | HotReload | Warmup | Check | Completion
+
+  module EvalCategory =
+    let label = function
+      | Repl -> "repl" | Test -> "test" | HotReload -> "hotreload"
+      | Warmup -> "warmup" | Check -> "check" | Completion -> "completion"
+
+  /// Wrap an actor.PostAndAsyncReply call with queue-wait measurement.
+  let tracedActorPost (category: EvalCategory) (postAndReply: Async<'a>) : Async<'a> =
+    async {
+      let catLabel = EvalCategory.label category
+      let tag = System.Collections.Generic.KeyValuePair("category", catLabel :> obj)
+      let enqueuedAt = Stopwatch.GetTimestamp()
+      evalQueueDepth.Add(1L, tag)
+      evalCategoryCount.Add(1L, tag)
+      let! result = postAndReply
+      let dequeuedAt = Stopwatch.GetTimestamp()
+      let waitMs = float (dequeuedAt - enqueuedAt) / float Stopwatch.Frequency * 1000.0
+      evalQueueWaitMs.Record(waitMs, tag)
+      evalQueueDepth.Add(-1L, tag)
+      return result
     }
 
   /// Wrap an FSI eval call with tracing and counting.
